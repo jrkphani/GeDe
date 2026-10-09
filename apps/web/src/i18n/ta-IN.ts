@@ -120,4 +120,19 @@ export const messages: Messages = {
   'auth.code.sent.eight': 'உங்கள் மின்னஞ்சலுக்கு எட்டு இலக்கக் குறியீட்டை அனுப்பியுள்ளோம்',
   'auth.code.expires.signIn': 'குறியீடுகள் 10 நிமிடங்களில் காலாவதியாகும்',
   'auth.code.expires.signUp': 'குறியீடுகள் 24 மணி நேரத்தில் காலாவதியாகும்',
+
+  'forms.power.hint': 'a-இன் ஒவ்வொரு உட்கணமும்',
+
+  'set.lost': '{sets}-இல் இனி இல்லை',
+  'set.readOnly.computed': 'இந்த நெடுவரிசை கணக்கிடப்படுகிறது',
+  'cell.readOnly': 'படிக்க மட்டும்: {reason}',
+  'cell.readOnly.announce': '{cell} படிக்க மட்டும்: {reason}',
+  'cell.readOnly.announceUnaddressed': 'இந்தக் கலம் படிக்க மட்டும்: {reason}',
+  'column.readOnly.announce': 'நெடுவரிசை {column} படிக்க மட்டும்: {reason}',
+  'set.fillRefused': 'நெடுவரிசை {column} நிரப்பப்படவில்லை: நெடுவரிசை காலியாக இல்லை',
+  'readOnly.derived': 'வருவிக்கப்பட்ட நெடுவரிசை',
+  'readOnly.linked': 'இணைக்கப்பட்ட நெடுவரிசை',
+  'readOnly.pulled': 'வேறு அட்டவணையிலிருந்து இழுக்கப்பட்டது',
+  'readOnly.group': 'வகைப் பட்டை',
+  'readOnly.splitChild': 'பிரிக்கப்பட்ட துணை வரிசை',
 };

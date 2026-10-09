@@ -15,6 +15,7 @@ import { workbookIndexOf } from '../engine/commit.js';
 import {
   cellReadOnlyReason,
   cellsMap,
+  computedCells,
   cellText,
   columnsArray,
   fragmentText,
@@ -259,11 +260,18 @@ function tableEntriesOf(
       texts,
     });
   };
+  // SET-08: a computed column's cells are its rows' projections; what is stored under them stays hidden.
+  const computed = computedCells(table);
   cells.forEach((content, key) => {
     const { rowId, colId } = splitCellKey(key);
+    if (computed.columns.has(colId)) return;
     const evaluated = isFormula(content) ? valueOf?.(tableId, rowId, colId) : undefined;
     push(key as CellKey, rowId, colId, cellTexts(content, project, evaluated));
   });
+  for (const [key, value] of computed.cells) {
+    const { rowId, colId } = splitCellKey(key);
+    push(key, rowId, colId, [text('value', value)]);
+  }
   // Derived columns own their cells (REF-04): nothing is stored for a row, the
   // engine evaluates one synthetic formula per row. What the person sees there
   // is a cell value (FIND-03), indexed as a `result` and never rewritten.

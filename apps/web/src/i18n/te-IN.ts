@@ -116,4 +116,19 @@ export const messages: Messages = {
   'auth.code.sent.eight': 'మీ ఇమెయిల్‌కు ఎనిమిది అంకెల కోడ్ పంపాము',
   'auth.code.expires.signIn': 'కోడ్‌లు 10 నిమిషాల్లో గడువు ముగుస్తాయి',
   'auth.code.expires.signUp': 'కోడ్‌లు 24 గంటల్లో గడువు ముగుస్తాయి',
+
+  'forms.power.hint': 'a యొక్క ప్రతి ఉపసమితి',
+
+  'set.lost': 'ఇక {sets}లో లేదు',
+  'set.readOnly.computed': 'ఈ నిలువు వరుస లెక్కించబడుతుంది',
+  'cell.readOnly': 'చదవడానికి మాత్రమే: {reason}',
+  'cell.readOnly.announce': '{cell} చదవడానికి మాత్రమే: {reason}',
+  'cell.readOnly.announceUnaddressed': 'ఈ సెల్ చదవడానికి మాత్రమే: {reason}',
+  'column.readOnly.announce': 'నిలువు వరుస {column} చదవడానికి మాత్రమే: {reason}',
+  'set.fillRefused': 'నిలువు వరుస {column} నింపబడలేదు: నిలువు వరుస ఖాళీగా లేదు',
+  'readOnly.derived': 'ఉత్పన్న నిలువు వరుస',
+  'readOnly.linked': 'లింక్ చేసిన నిలువు వరుస',
+  'readOnly.pulled': 'మరొక పట్టిక నుండి తీసుకోబడింది',
+  'readOnly.group': 'వర్గ పట్టీ',
+  'readOnly.splitChild': 'విభజించిన ఉప వరుస',
 };

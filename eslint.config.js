@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/cdk.out/**',
       '**/coverage/**',
       'docs/handover/**',
+      '.claude/**',
     ],
   },
   js.configs.recommended,

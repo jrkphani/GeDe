@@ -12,7 +12,7 @@
  */
 import type { CellRange, CellRef } from '../address.js';
 import type { UnitBounds } from '../doc/geometry.js';
-import type { DeriveSpec } from '../doc/schema.js';
+import type { ComputedSpec, DeriveSpec } from '../doc/schema.js';
 import type { CellFormat } from '../format/types.js';
 import type { CellKey, Id } from '../ids.js';
 import type { ParseError, Span } from '../formula/ast.js';
@@ -24,6 +24,18 @@ export type WorkbookCellId = string;
 
 export function workbookCellId(tableId: Id, key: CellKey): WorkbookCellId {
   return `${tableId}/${key}`;
+}
+
+/**
+ * The row id of a computed column's formula cell (SET-08): ULID-shaped so it
+ * is a valid cell key, at time zero so no minted row can ever carry it, and
+ * never in a table's rows, so it has no lattice position.
+ */
+export const COMPUTED_FORMULA_ROW: Id = '00000000000000000000000000';
+
+/** Where the engine keeps a computed table's one formula: on its first computed column. */
+export function computedFormulaKey(colId: Id): CellKey {
+  return `${COMPUTED_FORMULA_ROW}:${colId}`;
 }
 
 export function splitWorkbookCellId(id: WorkbookCellId): { tableId: Id; key: CellKey } {
@@ -45,6 +57,13 @@ export interface ColumnStructure {
    */
   readonly derive?: DeriveSpec | undefined;
   /**
+   * A computed column's role (SET-08). The engine evaluates the table's one
+   * `computedFormula` once, as the synthetic cell `computedFormulaKey` of the
+   * first computed column, and the main thread turns the list it yields into
+   * rows (`ref/computed.ts`).
+   */
+  readonly computed?: ComputedSpec | undefined;
+  /**
    * The column's data format (FMT-01, FMT-06). The engine resolves every text
    * cell through it — a Currency column's `100` is an amount in its code, an
    * unparsable cell is excluded (FMT-05) — so the format is part of the
@@ -61,6 +80,8 @@ export interface TableStructure {
   readonly gridCol: number;
   readonly gridRow: number;
   readonly columns: readonly ColumnStructure[];
+  /** SET-08: the one set formula the table's computed columns fill from. */
+  readonly computedFormula?: string | undefined;
   readonly rows: readonly Id[];
   /**
    * Per row, in row order; 2 for a wrapped row (GRID-09), 0 for a row hidden

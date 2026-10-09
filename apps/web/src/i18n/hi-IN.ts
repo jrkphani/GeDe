@@ -115,4 +115,19 @@ export const messages: Messages = {
   'auth.code.sent.eight': 'हमने आपके ईमेल पर आठ अंकों का कोड भेजा है',
   'auth.code.expires.signIn': 'कोड 10 मिनट में समाप्त हो जाते हैं',
   'auth.code.expires.signUp': 'कोड 24 घंटे में समाप्त हो जाते हैं',
+
+  'forms.power.hint': 'a का हर उपसमुच्चय',
+
+  'set.lost': 'अब {sets} में नहीं',
+  'set.readOnly.computed': 'यह स्तंभ परिकलित है',
+  'cell.readOnly': 'केवल पढ़ने के लिए: {reason}',
+  'cell.readOnly.announce': '{cell} केवल पढ़ने के लिए है: {reason}',
+  'cell.readOnly.announceUnaddressed': 'यह सेल केवल पढ़ने के लिए है: {reason}',
+  'column.readOnly.announce': 'स्तंभ {column} केवल पढ़ने के लिए है: {reason}',
+  'set.fillRefused': 'स्तंभ {column} नहीं भरा गया: स्तंभ खाली नहीं है',
+  'readOnly.derived': 'व्युत्पन्न स्तंभ',
+  'readOnly.linked': 'लिंक किया गया स्तंभ',
+  'readOnly.pulled': 'दूसरी तालिका से लिया गया',
+  'readOnly.group': 'श्रेणी पट्टी',
+  'readOnly.splitChild': 'विभाजित उप-पंक्ति',
 };

@@ -9,7 +9,9 @@ import * as Y from 'yjs';
 import {
   addDerivedColumn,
   addMappingColumn,
+  cellsMap,
   cellText,
+  computedRowId,
   createSheet,
   createTable,
   createUndoManager,
@@ -20,8 +22,11 @@ import {
   nestRow,
   openDocument,
   orphanCellKeys,
+  reconcileComputed,
   setCellText,
+  setComputedColumn,
   setRowCollapsed,
+  setTableFormula,
   tableById,
   tableMap,
   type GedeDoc,
@@ -171,6 +176,44 @@ describe('remote structure under the selection (GRID-02, GRID-03, GRID-05, SHARE
     expect(tableById(a, tableId)?.rows).not.toContain(rows[1]);
     expect(orphanCellKeys(tableMap(a, tableId)!)).toEqual([]);
     expect(cellText(tableMap(a, tableId)!, rows[1]!, cols[0]!)).toBe('');
+  });
+
+  it('RESP-02 a read-only replica never sweeps: it writes nothing to the document', () => {
+    renderHook(() => useGrid(a, false));
+    const offline = new Y.Doc();
+    Y.applyUpdate(offline, Y.encodeStateAsUpdate(b.doc));
+    setCellText(a, tableId, rows[1]!, cols[0]!, 'written while c was away');
+    deleteRow(openDocument(offline), tableId, rows[1]!);
+    act(() => {
+      Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(offline, Y.encodeStateVector(a.doc)), 'relay');
+    });
+    expect(orphanCellKeys(tableMap(a, tableId)!)).toHaveLength(1);
+  });
+
+  it("SET-12 a note on a computed row another replica's reconcile removed is not swept, so the row comes back", () => {
+    const [range = '', notes = ''] = cols;
+    setTableFormula(a, tableId, '=Union("x", "y")');
+    expect(setComputedColumn(a, tableId, range, { shape: 'column' })).toBe(true);
+    reconcileComputed(a, tableId, ['x', 'y']);
+    const rowY = computedRowId(tableId, 'y');
+    renderHook(() => useGrid(b, true));
+    // C has not seen the note yet: its reconcile drops y's row as untyped.
+    const offline = new Y.Doc();
+    Y.applyUpdate(offline, Y.encodeStateAsUpdate(a.doc));
+    setCellText(b, tableId, rowY, notes, 'note');
+    reconcileComputed(openDocument(offline), tableId, ['x']);
+    act(() => {
+      const update = Y.encodeStateAsUpdate(offline);
+      Y.applyUpdate(a.doc, update, 'relay');
+      Y.applyUpdate(b.doc, update, 'relay');
+    });
+    expect(tableById(b, tableId)?.rows).not.toContain(rowY);
+    expect(cellsMap(tableMap(b, tableId)!).has(`${rowY}:${notes}`)).toBe(true);
+    reconcileComputed(b, tableId, ['x']);
+    for (const gd of [a, b]) {
+      expect(tableById(gd, tableId)?.rows).toContain(rowY);
+      expect(cellText(tableMap(gd, tableId)!, rowY, notes)).toBe('note');
+    }
   });
 });
 

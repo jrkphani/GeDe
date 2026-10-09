@@ -26,6 +26,7 @@ import * as Y from 'yjs';
 import {
   cellKey,
   cellsMap,
+  computedCells,
   derivedCellSource,
   evaluatedText,
   FormulaEngine,
@@ -212,6 +213,8 @@ function projectCells(
 ): ProjectedCell[] {
   const out: ProjectedCell[] = [];
   const cells = cellsMap(map);
+  // SET-08: a computed column's cells are its rows' projections; what is stored under them stays hidden.
+  const computed = computedCells(map);
   cells.forEach((value, key) => {
     let rowId: string;
     let columnId: string;
@@ -221,7 +224,7 @@ function projectCells(
       return; // not a cell key; never written by the client
     }
     // A cell whose row or column no longer exists cannot satisfy the foreign keys.
-    if (!rowIds.has(rowId) || !columnIds.has(columnId)) return;
+    if (!rowIds.has(rowId) || !columnIds.has(columnId) || computed.columns.has(columnId)) return;
     if (isFormula(value)) {
       // The stored source holds id tokens (PRD §20); what is searched and audited is the
       // value shown and the expression as the person reads it today (FIND-03). `formula`
@@ -244,6 +247,11 @@ function projectCells(
       formula: null,
     });
   });
+  for (const [key, text] of computed.cells) {
+    const { rowId, colId: columnId } = splitCellKey(key);
+    if (!rowIds.has(rowId) || !columnIds.has(columnId)) continue;
+    out.push({ rowId, columnId, textPlain: text, rich: null, formula: null });
+  }
   // Derived columns (REF-04): one projected row per table row that has no document cell
   // of its own (a Split child's piece is a document cell and was projected above).
   for (const column of table.columns) {

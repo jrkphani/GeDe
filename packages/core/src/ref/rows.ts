@@ -83,6 +83,84 @@ export class RowEditor {
     this.insertAt(index, id);
   }
 
+  /**
+   * Make every id of `order` present and in that relative order, other rows
+   * keeping their places, by few moves: the members already in order (a
+   * longest increasing run of positions) stay, every other member is deleted
+   * and re-inserted right after its predecessor in `order` (the leading ones
+   * before the first member that stayed, or at the end when none did).
+   * O(n log n); a contiguous run of deletes or inserts is one Yjs operation,
+   * so a 10,000-row fill or reversal runs in well under 2 s (the test budget).
+   */
+  arrange(order: readonly Id[]): void {
+    const present = order.filter((id) => this.has(id));
+    const keep = new Set(
+      longestIncreasing(
+        present,
+        present.map((id) => this.indexOf(id)),
+      ),
+    );
+    const doomed = present
+      .filter((id) => !keep.has(id))
+      .map((id) => this.indexOf(id))
+      .sort((a, b) => b - a);
+    // Highest first, one Yjs delete per contiguous run.
+    for (let k = 0; k < doomed.length;) {
+      let start = doomed[k] ?? 0;
+      let length = 1;
+      while (doomed[k + length] === start - 1) {
+        start -= 1;
+        length += 1;
+      }
+      this.rows.delete(start, length);
+      this.ids.splice(start, length);
+      k += length;
+    }
+    this.writes += doomed.length;
+    // Runs of members to insert, keyed by the kept member they follow (null: the leading run).
+    const after = new Map<Id | null, Id[]>();
+    let anchor: Id | null = null;
+    for (const id of order) {
+      if (keep.has(id)) {
+        anchor = id;
+        continue;
+      }
+      const run = after.get(anchor);
+      if (run === undefined) after.set(anchor, [id]);
+      else run.push(id);
+    }
+    if (after.size === 0) {
+      this.index = null;
+      return;
+    }
+    const out: Id[] = [];
+    const inserts: { at: number; ids: Id[] }[] = [];
+    const lead = after.get(null);
+    const emit = (ids: Id[] | undefined): void => {
+      if (ids === undefined) return;
+      inserts.push({ at: out.length, ids });
+      for (const id of ids) out.push(id);
+    };
+    let leadDone = false;
+    for (const id of this.ids) {
+      if (!leadDone && keep.has(id)) {
+        emit(lead);
+        leadDone = true;
+      }
+      out.push(id);
+      if (keep.has(id)) emit(after.get(id));
+    }
+    if (!leadDone) emit(lead);
+    // Ascending: each insert lands where the finished array has it.
+    for (const { at, ids } of inserts) {
+      this.rows.insert(at, ids);
+      this.writes += ids.length;
+    }
+    this.ids.length = 0;
+    for (const id of out) this.ids.push(id);
+    this.index = null;
+  }
+
   has(id: Id): boolean {
     return this.indexOf(id) >= 0;
   }
@@ -121,4 +199,27 @@ export function orderMembers(editor: RowEditor, order: readonly Id[]): void {
     const predecessorAt = editor.indexOf(predecessor);
     editor.move(id, predecessorAt); // its own removal shifted the predecessor left by one
   }
+}
+
+/** The items whose `positions` form a longest strictly increasing run, in order (patience sort). */
+function longestIncreasing<T>(items: readonly T[], positions: readonly number[]): T[] {
+  const tails: number[] = [];
+  const previous: number[] = [];
+  positions.forEach((p, i) => {
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((positions[tails[mid] ?? 0] ?? 0) < p) lo = mid + 1;
+      else hi = mid;
+    }
+    previous[i] = lo > 0 ? (tails[lo - 1] ?? -1) : -1;
+    tails[lo] = i;
+  });
+  const out: T[] = [];
+  for (let i = tails.at(-1) ?? -1; i >= 0; i = previous[i] ?? -1) {
+    const item = items[i];
+    if (item !== undefined) out.push(item);
+  }
+  return out.reverse();
 }

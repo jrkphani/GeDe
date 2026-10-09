@@ -10,7 +10,9 @@
  *
  * A separator inside parentheses does not split: `(1, 2), (1, 3)` is the two
  * pairs `Cross` renders, so a product feeds another set function unchanged.
- * Consequently a lone `(` swallows the rest of the text into one element.
+ * Braces nest the same way, so `∅, {a}, {a, b}` — a `Power` result (FX-10) —
+ * is three elements. Consequently a lone `(` or `{` swallows the rest of the
+ * text into one element.
  * Quotes are not delimiters: `"a, b", c` is three elements.
  *
  * Framework-free: strings in, arrays out.
@@ -35,9 +37,9 @@ export function splitSetElements(text: string): string[] {
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-    if (ch === '(') {
+    if (ch === '(' || ch === '{') {
       depth += 1;
-    } else if (ch === ')') {
+    } else if (ch === ')' || ch === '}') {
       if (depth > 0) depth -= 1;
     } else if (depth === 0 && ch !== undefined && SEPARATORS.has(ch)) {
       pieces.push(text.slice(start, i));
@@ -101,11 +103,77 @@ export function crossCardinality(sets: readonly (readonly string[])[]): number {
  * caller checks `crossCardinality` against `MAX_CROSS_TUPLES` first.
  */
 export function cross(sets: readonly (readonly string[])[]): string[] {
+  return crossTuples(sets).map(renderTuple);
+}
+
+/**
+ * `cross` before rendering: each tuple's members as an array. A spread
+ * computed column (SET-09) writes these, since the rendering cannot always be
+ * split back — `(sad :(, x)` reads as one member to a bracket-depth splitter.
+ */
+export function crossTuples(sets: readonly (readonly string[])[]): string[][] {
   let tuples: string[][] = [[]];
   for (const set of sets) {
     const next: string[][] = [];
     for (const tuple of tuples) for (const e of dedupe(set)) next.push([...tuple, e]);
     tuples = next;
   }
-  return tuples.map((t) => `(${t.join(', ')})`);
+  return tuples;
+}
+
+export function renderTuple(members: readonly string[]): string {
+  return `(${members.join(', ')})`;
+}
+
+/**
+ * The first element `power` cannot wrap in braces and still re-split to
+ * itself, or `undefined` when there is none (FX-10). An element must keep its
+ * brackets paired — `a}` or `(x` would move the splitter's depth inside the
+ * rendered subset — and hold no separator outside them: a Split piece such as
+ * `x, y` would render `{x, y}`, the same text as the subset of `x` and `y`.
+ * The evaluator refuses such a set rather than render an ambiguous result.
+ */
+export function unenclosableElement(set: readonly string[]): string | undefined {
+  return set.find((e) => {
+    let depth = 0;
+    for (const ch of e) {
+      if (ch === '(' || ch === '{') depth += 1;
+      else if (ch === ')' || ch === '}') {
+        depth -= 1;
+        if (depth < 0) return true;
+      } else if (depth === 0 && SEPARATORS.has(ch)) return true;
+    }
+    return depth !== 0;
+  });
+}
+
+/** 2^|A| over the deduplicated set, without building a subset (FX-10). */
+export function powerCardinality(set: readonly string[]): number {
+  return 2 ** dedupe(set).length;
+}
+
+/**
+ * 𝒫(A): every subset, the empty set first, then by size; within a size in
+ * combination order over A's first-seen order. Rendered `{a, b}`, the empty
+ * subset `∅`. Unbounded: the caller checks `powerCardinality` against
+ * `MAX_CROSS_TUPLES` and `unenclosableElement` first (FX-10).
+ *
+ * Each subset is spelled in A's order, so the same subset of a differently
+ * ordered operand is a different string: `{1, 2}` from `Power("1, 2")` and
+ * `{2, 1}` from `Power("2, 1")` do not compare equal (ADR-056, known limit).
+ */
+export function power(set: readonly string[]): string[] {
+  const a = dedupe(set);
+  const out: string[] = ['∅'];
+  // Subsets of size k as index combinations, ascending; k grows by one per pass.
+  let level: number[][] = [[]];
+  for (let k = 1; k <= a.length; k += 1) {
+    const next: number[][] = [];
+    for (const combo of level) {
+      for (let i = (combo.at(-1) ?? -1) + 1; i < a.length; i += 1) next.push([...combo, i]);
+    }
+    for (const combo of next) out.push(`{${combo.map((i) => a[i] ?? '').join(', ')}}`);
+    level = next;
+  }
+  return out;
 }

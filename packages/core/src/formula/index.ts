@@ -39,6 +39,8 @@ export {
   normaliseElement,
   MAX_CROSS_TUPLES,
   crossCardinality,
+  power,
+  powerCardinality,
   splitSetElements,
   union,
 } from './sets.js';

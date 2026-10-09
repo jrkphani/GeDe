@@ -1,5 +1,5 @@
 /**
- * Keeps pulls (REF-02) and `Split()` children (HIER-07) reconciled while a
+ * Keeps pulls (REF-02), `Split()` children (HIER-07) and computed rows (SET-08) reconciled while a
  * document is open for editing. One installation per document, reference-
  * counted by the tables that mount it; a read-only session (phone, viewer)
  * installs nothing — the replica that can write reconciles for both, and
@@ -13,16 +13,23 @@
 import { useEffect } from 'react';
 import type * as Y from 'yjs';
 import {
+  computedItemsOf,
   observePulls,
+  observeRefusedFills,
   openDocument,
+  reconcileComputed,
   reconcileFilteredPulls,
   reconcileSplitChildren,
   splitPiecesOf,
+  tableById,
   workbookCellId,
   type CellKey,
 } from '@gede/core';
 
+import { announce } from '../../../announce.js';
 import { engineFor } from '../../../doc/engine.js';
+import { translate } from '../../../i18n/index.js';
+import { activeLocale } from '../../../locale.js';
 
 interface Installation {
   count: number;
@@ -38,6 +45,12 @@ function install(doc: Y.Doc): () => void {
   const cellValue = (tableId: string, key: CellKey) =>
     host.result(workbookCellId(tableId, key))?.value;
   const stopPulls = observePulls(gd, { cellValue });
+  // SET-10 after a merge: a Fill column refused here or on another replica is said, not silent.
+  const stopRefusals = observeRefusedFills(gd, (tableId, colId) => {
+    const column = tableById(gd, tableId)?.columns.find((c) => c.id === colId);
+    if (column === undefined) return;
+    announce(translate(activeLocale(), 'set.fillRefused', { column: column.label }));
+  });
   let running = false;
   const run = (): void => {
     if (running) return;
@@ -45,6 +58,10 @@ function install(doc: Y.Doc): () => void {
     try {
       for (const [tableId, pieces] of splitPiecesOf(gd, (id) => host.result(id))) {
         reconcileSplitChildren(gd, tableId, pieces);
+      }
+      // SET-08: a computed column's formula, evaluated once in the Worker, fills its table's rows.
+      for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
+        reconcileComputed(gd, tableId, items, members);
       }
       // Results moved: a filtered pull over engine-backed cells may admit different rows now.
       reconcileFilteredPulls(gd, { cellValue });
@@ -56,6 +73,7 @@ function install(doc: Y.Doc): () => void {
   run();
   return () => {
     stopPulls();
+    stopRefusals();
     stopResults();
   };
 }

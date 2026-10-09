@@ -371,9 +371,11 @@ describe('FormulaEngine over a Y.Doc', () => {
     const result = h.results.get(g.id(2, 1))!;
     expect(result.value).toEqual({
       kind: 'list',
+      // SET-09: a nested Cross's tuples keep their members through the Union.
       items: ['(1, 2)', '(1, 3)', '(2, 2)', '(2, 3)', '(1, 4)', '(2, 4)'].map((text) => ({
         kind: 'text',
         text,
+        members: text.slice(1, -1).split(', '),
       })),
     });
     expect(result.operands).toEqual([

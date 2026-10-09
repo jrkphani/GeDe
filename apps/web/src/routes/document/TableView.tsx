@@ -14,6 +14,7 @@ import {
 import {
   appearanceEqual,
   CAPTION_ROWS,
+  computedOperandsLabel,
   cellFormatFor,
   cellFragment,
   cellKey,
@@ -73,6 +74,7 @@ import {
 import { CellContent, layoutCell, RichCellEditor, toFormatLocale } from './cell/index.js';
 import { formatNumber } from '../../intl.js';
 import { useLocale } from '../../locale.js';
+import { useMessages } from '../../i18n/index.js';
 import {
   FormulaCell,
   insertClickedAddress,
@@ -85,6 +87,7 @@ import {
   columnRenameReason,
   EMPTY_COLUMN_NAME_REASON,
   EMPTY_TABLE_TITLE_REASON,
+  readOnlyAnnouncement,
   readOnlyLabel,
   type GridCommands,
 } from './grid/commands.js';
@@ -245,6 +248,19 @@ export const TableView = memo(function TableView({
   // One record per document change: its `rows` and `columns` keep identity between
   // renders that change nothing, so what derives from them can be memoised.
   const record = useMemo(() => tableRecord(table), [table, version]);
+  // SET-12: the words a lost row shows, from the table's one computed formula as displayed.
+  // The stored formula holds bound ids, so a move or rename of an operand re-projects it.
+  const indexVersion = useWorkbookIndexVersion(record.computedFormula === null ? null : table.doc);
+  const lostSets = useMemo(
+    () =>
+      record.computedFormula === null || table.doc === null
+        ? null
+        : computedOperandsLabel(projectSource(table.doc, record.computedFormula)),
+    [table.doc, record.computedFormula, indexVersion],
+  );
+  // The column a lost row's words are drawn in: the first computed column on screen, so a
+  // hidden first computed column does not hide them.
+  const lostColumn = record.columns.find((c) => c.computed !== null && !c.hidden)?.id ?? null;
   // SORT-01..05: the rows to render, in view order; held still while a cell here is edited.
   const projection = useTableProjection(
     table,
@@ -891,6 +907,9 @@ export const TableView = memo(function TableView({
                         className={clsx('gd-table__row', {
                           'gd-table__row--lit': litRows.has(rowId),
                           'gd-table__row--banded': rowInBand,
+                          // SET-12: a row whose element left the result, kept for its typed values.
+                          // Dimmed only while a computed column on screen says so in words.
+                          'gd-table__row--lost': rowMetaOf.lostFrom !== null && lostColumn !== null,
                         })}
                         role="row"
                         data-lit={litRows.has(rowId) || undefined}
@@ -953,6 +972,7 @@ export const TableView = memo(function TableView({
                               }
                               outlineLocked={outlineLocked}
                               column={col}
+                              lostSets={col.id === lostColumn ? lostSets : null}
                               rowMeta={rowMetaOf}
                               locale={locale}
                               undo={undo ?? null}
@@ -1404,6 +1424,11 @@ interface CellProps {
   outlineLocked: string | null;
   /** The column record, resolved once per table render; carries the column's data format (FMT-01). */
   column: ColumnRecord;
+  /**
+   * SET-12: the operands of the table's computed formula ("E × C"), given only to the
+   * column a lost row's words are drawn in; null elsewhere and when the table has none.
+   */
+  lostSets: string | null;
   /** The row's meta, resolved once per row render (REF-02 provenance, HIER-07 children). */
   rowMeta: RowMeta;
   locale: FormatLocale;
@@ -1474,6 +1499,7 @@ const COLUMN_KEYS = {
   derive: true,
   link: true,
   pull: true,
+  computed: true,
   appearance: true,
   rules: true,
 } as const satisfies Record<keyof ColumnRecord, true>;
@@ -1493,6 +1519,8 @@ const ROW_META_KEYS = {
   splitChild: true,
   pulledFrom: true,
   splitOf: true,
+  computedKey: true,
+  lostFrom: true,
   outlineColumn: true,
 } as const satisfies Record<keyof RowMeta, true>;
 
@@ -1520,6 +1548,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     derive: _da,
     link: _la,
     pull: _pa,
+    computed: _ca,
     appearance: _aa,
     rules: _ra,
     ...restA
@@ -1529,6 +1558,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     derive: _db,
     link: _lb,
     pull: _pb,
+    computed: _cb,
     appearance: _ab,
     rules: _rb,
     ...restB
@@ -1538,6 +1568,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     derive: _kd,
     link: _kl,
     pull: _kp,
+    computed: _kc,
     appearance: _ka,
     rules: _kr,
     ...restKeys
@@ -1548,6 +1579,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     specsEqual(a.derive, b.derive) &&
     specsEqual(a.link, b.link) &&
     specsEqual(a.pull, b.pull) &&
+    specsEqual(a.computed, b.computed) &&
     appearanceEqual(a.appearance, b.appearance) &&
     specsEqual(a.rules, b.rules)
   );
@@ -1572,6 +1604,7 @@ const COMPARED_CELL_PROPS = {
   outline: true,
   outlineLocked: true,
   column: true,
+  lostSets: true,
   rowMeta: true,
   locale: true,
   undo: true,
@@ -1607,6 +1640,7 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
     a.editing !== b.editing ||
     a.editable !== b.editable ||
     a.readOnly !== b.readOnly ||
+    a.lostSets !== b.lostSets ||
     a.outlineLocked !== b.outlineLocked ||
     !outlineRowsEqual(a.outline, b.outline) ||
     a.locale !== b.locale ||
@@ -1656,6 +1690,7 @@ const Cell = memo(function Cell({
   outline,
   outlineLocked,
   column,
+  lostSets,
   rowMeta: row,
   locale,
   undo,
@@ -1669,6 +1704,7 @@ const Cell = memo(function Cell({
   actions,
   commands,
 }: CellProps) {
+  const t = useMessages();
   // Micro only: below it cell text is not laid out at all (DOC-05).
   const rich = tier === 'micro' ? cellRich(table, cell.rowId, cell.colId) : EMPTY_DOC;
   const source = plainText(rich);
@@ -1713,7 +1749,7 @@ const Cell = memo(function Cell({
 
   const refuse = () => {
     if (readOnly !== null) {
-      announce(`${address ?? 'The cell'} is read-only: ${readOnlyLabel(readOnly)}`);
+      announce(readOnlyAnnouncement(address, readOnly));
     }
   };
 
@@ -1889,7 +1925,13 @@ const Cell = memo(function Cell({
       />
     );
   }
-  const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
+  const lockLabel =
+    readOnly === null ? undefined : t('cell.readOnly', { reason: readOnlyLabel(readOnly) });
+  // SET-12: the computed cell a lost row's element left from says so in words, not by dimming alone.
+  const lostLabel =
+    row.lostFrom !== null && column.computed !== null && lostSets !== null
+      ? t('set.lost', { sets: lostSets })
+      : null;
   // KEYS-08 (#136): the chevron names its chord, so ⌥← / ⌥→ have a route beside the command.
   const chevronControl =
     outline !== null && outline.hasChildren && editable
@@ -1913,7 +1955,7 @@ const Cell = memo(function Cell({
       aria-label={
         address === undefined
           ? undefined
-          : `${address}${text === '' ? '' : `, ${text}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
+          : `${address}${text === '' ? '' : `, ${text}`}${lostLabel === null ? '' : `, ${lostLabel}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
       }
       aria-keyshortcuts={
         outline === null || !editable
@@ -2023,6 +2065,11 @@ const Cell = memo(function Cell({
         tier === 'micro' && (
           <CellContent content={rich} layout={layout} format={format} locale={locale} />
         )
+      )}
+      {lostLabel !== null && (
+        <span className="gd-cell__lost" aria-hidden="true">
+          {lostLabel}
+        </span>
       )}
       {readOnly !== null && (
         <span className="gd-cell__lock" aria-hidden="true">

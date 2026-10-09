@@ -9,7 +9,10 @@
  * `Union`; `Minus` is `Diff`). The detector reads committed text, where the
  * binder has already turned addresses and `@` paths into id-bound tokens: a
  * raw draft such as `=Diff(@Team.Priya.Role, C6)` has no bound operand yet
- * and returns false until it is committed.
+ * and returns false until it is committed. `Power` (FX-10) is in
+ * `SET_FUNCTION_NAMES` but takes one operand, so it never meets the
+ * two-operand rule and never advances step 3 — deliberately: the step asks
+ * for a formula that compares sets.
  *
  * Step 3 is two cards. 3a (`pick-form`) waits for any set operator; 3b
  * (`set-result`) waits for one of the four that compare two sets —

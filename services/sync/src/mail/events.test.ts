@@ -174,7 +174,7 @@ describe('MailEventsPoller over the fake queue and repo', () => {
         email: 'Gone@Example.com',
         permission: 'view',
         token: `tok-${doc.id}`,
-        expiresAt: new Date(now.getTime() + 14 * DAY),
+        expiresAt: new Date(Date.now() + 14 * DAY), // the fake repo reads pending against the real clock
         invitedBy: owner.id,
       });
     }
@@ -236,7 +236,7 @@ describe('MailEventsPoller over the fake queue and repo', () => {
       email: 'virus@example.com',
       permission: 'edit',
       token: 'tok-virus',
-      expiresAt: new Date(now.getTime() + 14 * DAY),
+      expiresAt: new Date(Date.now() + 14 * DAY), // the fake repo reads pending against the real clock
       invitedBy: owner.id,
     });
     poller.start();

@@ -70,7 +70,11 @@ export const SPLIT_ORIGIN = 'ref-split';
  * to be — a child's place is its position behind its parent.
  */
 export function splitChildId(parentRowId: Id, index: number): Id {
-  const key = `${parentRowId}~${String(index)}`;
+  return deterministicId(`${parentRowId}~${String(index)}`);
+}
+
+/** A ULID-shaped id derived from `key` alone (see `splitChildId`); shared by the reconcilers. */
+export function deterministicId(key: string): Id {
   const bits = (fnv1a64(key, 0xcbf29ce484222325n) << 64n) | fnv1a64(key, 0x84222325cbf29ce4n);
   let out = '';
   for (let i = 25; i >= 0; i -= 1) {

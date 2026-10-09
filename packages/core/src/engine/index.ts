@@ -28,7 +28,7 @@ export type {
   WorkbookChange,
   WorkbookSnapshot,
 } from './types.js';
-export { splitWorkbookCellId, workbookCellId } from './types.js';
+export { computedFormulaKey, splitWorkbookCellId, workbookCellId } from './types.js';
 export { derivedCellSource, FormulaEngine, type ApplyOutcome } from './engine.js';
 export { inferCellValue } from './values.js';
 export {

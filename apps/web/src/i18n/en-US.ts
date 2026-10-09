@@ -147,4 +147,27 @@ export const messages = {
   'auth.code.sent.eight': 'We sent an eight-digit code to your email',
   'auth.code.expires.signIn': 'Codes expire in 10 minutes',
   'auth.code.expires.signUp': 'Codes expire in 24 hours',
+
+  // FX-10: the forms-menu hint beside Power(a); `a` is the typed argument name.
+  'forms.power.hint': 'every subset of a',
+
+  // SET-12: beside a computed row whose element left the result; `{sets}` is the formula's
+  // operands as `computedOperandsLabel` reads them ("E × C").
+  'set.lost': 'no longer in {sets}',
+  // SET-08: the read-only reason of a computed column's cells.
+  'set.readOnly.computed': 'the column is computed',
+  // A read-only cell's accessible name; `{reason}` is one of the readOnly.* reasons below
+  // or set.readOnly.computed.
+  'cell.readOnly': 'Read-only: {reason}',
+  // The live-region sentence when a read-only cell or column refuses an edit.
+  'cell.readOnly.announce': '{cell} is read-only: {reason}',
+  'cell.readOnly.announceUnaddressed': 'The cell is read-only: {reason}',
+  'column.readOnly.announce': 'Column {column} is read-only: {reason}',
+  // SET-10: Fill column refused after a merge, because another person typed into the column.
+  'set.fillRefused': 'Column {column} is not filled: the column is not empty',
+  'readOnly.derived': 'derived column',
+  'readOnly.linked': 'linked column',
+  'readOnly.pulled': 'pulled from another table',
+  'readOnly.group': 'category band',
+  'readOnly.splitChild': 'split child row',
 } as const;

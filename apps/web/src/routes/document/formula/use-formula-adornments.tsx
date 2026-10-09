@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { formatNumber } from '../../../intl.js';
+import { useMessages, type Translate } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 import {
   cellKey,
@@ -101,7 +102,7 @@ const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
  */
 const ENTITY_LIMIT = 8;
 
-/** The set operators (FX-09, ADR-053): offered wherever Concat is — every argument is the strings in its cells. */
+/** The set operators (FX-09, FX-10, ADR-053): offered wherever Concat is — every argument is the strings in its cells. */
 const SET_FORMS: readonly FormOption[] = [
   { id: 'union', label: 'Union(a, b, …)', hint: 'elements in any of the sets', insert: '=Union(' },
   { id: 'inter', label: 'Inter(a, b, …)', hint: 'elements in every set', insert: '=Inter(' },
@@ -115,7 +116,7 @@ const SET_FORMS: readonly FormOption[] = [
   { id: 'cross', label: 'Cross(a, b, …)', hint: 'every ordered pair (a, b)', insert: '=Cross(' },
 ];
 
-function forms(summable: boolean): FormOption[] {
+function forms(summable: boolean, t: Translate): FormOption[] {
   return [
     { id: 'concat', label: 'Concat(a, b, …)', hint: 'joins values end to end', insert: '=Concat(' },
     {
@@ -126,6 +127,7 @@ function forms(summable: boolean): FormOption[] {
       disabledReason: summable ? undefined : SUM_DISABLED,
     },
     ...SET_FORMS,
+    { id: 'power', label: 'Power(a)', hint: t('forms.power.hint'), insert: '=Power(' },
     {
       id: 'entity',
       label: '@Group.Entity',
@@ -165,7 +167,8 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   const showEntities =
     entityQuery !== null && dismissed !== text && (isFormulaInput(text) || isReferenceDraft(text));
 
-  const formOptions = useMemo(() => forms(summable), [summable]);
+  const t = useMessages();
+  const formOptions = useMemo(() => forms(summable, t), [summable, t]);
   const tableId = table === null ? null : readString(table, 'id');
   // ADR-054: the cell being edited is never offered — its draft is in the document live.
   const self =

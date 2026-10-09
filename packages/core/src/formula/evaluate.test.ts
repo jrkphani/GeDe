@@ -10,6 +10,7 @@ import {
   type Resolver,
 } from './evaluate.js';
 import { parse } from './parser.js';
+import { cellErrorMessage } from '../engine/errors.js';
 
 /** A labelled fake resolver over a Map of A1 → value plus an entity map. Not a workbook. */
 function fakeResolver(
@@ -207,7 +208,7 @@ describe('set operators (FX-09)', () => {
   });
 
   test('FX-09 Cross: A × B = {(1, 2), (1, 3), (2, 2), (2, 3)} in a-major order', () => {
-    expect(run('=Cross(A1, B1)', sets())).toEqual({
+    expect(run('=Cross(A1, B1)', sets())).toMatchObject({
       ok: true,
       value: set('(1, 2)', '(1, 3)', '(2, 2)', '(2, 3)'),
     });
@@ -311,6 +312,82 @@ describe('set operators (FX-09)', () => {
       ok: false,
       error: { kind: 'too-many-tuples', count: 20_000 },
     });
+  });
+
+  test('FX-10 Power(a) yields every subset of a, the empty set first, as a list that feeds Union unchanged', () => {
+    const r = fakeResolver({ A1: txt('1, 2') }, {}, { P1: '=Power(A1)' });
+    expect(run('=Power(A1)', r)).toEqual({ ok: true, value: set('∅', '{1}', '{2}', '{1, 2}') });
+    const rendered = run('=Power(A1)', r);
+    if (rendered.ok) expect(defaultFormatValue(rendered.value)).toBe('∅, {1}, {2}, {1, 2}');
+    expect(ELEMENTS(run('=Union(P1, "{1}, x")', r))).toEqual(['∅', '{1}', '{2}', '{1, 2}', 'x']);
+    expect(ELEMENTS(run('=Union(Power(A1), "∅, {2}")', r))).toEqual(['∅', '{1}', '{2}', '{1, 2}']);
+    expect(ELEMENTS(run('=Power("")', r))).toEqual(['∅']);
+  });
+
+  test.each([
+    ['=Power()', '⚠ Power takes 1 argument'],
+    ['=Power(A1, A1)', '⚠ Power takes 1 argument'],
+  ])('FX-10 Power takes exactly one argument: %s', (text, label) => {
+    const result = run(text, sets());
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: 'arity', name: 'Power', arity: { exactly: 1 } },
+    });
+    if (!result.ok) expect(errorLabel(result.error)).toBe(label);
+  });
+
+  test('FX-10 a set of more than 13 elements is refused as too many subsets from its size', () => {
+    const big = (n: number): CellValue =>
+      txt(Array.from({ length: n }, (_, i) => `e${String(i)}`).join(', '));
+    const r = fakeResolver({ A1: big(13), B1: big(14), C1: big(40) });
+    const ok = run('=Power(A1)', r);
+    if (ok.ok && ok.value.kind === 'list') expect(ok.value.items).toHaveLength(8192);
+    else throw new Error('Power of 13 elements was refused');
+    const refused = run('=Power(B1)', r);
+    expect(refused).toEqual({ ok: false, error: { kind: 'too-many-subsets', elements: 14 } });
+    if (!refused.ok) expect(errorLabel(refused.error)).toBe('⚠ too many subsets');
+    expect(run('=Power(C1)', r)).toEqual({
+      ok: false,
+      error: { kind: 'too-many-subsets', elements: 40 },
+    });
+  });
+
+  test('FX-10 the too-many-subsets message names the element count through Intl, never Infinity', () => {
+    const big = txt(Array.from({ length: 1100 }, (_, i) => `e${String(i)}`).join(', '));
+    const refused = run('=Power(A1)', fakeResolver({ A1: big }));
+    expect(refused).toEqual({ ok: false, error: { kind: 'too-many-subsets', elements: 1100 } });
+    if (refused.ok) throw new Error('Power of 1,100 elements was accepted');
+    expect(cellErrorMessage(refused.error, 'en-US')).toBe(
+      'Power over 1,100 elements would make more than 10,000 subsets; a set of at most 13 elements fits',
+    );
+    expect(cellErrorMessage(refused.error, 'en-IN')).toContain('1,100 elements');
+  });
+
+  test.each([
+    ['=Power(A1)', 'a}, b', 'a}'],
+    ['=Power(A1)', 'y, (x', '(x'],
+    ['=Power(A1.Split(" / "))', 'x, y / x / y', 'x, y'],
+  ])(
+    'FX-10 Power refuses an element it could not render unambiguously: %s over %s',
+    (text, source, element) => {
+      const result = run(text, fakeResolver({ A1: txt(source) }));
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          kind: 'invalid-argument',
+          message: `Power cannot put “${element}” in a subset: an element needs paired brackets and no separator outside them`,
+        },
+      });
+      if (!result.ok) expect(errorLabel(result.error)).toBe('⚠ invalid argument');
+    },
+  );
+
+  test('FX-10 a subset is spelled in its operand order, so differently ordered operands give different subsets (known limit)', () => {
+    expect(ELEMENTS(run('=Inter(Power("1, 2"), Power("2, 1"))', sets()))).toEqual([
+      '∅',
+      '{1}',
+      '{2}',
+    ]);
   });
 
   test('FX-09 ; separates arguments like , inside a call', () => {

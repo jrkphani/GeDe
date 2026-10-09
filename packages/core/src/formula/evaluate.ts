@@ -14,9 +14,13 @@ import type { BoundReference } from './bound.js';
 import { applyMethod } from './methods.js';
 import {
   complement,
-  cross,
   crossCardinality,
+  crossTuples,
+  power,
+  powerCardinality,
   dedupe,
+  renderTuple,
+  unenclosableElement,
   difference,
   intersection,
   MAX_CROSS_TUPLES,
@@ -28,7 +32,13 @@ import { richFromText, type RichDoc } from '../text/types.js';
 
 export type CellValue =
   /** `rich` carries the cell's marks when it has any, so `Extract(Style=…)` can read them. */
-  | { readonly kind: 'text'; readonly text: string; readonly rich?: RichDoc | undefined }
+  | {
+      readonly kind: 'text';
+      readonly text: string;
+      readonly rich?: RichDoc | undefined;
+      /** A `Cross` tuple's members (SET-09), so a spread column never re-splits `text`. */
+      readonly members?: readonly string[] | undefined;
+    }
   /**
    * `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not
    * `String(value)`. Under an explicit format it is the rendering for the
@@ -93,7 +103,13 @@ export type FormulaError =
       readonly arity: { readonly exactly: number } | { readonly atLeast: number };
     }
   /** `⚠ too many tuples` — a Cross product past `MAX_CROSS_TUPLES`, refused before it is built (FX-09). */
-  | { readonly kind: 'too-many-tuples'; readonly count: number };
+  | { readonly kind: 'too-many-tuples'; readonly count: number }
+  /**
+   * `⚠ too many subsets` — a Power set past `MAX_CROSS_TUPLES` (more than 13
+   * elements), refused before it is built (FX-10). Carries the element count:
+   * 2^n overflows to Infinity past 1,023 elements.
+   */
+  | { readonly kind: 'too-many-subsets'; readonly elements: number };
 
 /** How the evaluator reads the workbook. Implemented over the Yjs document by the app. */
 export interface Resolver {
@@ -153,12 +169,14 @@ export function errorLabel(error: FormulaError): string {
       return `⚠ ${error.name} takes ${arityText(error.arity)}`;
     case 'too-many-tuples':
       return '⚠ too many tuples';
+    case 'too-many-subsets':
+      return '⚠ too many subsets';
   }
 }
 
 export function arityText(arity: { exactly: number } | { atLeast: number }): string {
   return 'exactly' in arity
-    ? `${String(arity.exactly)} arguments`
+    ? `${String(arity.exactly)} argument${arity.exactly === 1 ? '' : 's'}`
     : `at least ${String(arity.atLeast)} arguments`;
 }
 
@@ -312,13 +330,16 @@ class Evaluator {
    * survive, so it renders comma-separated and feeds another set function
    * unchanged. Arity is checked before any operand is read. Union, Inter, Diff
    * and Cross take two or more sets; Comp takes exactly the set and its
-   * universe — there is no implicit universe.
+   * universe — there is no implicit universe; Power takes exactly one set (FX-10).
    */
   private setOperator(name: SetFunctionName, args: readonly Expr[]): CellValue {
-    const arity = name === 'Comp' ? { exactly: 2 } : { atLeast: 2 };
+    const arity =
+      name === 'Comp' ? { exactly: 2 } : name === 'Power' ? { exactly: 1 } : { atLeast: 2 };
     const wrong = 'exactly' in arity ? args.length !== arity.exactly : args.length < arity.atLeast;
     if (wrong) fail({ kind: 'arity', name, arity });
-    const sets = args.map((arg) => this.setOf(arg));
+    // SET-09: a nested Cross's tuples keep their members through Union, Inter, Diff and Comp.
+    const tuples = new Map<string, readonly string[]>();
+    const sets = args.map((arg) => this.setOf(arg, tuples));
     const [a = [], u = []] = sets;
     let elements: string[];
     switch (name) {
@@ -338,26 +359,58 @@ class Evaluator {
         // Refused from the operand sizes, before a tuple is allocated (ADR-053).
         const count = crossCardinality(sets);
         if (count > MAX_CROSS_TUPLES) fail({ kind: 'too-many-tuples', count });
-        elements = cross(sets);
+        return {
+          kind: 'list',
+          items: crossTuples(sets).map((members) => ({
+            kind: 'text',
+            text: renderTuple(members),
+            members,
+          })),
+        };
+      }
+      case 'Power': {
+        // Refused from the operand size, before a subset is allocated (FX-10).
+        if (powerCardinality(a) > MAX_CROSS_TUPLES) {
+          fail({ kind: 'too-many-subsets', elements: dedupe(a).length });
+        }
+        const unenclosable = unenclosableElement(a);
+        if (unenclosable !== undefined) {
+          fail({
+            kind: 'invalid-argument',
+            message: `Power cannot put “${unenclosable}” in a subset: an element needs paired brackets and no separator outside them`,
+          });
+        }
+        elements = power(a);
         break;
       }
     }
-    return { kind: 'list', items: elements.map((text) => ({ kind: 'text', text })) };
+    return {
+      kind: 'list',
+      items: elements.map((text) => {
+        const members = tuples.get(text);
+        return members === undefined ? { kind: 'text', text } : { kind: 'text', text, members };
+      }),
+    };
   }
 
   /** The set one argument yields: a literal split like a cell, a nested result, or every cell a reference covers. */
-  private setOf(arg: Expr): string[] {
+  private setOf(arg: Expr, tuples: Map<string, readonly string[]>): string[] {
     switch (arg.kind) {
       case 'string':
         return splitSetElements(arg.value);
       case 'number':
         return [String(arg.value)];
       case 'call':
-        return this.elementsOf(this.call(arg));
+        return this.elementsOf(keepTuples(this.call(arg), tuples));
       case 'method':
-        return this.elementsOf(this.method(arg));
+        return this.elementsOf(keepTuples(this.method(arg), tuples));
       default:
-        return dedupe(this.operands(arg).flatMap((o) => this.elementsOf(this.unwrap(o.value))));
+        // A reference to a cell holding a Cross keeps its members too (SET-09).
+        return dedupe(
+          this.operands(arg).flatMap((o) =>
+            this.elementsOf(keepTuples(this.unwrap(o.value), tuples)),
+          ),
+        );
     }
   }
 
@@ -539,4 +592,13 @@ export function evaluate(
     if (e instanceof EvalFailure) return err(e.formulaError);
     throw e;
   }
+}
+
+/** Records a `Cross` list's tuple members by their text (SET-09) and returns the value unchanged. */
+function keepTuples(value: CellValue, tuples: Map<string, readonly string[]>): CellValue {
+  if (value.kind !== 'list') return value;
+  for (const item of value.items) {
+    if (item.kind === 'text' && item.members !== undefined) tuples.set(item.text, item.members);
+  }
+  return value;
 }

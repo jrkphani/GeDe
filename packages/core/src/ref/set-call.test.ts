@@ -66,7 +66,7 @@ function key(t: { tableId: string; rowId: string; colId: string }): string {
 }
 
 describe('set-operator detection (tour step 3, FX-09)', () => {
-  test('ONB-05 FX-09 a committed set operator over two or more operands with a bound reference counts; one operand, literals only, Concat, Sum or a bare reference do not; the parser’s name map applies', () => {
+  test('ONB-05 FX-09 FX-10 a committed set operator over two or more operands with a bound reference counts; one operand, literals only, Concat, Sum or a bare reference do not; the parser’s name map applies', () => {
     const { gd } = sample();
     const t = target(gd);
     const stored = (text: string): string => {
@@ -86,6 +86,8 @@ describe('set-operator detection (tour step 3, FX-09)', () => {
     expect(isSetOperatorFormula(stored('=Union(C:C, I:I)'))).toBe(true);
     // One operand is an arity error; literals reference nothing; Concat and Sum are other steps.
     expect(isSetOperatorFormula(stored('=Union(C5:C12)'))).toBe(false);
+    // Power is unary, so it never meets the two-operand rule: step 3 asks for a comparison.
+    expect(isSetOperatorFormula(stored('=Power(C5:C12)'))).toBe(false);
     expect(isSetOperatorFormula(stored('=Diff("a, b", "b")'))).toBe(false);
     expect(isSetOperatorFormula(stored('=Concat(C5, " — ", @Team.Priya.Role)'))).toBe(false);
     expect(isSetOperatorFormula(stored('=Sum(F5, F6)'))).toBe(false);
