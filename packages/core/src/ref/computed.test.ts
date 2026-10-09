@@ -371,7 +371,7 @@ describe('SET-08 red-team regressions', () => {
     expect(rowsOf(gd, tableId)).toEqual([computedRowId(tableId, 'a')]);
   });
 
-  test('SET-09 10,000 rows (the cap) fill and fully reverse within a frame budget', () => {
+  test('SET-09 10,000 rows (the cap) fill and fully reverse within 2 s each', () => {
     const { gd, sheetId } = harness();
     const { tableId } = computedTable(gd, sheetId, '=Union("a")');
     const keys = Array.from({ length: 10_000 }, (_v, i) => `k${String(i)}`);
@@ -429,5 +429,83 @@ describe('SET-08 red-team regressions', () => {
     ).toBe(true);
     handOff(gd, results);
     expect(rowsOf(gd, tableId).map((r) => textAt(gd, tableId, r, range))).toEqual(['x', 'y']);
+  });
+});
+
+describe('SET-08 red-team round 3 regressions', () => {
+  test('SET-08 two column-shape computed columns sharing a formula that reads the second settle', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
+    const [b = '', c = ''] = tableById(gd, tableId)?.columns.map((x) => x.id) ?? [];
+    const formula = '=Cross(Union(C:C, "a"), "x")';
+    expect(setComputedColumn(gd, tableId, b, { formula, shape: 'column' })).toBe(true);
+    expect(setComputedColumn(gd, tableId, c, { formula, shape: 'column' })).toBe(true);
+    let passes = 0;
+    while (passes < 6 && handOff(gd, results) > 0) passes += 1;
+    expect(passes).toBeLessThan(6);
+  });
+
+  test('SET-12 a lost spread row keeps its member values', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
+    const [c0 = '', c1 = '', notes = ''] = tableById(gd, tableId)?.columns.map((x) => x.id) ?? [];
+    const source = createTable(gd, { sheetId, at: { col: 5, row: 1 }, columns: 1, rows: 2 });
+    const src = tableById(gd, source);
+    const [s1 = '', s2 = ''] = src?.rows ?? [];
+    const srcCol = src?.columns[0]?.id ?? '';
+    setCellText(gd, source, s1, srcCol, 'ok');
+    setCellText(gd, source, s2, srcCol, 'sad :(');
+    const formula = '=Cross(F:F, "x")';
+    setComputedColumn(gd, tableId, c0, { formula, shape: 'spread', spreadIndex: 0 });
+    setComputedColumn(gd, tableId, c1, { formula, shape: 'spread', spreadIndex: 1 });
+    handOff(gd, results);
+    const sad = rowsOf(gd, tableId).find((r) => textAt(gd, tableId, r, c0) === 'sad :(') ?? '';
+    expect(textAt(gd, tableId, sad, c1)).toBe('x');
+    setCellText(gd, tableId, sad, notes, 'keep me');
+    setCellText(gd, source, s2, srcCol, 'fine');
+    handOff(gd, results);
+    expect(rowsOf(gd, tableId)).toContain(sad);
+    expect([textAt(gd, tableId, sad, c0), textAt(gd, tableId, sad, c1)]).toEqual(['sad :(', 'x']);
+  });
+
+  test('SET-10 a spread table formula can be changed column by column', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
+    const [c0 = '', c1 = '', c2 = ''] = tableById(gd, tableId)?.columns.map((x) => x.id) ?? [];
+    const f1 = '=Cross("a", "x")';
+    setComputedColumn(gd, tableId, c0, { formula: f1, shape: 'spread', spreadIndex: 0 });
+    setComputedColumn(gd, tableId, c1, { formula: f1, shape: 'spread', spreadIndex: 1 });
+    const f2 = '=Cross("b", "y")';
+    expect([
+      setComputedColumn(gd, tableId, c0, { formula: f2, shape: 'spread', spreadIndex: 0 }),
+      setComputedColumn(gd, tableId, c1, { formula: f2, shape: 'spread', spreadIndex: 1 }),
+    ]).toEqual([true, true]);
+    // A third formula on another column is still refused once the change is done.
+    expect(setComputedColumn(gd, tableId, c2, { formula: '=Union("z")', shape: 'column' })).toBe(
+      false,
+    );
+    handOff(gd, results);
+    const [row = ''] = rowsOf(gd, tableId);
+    expect([textAt(gd, tableId, row, c0), textAt(gd, tableId, row, c1)]).toEqual(['b', 'y']);
+  });
+
+  test('SET-12 a row restored after a concurrent removal goes back to its place', () => {
+    const a = harness();
+    const { tableId, notes } = computedTable(a.gd, a.sheetId, '=Union("a, b, c")');
+    reconcileComputed(a.gd, tableId, ['a', 'b', 'c']);
+    const b = openDocument(new Y.Doc());
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc));
+    const idB = computedRowId(tableId, 'b');
+    setCellText(a.gd, tableId, idB, notes, 'keep me');
+    reconcileComputed(b, tableId, ['a', 'c']);
+    exchange(a.doc, b.doc);
+    for (let i = 0; i < 3; i += 1) {
+      reconcileComputed(a.gd, tableId, ['a', 'c']);
+      reconcileComputed(b, tableId, ['a', 'c']);
+      exchange(a.doc, b.doc);
+    }
+    const order = ['a', 'b', 'c'].map((k) => computedRowId(tableId, k));
+    expect(rowsOf(a.gd, tableId)).toEqual(order);
+    expect(rowsOf(b, tableId)).toEqual(order);
   });
 });

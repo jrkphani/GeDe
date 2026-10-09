@@ -90,7 +90,7 @@ export class RowEditor {
    * and re-inserted right after its predecessor in `order` (the leading ones
    * before the first member that stayed, or at the end when none did).
    * O(n log n); a contiguous run of deletes or inserts is one Yjs operation,
-   * so a 10,000-row fill or reversal stays well inside a frame budget.
+   * so a 10,000-row fill or reversal runs in well under 2 s (the test budget).
    */
   arrange(order: readonly Id[]): void {
     const present = order.filter((id) => this.has(id));

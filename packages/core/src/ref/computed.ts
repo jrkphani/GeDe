@@ -45,6 +45,13 @@ import { deterministicId } from './split.js';
 export const COMPUTED_ORIGIN = 'ref-computed';
 
 /** The row a result key fills in a table: the same on every replica (SPEC §2.2). */
+/**
+ * Row-meta key, internal to this reconciler: the row a computed row followed
+ * when it was removed ('' at the top), so a concurrently typed note brings it
+ * back to its place rather than to the end (SPEC §2.3).
+ */
+const AFTER = 'computedAfter';
+
 export function computedRowId(tableId: Id, key: string): Id {
   return deterministicId(`${tableId}\u0000${key}`);
 }
@@ -58,8 +65,10 @@ function computedColumns(columns: readonly ColumnRecord[]): (ColumnRecord & {
 /**
  * SET-10: make a column computed. Refused (false) while any of its cells holds
  * a typed value, or while another column of the table is computed from a
- * different formula; a computed column's own cells are not typed, so its
- * formula can be replaced. Under the person's origin: it is an undo step.
+ * formula that is neither the new one nor this column's current one; a
+ * computed column's own cells are not typed, so its formula can be replaced,
+ * and a spread table's shared formula is replaced column by column.
+ * Under the person's origin: it is an undo step.
  */
 export function setComputedColumn(
   gd: GedeDoc,
@@ -74,8 +83,15 @@ export function setComputedColumn(
     .find((c) => readString(c, 'id') === colId);
   if (column === undefined) return false;
   // One formula per table (spread columns share it): a second formula would never be filled.
-  const other = tableRecord(table).columns.find(
-    (c) => c.id !== colId && c.computed !== null && c.computed.formula !== spec.formula,
+  // A column still on this column's current formula is mid-way through the same change.
+  const columns = tableRecord(table).columns;
+  const current = columns.find((c) => c.id === colId)?.computed?.formula;
+  const other = columns.find(
+    (c) =>
+      c.id !== colId &&
+      c.computed !== null &&
+      c.computed.formula !== spec.formula &&
+      c.computed.formula !== current,
   );
   if (other !== undefined) return false;
   if (column.get('source') !== 'computed') {
@@ -199,11 +215,24 @@ export function reconcileComputed(
     // ponytail: one small meta per key that ever left; compact on snapshot if it matters.
     for (const [id, meta] of metas) {
       if (typeof meta.get('computedKey') === 'string' && !editor.has(id) && typed(id)) {
-        editor.insertAt(editor.ids.length, id);
+        const after = meta.get(AFTER);
+        const at =
+          after === ''
+            ? 0
+            : typeof after === 'string' && editor.has(after)
+              ? editor.indexOf(after) + 1
+              : editor.ids.length;
+        editor.insertAt(at, id);
       }
     }
     // A key that left: gone without a trace unless the row holds something typed (SET-12).
-    for (const id of editor.remove((id) => isLost(id) && !typed(id))) {
+    const doomed = (id: Id): boolean => isLost(id) && !typed(id);
+    let previous = '';
+    for (const id of editor.ids) {
+      if (!doomed(id)) previous = id;
+      else if (metas.get(id)?.get(AFTER) !== previous) rowMetaFor(table, id).set(AFTER, previous);
+    }
+    for (const id of editor.remove(doomed)) {
       metas.get(id)?.delete('lostFrom');
       for (const c of record.columns) cells.delete(cellKey(id, c.id));
       writes += 1;
@@ -222,8 +251,12 @@ export function reconcileComputed(
     editor.arrange(wanted);
     writes += editor.writes;
 
-    /** The computed cells of row `id` read `key` (a lost row keeps showing its key). */
-    const fill = (id: Id, key: string): void => {
+    /**
+     * The computed cells of row `id` read `key`. A lost row keeps what it shows and
+     * fills only an empty cell (a restored row): its members are no longer known, and
+     * a member with an unbalanced bracket cannot be split back from the key (RT3).
+     */
+    const fill = (id: Id, key: string, onlyEmpty = false): void => {
       const parts = members.get(key) ?? tupleMembers(key);
       for (const column of computed) {
         if (column.computed.formula !== driver.computed.formula) continue;
@@ -236,7 +269,7 @@ export function reconcileComputed(
         if (
           content === undefined ||
           isFormula(content) ||
-          cellText(table, id, column.id) !== text
+          (!onlyEmpty && cellText(table, id, column.id) !== text)
         ) {
           cells.set(cell, textFragment(text));
           writes += 1;
@@ -256,7 +289,7 @@ export function reconcileComputed(
       }
       fill(id, key);
     });
-    for (const [id, key] of lost) fill(id, key);
+    for (const [id, key] of lost) fill(id, key, true);
   }, origin);
   return writes;
 }

@@ -792,7 +792,7 @@ export class FormulaEngine {
    * a computed reconcile writes — its own table's or one whose formula leads
    * back to it — would rewrite its rows on every pass and never settle. The
    * graph cannot see that edge (the reconciler writes on the main thread), so
-   * a computed column's cells count here as reading their table's formula.
+   * a computed column's cells count here as reading their table's formulas.
    */
   private readsOwnRows(cell: CellState): boolean {
     if (splitCellKey(cell.key).rowId !== COMPUTED_FORMULA_ROW) return false;
@@ -806,9 +806,15 @@ export class FormulaEngine {
       const read = this.cells.get(dep);
       if (read === undefined) continue;
       const { colId } = splitCellKey(read.key);
-      const column = this.tables.get(read.tableId)?.structure.columns.find((c) => c.id === colId);
-      if (column?.computed !== undefined) {
-        stack.push(workbookCellId(read.tableId, computedFormulaKey(colId)));
+      const columns = this.tables.get(read.tableId)?.structure.columns ?? [];
+      if (columns.find((c) => c.id === colId)?.computed !== undefined) {
+        // Every computed column of a table is filled from one result: reading any of them
+        // reads the formula of each (a sibling column sharing the driver's formula, RT3).
+        for (const c of columns) {
+          if (c.computed !== undefined) {
+            stack.push(workbookCellId(read.tableId, computedFormulaKey(c.id)));
+          }
+        }
       }
     }
     return false;
