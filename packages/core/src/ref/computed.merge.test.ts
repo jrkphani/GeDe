@@ -1,5 +1,5 @@
 /**
- * Red-team round 6 (SET-10, SET-11, SET-12): the three ways a note was lost while
+ * Notes typed under merges (SET-10, SET-11, SET-12): the three ways a note was lost while
  * computed text and a person's text shared one cell key. Computed values are now
  * projected from row provenance and never written to the cells map, so none of
  * these paths has anything to overwrite. Each runs in both client-id orders.
@@ -103,7 +103,7 @@ function keystroke(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, ch: string): 
   }, gd.origin);
 }
 
-describe('SET-08 red-team round 6 regressions', () => {
+describe('SET-08 notes typed under merges', () => {
   for (const [ca, cb] of [
     [1, 2],
     [2, 1],

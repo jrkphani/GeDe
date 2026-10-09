@@ -15,10 +15,11 @@ Nothing fills rows from a formula today. Two reconcilers already turn computed l
 
 ### 2.1 Data
 
-- `ColumnSource` (`doc/schema.ts:117`) gains `'computed'`. A computed column stores its spec: `{ formula: string; shape: 'column' | 'spread'; spreadIndex?: number }`. In `spread` shape the product writes one column per operand; the columns share one spec and each carries its `spreadIndex`.
+- `ColumnSource` (`doc/schema.ts:117`) gains `'computed'`. A computed column stores its role: `{ shape: 'column' | 'spread'; spreadIndex?: number }`. In `spread` shape the product fills one column per operand; each carries its `spreadIndex`. _Amended (Phase 2 ruling): the formula is stored once on the table, `TableRecord.computedFormula` (`setTableFormula`), not per column, so a table has exactly one formula and every computed column follows a change to it in one step; two concurrent changes converge on one formula._
 - A table record gains `kind: 'plain' | 'simple' | 'family' | 'computed' | 'product'`, default `'plain'`, so existing documents read unchanged. No migration is needed for Yjs content; if the sync service's Postgres projection (`packages/db`) indexes table metadata, add a migration for the new field there — never edit the schema directly.
 - A row in a computed table gains `computedKey: string | null`, the element's or tuple's canonical text (FX-09 spelling, NFC). It is provenance, like `splitOf` and `pulledFrom`.
 - A row gains `lostFrom: string | null`, set when its key left the result while the row holds typed values (SET-12). The label "no longer in E × C" is rendered from the column's formula operands, not stored.
+- _Amended (Phase 2 ruling):_ a row gains `computedMembers: string[]`, written only when a tuple key cannot be split back into its members (a member with an unbalanced bracket, e.g. `sad :(`); a spread column reads its member from it. Internal row-meta keys `computedAfter` (the row a removed computed row followed, so a returning row comes back in place) and the table key `computedRows` (the table was filled at least once) are reconciler bookkeeping. A removed computed row keeps its meta and any cells it held, so a note typed on it concurrently brings it back; the grid's orphan sweep skips such cells (`orphanCellKeys`).
 
 ### 2.2 Row identity
 
@@ -33,13 +34,13 @@ A typed value in a neighbouring column lives on the row, keyed by row id, so it 
 1. Wanted ids = `result.map(key → computedRowId)`, in result order.
 2. For each existing computed row not wanted: if any non-computed cell in it holds a typed value, set `lostFrom` and keep it in place; otherwise remove it.
 3. For each wanted id: insert if missing, clear `lostFrom` if set (a key that comes back reclaims its row and its notes), and move it into result order.
-4. Write the computed cells' text: the key in `column` shape, the tuple member at `spreadIndex` in `spread` shape.
+4. ~~Write the computed cells' text.~~ _Amended (Phase 2 ruling):_ computed text is never written to the cells map. It is projected from the row's provenance when read (`computedCellText`, `computedCells` in `doc/schema.ts`): the key in `column` shape, the tuple member at `spreadIndex` in `spread` shape. Every reader (engine, grid, copy, Find, `@` index, sync projection) goes through the projection, so computed text and a person's text never share a cell key. A value typed under a computed column's key concurrently with Fill column stays in the document; the next reconcile refuses the Fill (SET-10) and sets the column back to entered, together with every other spread column of the same Fill, so a tuple is never half filled.
 
 Lost rows keep their position among the wanted rows, so a person sees them where they were. Rows a person added by hand in a computed table are not computed rows; they stay where they are and their computed cells are empty and read-only.
 
 ### 2.4 Where it runs
 
-The evaluator already runs in the Worker and returns `list` values for set formulas (ADR-053). The engine evaluates a computed column's formula like any cell's and hands `{ tableId, columnId, items }` to the main thread with its results, as it does for derived `Split` columns. The main thread calls `reconcileComputed` inside one transaction. The formula is evaluated once per column, not per row.
+The evaluator already runs in the Worker and returns `list` values for set formulas (ADR-053). The engine evaluates the table's formula like any cell's and hands `{ tableId, items, members }` to the main thread with its results, as it does for derived `Split` columns. The main thread calls `reconcileComputed` inside one transaction. The formula is evaluated once per column, not per row.
 
 Cap: Cross keeps `MAX_CROSS_TUPLES = 10_000` (`formula/sets.ts:26`). `Power` reuses the cap (FX-10: 2¹³ subsets is the largest allowed). A refused result reconciles nothing — the table keeps its rows — and the column header shows the error with its message.
 

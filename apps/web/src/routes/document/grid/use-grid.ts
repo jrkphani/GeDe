@@ -188,11 +188,12 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
   // Structure can change under the selection — a collaborator deletes or hides the
   // selected row or column, or the table itself (GRID-02, SHARE-04). Keep the
   // selection on something that renders, and sweep the orphan cells a merge can
-  // leave behind a remote delete.
+  // leave behind a remote delete. Only an editing replica sweeps: a viewer or a
+  // phone never writes to the document (RESP-02).
   useEffect(() => {
     const onChange = (events: Y.YEvent<Y.AbstractType<unknown>>[]) => {
       for (const event of events) {
-        if (!isStructuralDelete(event)) continue;
+        if (!editableRef.current || !isStructuralDelete(event)) continue;
         const table = event.target.parent as Y.Map<unknown>;
         const tableId = table.get('id');
         if (typeof tableId === 'string') sweepOrphanCells(gd, tableId);

@@ -129,8 +129,7 @@ export const messages: Messages = {
   'cell.readOnly.announce': '{cell} படிக்க மட்டும்: {reason}',
   'cell.readOnly.announceUnaddressed': 'இந்தக் கலம் படிக்க மட்டும்: {reason}',
   'column.readOnly.announce': 'நெடுவரிசை {column} படிக்க மட்டும்: {reason}',
-  'set.fillRefused':
-    'நெடுவரிசை {column} நிரப்பப்படவில்லை: அதன் ஒரு கலத்தில் தட்டச்சு செய்த மதிப்பு உள்ளது',
+  'set.fillRefused': 'நெடுவரிசை {column} நிரப்பப்படவில்லை: நெடுவரிசை காலியாக இல்லை',
   'readOnly.derived': 'வருவிக்கப்பட்ட நெடுவரிசை',
   'readOnly.linked': 'இணைக்கப்பட்ட நெடுவரிசை',
   'readOnly.pulled': 'வேறு அட்டவணையிலிருந்து இழுக்கப்பட்டது',

@@ -374,7 +374,7 @@ export interface DocumentMeta {
 
 /** Open (or lazily create) the four top-level types of a document. */
 export function openDocument(doc: Y.Doc): GedeDoc {
-  const gd: GedeDoc = {
+  return {
     doc,
     sheets: doc.getArray<SheetMap>('sheets'),
     tables: doc.getMap<TableMap>('tables'),
@@ -382,7 +382,6 @@ export function openDocument(doc: Y.Doc): GedeDoc {
     meta: doc.getMap<unknown>('meta'),
     origin: { gede: 'local' },
   };
-  return gd;
 }
 
 // ---------------------------------------------------------------------------
@@ -992,8 +991,14 @@ function projectComputed(meta: RowMetaMap | undefined, spec: ComputedSpec): stri
  * copy, Find and the `@` index.
  */
 export function computedCellText(table: TableMap, rowId: Id, colId: Id): string | null {
-  const spec = computedSpecs(table).get(colId);
-  return spec === undefined ? null : projectComputed(rowMetaMap(table).get(rowId), spec);
+  // Per-cell reader: find the one column and parse its role only when it is computed.
+  // ponytail: O(columns) id scan per read; cache a column index per table if a profile says so.
+  const column = columnsArray(table)
+    .toArray()
+    .find((c) => c.get('id') === colId);
+  if (column === undefined || readColumnSource(column) !== 'computed') return null;
+  const spec = readComputedSpec(column.get('computed'));
+  return spec === null ? null : projectComputed(rowMetaMap(table).get(rowId), spec);
 }
 
 /** SET-08: the table's computed columns and the non-empty text each of their cells shows. */

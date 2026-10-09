@@ -898,10 +898,16 @@ export function orphanCellKeys(table: TableMap): string[] {
       .toArray()
       .map((c) => readString(c, 'id')),
   );
+  const metas = rowMetaMap(table);
   const orphans: string[] = [];
   cellsMap(table).forEach((_value, key) => {
     const { rowId, colId } = splitCellKey(key);
-    if (!rows.has(rowId) || !columns.has(colId)) orphans.push(key);
+    if (!columns.has(colId)) orphans.push(key);
+    // SET-12: a computed row the reconciler removed keeps its key so a note typed on it
+    // (here, concurrently with the removal) brings it back; that note is not an orphan.
+    else if (!rows.has(rowId) && typeof metas.get(rowId)?.get('computedKey') !== 'string') {
+      orphans.push(key);
+    }
   });
   return orphans;
 }

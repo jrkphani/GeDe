@@ -125,7 +125,7 @@ export const messages: Messages = {
   'cell.readOnly.announce': '{cell} చదవడానికి మాత్రమే: {reason}',
   'cell.readOnly.announceUnaddressed': 'ఈ సెల్ చదవడానికి మాత్రమే: {reason}',
   'column.readOnly.announce': 'నిలువు వరుస {column} చదవడానికి మాత్రమే: {reason}',
-  'set.fillRefused': 'నిలువు వరుస {column} నింపబడలేదు: దానిలోని ఒక సెల్‌లో టైప్ చేసిన విలువ ఉంది',
+  'set.fillRefused': 'నిలువు వరుస {column} నింపబడలేదు: నిలువు వరుస ఖాళీగా లేదు',
   'readOnly.derived': 'ఉత్పన్న నిలువు వరుస',
   'readOnly.linked': 'లింక్ చేసిన నిలువు వరుస',
   'readOnly.pulled': 'మరొక పట్టిక నుండి తీసుకోబడింది',

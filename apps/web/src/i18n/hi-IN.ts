@@ -124,7 +124,7 @@ export const messages: Messages = {
   'cell.readOnly.announce': '{cell} केवल पढ़ने के लिए है: {reason}',
   'cell.readOnly.announceUnaddressed': 'यह सेल केवल पढ़ने के लिए है: {reason}',
   'column.readOnly.announce': 'स्तंभ {column} केवल पढ़ने के लिए है: {reason}',
-  'set.fillRefused': 'स्तंभ {column} नहीं भरा गया: इसके एक सेल में टाइप किया गया मान है',
+  'set.fillRefused': 'स्तंभ {column} नहीं भरा गया: स्तंभ खाली नहीं है',
   'readOnly.derived': 'व्युत्पन्न स्तंभ',
   'readOnly.linked': 'लिंक किया गया स्तंभ',
   'readOnly.pulled': 'दूसरी तालिका से लिया गया',

@@ -228,11 +228,9 @@ describe('SET-08 computed column reconciler', () => {
 describe('SET-08 engine hand-off', () => {
   test('SET-08 the engine evaluates the column formula once and hands its items to the reconciler', () => {
     const { gd, sheetId, results } = harness();
-    const { tableId, range } = computedTable(gd, sheetId, '=Cross("a, b", "x, y")');
+    const { tableId } = computedTable(gd, sheetId, '=Cross("a, b", "x, y")');
     const handOff = computedItemsOf(gd, (id) => results.get(id));
-    expect(handOff).toMatchObject([
-      { tableId, columnId: range, items: ['(a, x)', '(a, y)', '(b, x)', '(b, y)'] },
-    ]);
+    expect(handOff).toMatchObject([{ tableId, items: ['(a, x)', '(a, y)', '(b, x)', '(b, y)'] }]);
     expect(handOff[0]?.members.get('(b, y)')).toEqual(['b', 'y']);
     for (const h of handOff) reconcileComputed(gd, h.tableId, h.items, h.members);
     expect(rowsOf(gd, tableId)).toHaveLength(4);
@@ -406,6 +404,21 @@ describe('SET-08 red-team regressions', () => {
     // The rendering alone cannot be split back; that is why Cross carries its members.
     const [tuple = ''] = cross([['sad :('], ['x']]);
     expect(tupleMembers(tuple)).toEqual(['sad :(, x']);
+  });
+
+  test('SET-09 a Cross nested in Union keeps its members for a spread column', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
+    const cols = tableById(gd, tableId)?.columns.map((c) => c.id) ?? [];
+    setTableFormula(gd, tableId, '=Union(Cross("sad :(", "x"), Cross("p", "q"))');
+    cols.forEach((colId, spreadIndex) => {
+      setComputedColumn(gd, tableId, colId, { shape: 'spread', spreadIndex });
+    });
+    handOff(gd, results);
+    expect(rowsOf(gd, tableId).map((row) => cols.map((c) => textAt(gd, tableId, row, c)))).toEqual([
+      ['sad :(', 'x'],
+      ['p', 'q'],
+    ]);
   });
 });
 

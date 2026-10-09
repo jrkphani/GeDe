@@ -5,8 +5,8 @@
  * is the third reconciler of the shape pulls (`pull.ts`) and `Split()`
  * children (`split.ts`) already have: the engine evaluates the table's one
  * formula once, as the synthetic cell `computedFormulaKey(driver)` of its
- * first computed column, and the main thread hands `{ tableId, columnId,
- * items }` (`computedItemsOf`) to `reconcileComputed`, which edits the rows
+ * first computed column, and the main thread hands `{ tableId, items,
+ * members }` (`computedItemsOf`) to `reconcileComputed`, which edits the rows
  * by the minimal diff (`rows.ts`) under `COMPUTED_ORIGIN`, so it is never an undo step.
  *
  * A row's id derives from its key (`computedRowId`), so every replica names
@@ -176,8 +176,6 @@ export function setComputedColumn(
 /** What the engine hands the main thread for one computed table (SPEC §2.4). */
 export interface ComputedItems {
   readonly tableId: Id;
-  /** The column the formula is evaluated as; null when the table has none left. */
-  readonly columnId: Id | null;
   readonly items: readonly string[];
   /** A `Cross` tuple's members by its key, for a spread column (SET-09). */
   readonly members: ReadonlyMap<string, readonly string[]>;
@@ -215,7 +213,7 @@ export function computedItemsOf(
           break;
         }
       }
-      if (leftover) out.push({ tableId, columnId: null, items: [], members: new Map() });
+      if (leftover) out.push({ tableId, items: [], members: new Map() });
       return;
     }
     const result = resultOf(workbookCellId(tableId, computedFormulaKey(driver.id)));
@@ -230,7 +228,7 @@ export function computedItemsOf(
         if (item.members !== undefined) members.set(item.text, item.members);
       }
     } else if (value !== null && value.kind !== 'blank') return;
-    out.push({ tableId, columnId: driver.id, items, members });
+    out.push({ tableId, items, members });
   });
   return out;
 }
@@ -261,17 +259,31 @@ export function reconcileComputed(
     // SET-10 after a merge: a column made computed while another replica typed into it is
     // refused here, as it would have been locally. Nothing computed is ever stored, so
     // anything stored under a computed column's key is a person's — on a removed row too,
-    // which then comes back below.
+    // which then comes back below. A spread Fill column makes its member columns computed
+    // in one step, so they are refused as one unit: never half of a tuple (SET-09).
     let record = tableRecord(table);
-    const columnMaps = columnsArray(table).toArray();
     const candidates = [...editor.ids, ...metas.keys()];
-    for (const column of computedColumns(record.columns)) {
-      if (!candidates.some((id) => storedText(table, id, column.id) !== '')) continue;
-      const map = columnMaps.find((c) => readString(c, 'id') === column.id);
-      map?.set('source', 'entered');
-      map?.delete('computed');
-      map?.set(REFUSED, true);
-      writes += 1;
+    const filled = computedColumns(record.columns);
+    const typedInto = filled.filter((c) =>
+      candidates.some((id) => storedText(table, id, c.id) !== ''),
+    );
+    if (typedInto.length > 0) {
+      const refused = new Set(typedInto.map((c) => c.id));
+      const spread = typedInto.some((c) => c.computed.shape === 'spread');
+      const all = new Set(
+        filled
+          .filter((c) => refused.has(c.id) || (spread && c.computed.shape === 'spread'))
+          .map((c) => c.id),
+      );
+      for (const map of columnsArray(table).toArray()) {
+        const id = readString(map, 'id');
+        if (!all.has(id)) continue;
+        map.set('source', 'entered');
+        map.delete('computed');
+        // The flag names the column that held the typed value: that is the one announced.
+        if (refused.has(id)) map.set(REFUSED, true);
+        writes += 1;
+      }
     }
     if (writes > 0) record = tableRecord(table);
     const [driver] = computedColumns(record.columns);
@@ -295,7 +307,9 @@ export function reconcileComputed(
     // A removed row keeps its meta (its key): a note typed on it concurrently, or redone
     // after it went, brings the row back on every replica alike (same id, SET-12) — as a
     // lost row while the table is computed, as a plain row once it is not.
-    // ponytail: one small meta per key that ever left; compact on snapshot if it matters.
+    // ponytail: one small meta per key that ever left, plus whatever (empty) cells the row
+    // kept: they are not deleted with the row, since an edit inside one would be lost, and
+    // the grid's orphan sweep skips them (`orphanCellKeys`). Compact on snapshot if it matters.
     for (const [id, meta] of metas) {
       if (typeof meta.get('computedKey') === 'string' && !editor.has(id) && typed(id)) {
         const after = meta.get(AFTER);

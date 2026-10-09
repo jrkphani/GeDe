@@ -337,7 +337,9 @@ class Evaluator {
       name === 'Comp' ? { exactly: 2 } : name === 'Power' ? { exactly: 1 } : { atLeast: 2 };
     const wrong = 'exactly' in arity ? args.length !== arity.exactly : args.length < arity.atLeast;
     if (wrong) fail({ kind: 'arity', name, arity });
-    const sets = args.map((arg) => this.setOf(arg));
+    // SET-09: a nested Cross's tuples keep their members through Union, Inter, Diff and Comp.
+    const tuples = new Map<string, readonly string[]>();
+    const sets = args.map((arg) => this.setOf(arg, tuples));
     const [a = [], u = []] = sets;
     let elements: string[];
     switch (name) {
@@ -382,18 +384,32 @@ class Evaluator {
         break;
       }
     }
-    return { kind: 'list', items: elements.map((text) => ({ kind: 'text', text })) };
+    return {
+      kind: 'list',
+      items: elements.map((text) => {
+        const members = tuples.get(text);
+        return members === undefined ? { kind: 'text', text } : { kind: 'text', text, members };
+      }),
+    };
   }
 
   /** The set one argument yields: a literal split like a cell, a nested result, or every cell a reference covers. */
-  private setOf(arg: Expr): string[] {
+  private setOf(arg: Expr, tuples: Map<string, readonly string[]>): string[] {
     switch (arg.kind) {
       case 'string':
         return splitSetElements(arg.value);
       case 'number':
         return [String(arg.value)];
-      case 'call':
-        return this.elementsOf(this.call(arg));
+      case 'call': {
+        const value = this.call(arg);
+        if (value.kind === 'list') {
+          for (const item of value.items) {
+            if (item.kind === 'text' && item.members !== undefined)
+              tuples.set(item.text, item.members);
+          }
+        }
+        return this.elementsOf(value);
+      }
       case 'method':
         return this.elementsOf(this.method(arg));
       default:
