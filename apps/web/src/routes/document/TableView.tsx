@@ -248,12 +248,14 @@ export const TableView = memo(function TableView({
   // renders that change nothing, so what derives from them can be memoised.
   const record = useMemo(() => tableRecord(table), [table, version]);
   // SET-12: the words a lost row shows, from the table's one computed formula as displayed.
+  // The stored formula holds bound ids, so a move or rename of an operand re-projects it.
+  const indexVersion = useWorkbookIndexVersion(record.computedFormula === null ? null : table.doc);
   const lostSets = useMemo(
     () =>
       record.computedFormula === null || table.doc === null
         ? null
         : computedOperandsLabel(projectSource(table.doc, record.computedFormula)),
-    [table.doc, record.computedFormula],
+    [table.doc, record.computedFormula, indexVersion],
   );
   // SORT-01..05: the rows to render, in view order; held still while a cell here is edited.
   const projection = useTableProjection(
@@ -1916,7 +1918,8 @@ const Cell = memo(function Cell({
       />
     );
   }
-  const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
+  const lockLabel =
+    readOnly === null ? undefined : t('cell.readOnly', { reason: readOnlyLabel(readOnly) });
   // SET-12: the computed cell a lost row's element left from says so in words, not by dimming alone.
   const lostLabel =
     row.lostFrom === column.id && column.computed !== null && lostSets !== null

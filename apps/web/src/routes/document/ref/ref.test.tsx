@@ -23,6 +23,8 @@ import {
   setComputedColumn,
   setTableFormula,
   setPull,
+  setTablePosition,
+  setTableTitle,
   tableById,
   tableMap,
   type GedeDoc,
@@ -31,6 +33,8 @@ import {
 
 import { LiveRegion } from '../../../announce.js';
 import { engineFor } from '../../../doc/engine.js';
+import { workbookIndexFor } from '../../../doc/workbook-index.js';
+import { resetLocaleForTests, setLocale } from '../../../locale.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
 import { TableView } from '../TableView.js';
@@ -523,5 +527,102 @@ describe('SET-08 computed columns', () => {
       expect(within(row as HTMLElement).queryByText(/no longer in/u)).toBeNull();
       expect(within(row as HTMLElement).getByText('keep me')).toBeInTheDocument();
     });
+  });
+
+  /** A computed table over `operands` of the table `E` (a, b at K5:K6); b leaves, holding a note. */
+  async function lostOver(operands: string, count: number) {
+    const source = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 10, row: 1 },
+      columns: 1,
+      rows: 2,
+      title: 'E',
+    });
+    fill(source, [['a'], ['b']]);
+    const sets = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      columns: 2,
+      rows: 0,
+      title: 'Sets',
+    });
+    const [range, note] = tableById(gd, sets)!.columns;
+    render(<Mount gd={gd} tableId={sets} />);
+    act(() => {
+      const formula = workbookIndexFor(gd.doc).bind(sheet, `=Union(${operands})`);
+      expect(setTableFormula(gd, sets, formula)).toBe(true);
+      setComputedColumn(gd, sets, range!.id, { shape: 'column' });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(count);
+    });
+    const [, b] = tableById(gd, sets)!.rows;
+    const src = tableById(gd, source)!;
+    act(() => {
+      setCellText(gd, sets, b!, note!.id, 'keep me');
+      setCellText(gd, source, src.rows[1]!, src.columns[0]!.id, '');
+    });
+    await settled();
+    return {
+      source,
+      row: () => gridOf('Sets').querySelector(`[data-row-id="${b!}"][role="row"]`)!,
+    };
+  }
+
+  it('SET-12 the lost label follows a move of the set it names', async () => {
+    const { source, row } = await lostOver('K5:K6, "z"', 3);
+    await waitFor(() => {
+      expect(
+        within(row() as HTMLElement).getByText('no longer in K5:K6 ∪ "z"'),
+      ).toBeInTheDocument();
+    });
+    act(() => {
+      setTablePosition(gd, source, { col: 14, row: 6 });
+    });
+    await waitFor(() => {
+      expect(
+        within(row() as HTMLElement).getByText('no longer in O10:O11 ∪ "z"'),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('SET-12 the lost label follows a rename of the table it names', async () => {
+    const { source, row } = await lostOver('@E.a, K6', 2);
+    await waitFor(() => {
+      expect(within(row() as HTMLElement).getByText('no longer in E.a ∪ K6')).toBeInTheDocument();
+    });
+    act(() => {
+      setTableTitle(gd, source, 'F');
+    });
+    await waitFor(() => {
+      expect(within(row() as HTMLElement).getByText('no longer in F.a ∪ K6')).toBeInTheDocument();
+    });
+  });
+
+  it('SET-08 a read-only cell is named in one language', async () => {
+    setLocale('ta-IN');
+    try {
+      const sets = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 1, row: 12 },
+        columns: 1,
+        rows: 0,
+        title: 'Sets',
+      });
+      render(<Mount gd={gd} tableId={sets} />);
+      act(() => {
+        setTableFormula(gd, sets, '=Union("a", "b")');
+        setComputedColumn(gd, sets, tableById(gd, sets)!.columns[0]!.id, { shape: 'column' });
+      });
+      await settled();
+      await waitFor(() => {
+        expect(cellsOf('Sets')[0]).toHaveAccessibleName(
+          'B16, a, படிக்க மட்டும்: இந்த நெடுவரிசை கணக்கிடப்படுகிறது',
+        );
+      });
+    } finally {
+      resetLocaleForTests();
+    }
   });
 });

@@ -121,4 +121,10 @@ export const messages: Messages = {
 
   'set.lost': 'ఇక {sets}లో లేదు',
   'set.readOnly.computed': 'ఈ నిలువు వరుస లెక్కించబడుతుంది',
+  'cell.readOnly': 'చదవడానికి మాత్రమే: {reason}',
+  'readOnly.derived': 'ఉత్పన్న నిలువు వరుస',
+  'readOnly.linked': 'లింక్ చేసిన నిలువు వరుస',
+  'readOnly.pulled': 'మరొక పట్టిక నుండి తీసుకోబడింది',
+  'readOnly.group': 'వర్గ పట్టీ',
+  'readOnly.splitChild': 'విభజించిన ఉప వరుస',
 };

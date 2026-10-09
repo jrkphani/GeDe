@@ -125,4 +125,10 @@ export const messages: Messages = {
 
   'set.lost': '{sets}-இல் இனி இல்லை',
   'set.readOnly.computed': 'இந்த நெடுவரிசை கணக்கிடப்படுகிறது',
+  'cell.readOnly': 'படிக்க மட்டும்: {reason}',
+  'readOnly.derived': 'வருவிக்கப்பட்ட நெடுவரிசை',
+  'readOnly.linked': 'இணைக்கப்பட்ட நெடுவரிசை',
+  'readOnly.pulled': 'வேறு அட்டவணையிலிருந்து இழுக்கப்பட்டது',
+  'readOnly.group': 'வகைப் பட்டை',
+  'readOnly.splitChild': 'பிரிக்கப்பட்ட துணை வரிசை',
 };

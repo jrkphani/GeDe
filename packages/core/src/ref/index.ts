@@ -59,11 +59,9 @@ export {
   reconcileComputed,
   setComputedColumn,
   setTableFormula,
-  tupleMembers,
   type ComputedItems,
 } from './computed.js';
 export {
-  deterministicId,
   reconcileSplitChildren,
   SPLIT_ORIGIN,
   splitChildId,

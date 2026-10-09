@@ -30,6 +30,7 @@ import {
   setTableFormula,
   tupleMembers,
 } from './computed.js';
+import { addMappingColumn, setMappingValue } from './mapping.js';
 
 function harness(doc = new Y.Doc()) {
   const gd = openDocument(doc);
@@ -525,5 +526,96 @@ describe('SET-08 red-team round 3 regressions', () => {
     const order = ['a', 'b', 'c'].map((k) => computedRowId(tableId, k));
     expect(rowsOf(a.gd, tableId)).toEqual(order);
     expect(rowsOf(b, tableId)).toEqual(order);
+  });
+});
+
+describe('SET-08 red-team round 4 regressions', () => {
+  test('SET-10 SET-11 a note typed concurrently into a column another replica fills is not overwritten', () => {
+    const a = harness();
+    const { tableId, range, notes } = computedTable(a.gd, a.sheetId, '=Union("a", "b")');
+    handOff(a.gd, a.results);
+    const b = openDocument(new Y.Doc());
+    exchange(a.doc, b.doc);
+    const rowA = computedRowId(tableId, 'a');
+    setCellText(b, tableId, rowA, notes, 'important');
+    expect(setComputedColumn(a.gd, tableId, notes, { shape: 'column' })).toBe(true);
+    exchange(a.doc, b.doc);
+    handOff(a.gd, a.results);
+    exchange(a.doc, b.doc);
+    expect(textAt(a.gd, tableId, rowA, range)).toBe('a');
+    for (const gd of [a.gd, b]) {
+      expect(textAt(gd, tableId, rowA, notes)).toBe('important');
+      // The column holds a typed value, so it is refused as it would have been locally.
+      expect(tableById(gd, tableId)?.columns[1]?.source).toBe('entered');
+      expect(textAt(gd, tableId, computedRowId(tableId, 'b'), notes)).toBe('');
+    }
+    expect(handOff(a.gd, a.results)).toBe(0);
+  });
+
+  test('SET-11 SET-12 a mapping pick on a row whose key leaves keeps the row', () => {
+    const { gd, sheetId } = harness();
+    const src = createTable(gd, { sheetId, at: { col: 10, row: 1 }, columns: 1, rows: 1 });
+    const srcCol = tableById(gd, src)?.columns[0]?.id ?? '';
+    setCellText(gd, src, tableById(gd, src)?.rows[0] ?? '', srcCol, 'Owner Ana');
+    const { tableId } = computedTable(gd, sheetId, '=Union("a", "b")');
+    reconcileComputed(gd, tableId, ['a', 'b']);
+    const pick = addMappingColumn(gd, tableId, { tableId: src, colId: srcCol });
+    if (pick === null) throw new Error('no mapping');
+    const rowB = computedRowId(tableId, 'b');
+    expect(setMappingValue(gd, tableId, rowB, pick, 'Owner Ana')).toBe(true);
+    reconcileComputed(gd, tableId, ['a']);
+    expect(rowsOf(gd, tableId)).toContain(rowB);
+    expect(textAt(gd, tableId, rowB, pick)).toBe('Owner Ana');
+  });
+
+  test('SET-10 undo of Fill column leaves an empty column that can be filled again', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
+    const [range = ''] = tableById(gd, tableId)?.columns.map((c) => c.id) ?? [];
+    const um = createUndoManager(gd, { captureTimeout: 0 });
+    setTableFormula(gd, tableId, '=Union("a", "b")');
+    setComputedColumn(gd, tableId, range, { shape: 'column' });
+    handOff(gd, results);
+    expect(rowsOf(gd, tableId)).toHaveLength(2);
+    um.undo();
+    um.undo();
+    // The hand-off runs after every engine batch; it clears what the reconciler wrote.
+    handOff(gd, results);
+    expect(tableById(gd, tableId)?.columns[0]?.source).toBe('entered');
+    expect(rowsOf(gd, tableId)).toEqual([]);
+    expect(handOff(gd, results)).toBe(0);
+    expect(setComputedColumn(gd, tableId, range, { shape: 'column' })).toBe(true);
+  });
+
+  test('SET-12 a row holding a note stays as a plain row once its table has no computed column', () => {
+    const { gd, sheetId, results } = harness();
+    const { tableId, range, notes } = computedTable(gd, sheetId, '=Union("a", "b")');
+    handOff(gd, results);
+    const rowB = computedRowId(tableId, 'b');
+    setCellText(gd, tableId, rowB, notes, 'keep me');
+    const table = tableMap(gd, tableId);
+    if (table === null) throw new Error('no table');
+    // As an undo of Fill column does: the column goes back to entered.
+    gd.doc.transact(() => {
+      const column = columnsArray(table).get(0);
+      column.set('source', 'entered');
+      column.delete('computed');
+    });
+    handOff(gd, results);
+    expect(rowsOf(gd, tableId)).toEqual([rowB]);
+    expect(textAt(gd, tableId, rowB, range)).toBe('');
+    expect(textAt(gd, tableId, rowB, notes)).toBe('keep me');
+    expect(rowMeta(table, rowB)).toMatchObject({ computedKey: null, lostFrom: null });
+    expect(handOff(gd, results)).toBe(0);
+  });
+
+  test('SET-08 a formula that yields no set (plain text, a number) is refused', () => {
+    const { gd, sheetId } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 1, rows: 0 });
+    expect(setTableFormula(gd, tableId, 'not a formula')).toBe(false);
+    expect(setTableFormula(gd, tableId, '=1+1')).toBe(false);
+    expect(setTableFormula(gd, tableId, '=Concat("a", "b")')).toBe(false);
+    expect(tableById(gd, tableId)?.computedFormula).toBeNull();
+    expect(setTableFormula(gd, tableId, '=union("a", "b")')).toBe(true);
   });
 });

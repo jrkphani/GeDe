@@ -156,4 +156,12 @@ export const messages = {
   'set.lost': 'no longer in {sets}',
   // SET-08: the read-only reason of a computed column's cells.
   'set.readOnly.computed': 'the column is computed',
+  // A read-only cell's accessible name; `{reason}` is one of the readOnly.* reasons below
+  // or set.readOnly.computed.
+  'cell.readOnly': 'Read-only: {reason}',
+  'readOnly.derived': 'derived column',
+  'readOnly.linked': 'linked column',
+  'readOnly.pulled': 'pulled from another table',
+  'readOnly.group': 'category band',
+  'readOnly.splitChild': 'split child row',
 } as const;

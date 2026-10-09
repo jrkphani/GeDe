@@ -120,4 +120,10 @@ export const messages: Messages = {
 
   'set.lost': 'अब {sets} में नहीं',
   'set.readOnly.computed': 'यह स्तंभ परिकलित है',
+  'cell.readOnly': 'केवल पढ़ने के लिए: {reason}',
+  'readOnly.derived': 'व्युत्पन्न स्तंभ',
+  'readOnly.linked': 'लिंक किया गया स्तंभ',
+  'readOnly.pulled': 'दूसरी तालिका से लिया गया',
+  'readOnly.group': 'श्रेणी पट्टी',
+  'readOnly.splitChild': 'विभाजित उप-पंक्ति',
 };

@@ -370,20 +370,10 @@ function settled(commands: GridCommands, settle: (() => void) | undefined): Grid
 
 /** Sentence for a read-only reason (A11Y-04: the reason is text, not a tint). */
 export function readOnlyLabel(reason: ReadOnlyReason): string {
-  switch (reason) {
-    case 'derived':
-      return 'derived column';
-    case 'linked':
-      return 'linked column';
-    case 'pulled':
-      return 'pulled from another table';
-    case 'group':
-      return 'category band';
-    case 'splitChild':
-      return 'split child row';
-    case 'computed':
-      return translate(activeLocale(), 'set.readOnly.computed');
-  }
+  return translate(
+    activeLocale(),
+    reason === 'computed' ? 'set.readOnly.computed' : `readOnly.${reason}`,
+  );
 }
 
 /**
