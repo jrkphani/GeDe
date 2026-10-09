@@ -16,6 +16,7 @@ import { canonicalNumber } from '../format/value.js';
 import {
   cellFormatMap,
   cellsMap,
+  computedCells,
   columnsArray,
   columnRecord,
   fragmentText,
@@ -200,23 +201,31 @@ export function buildProjectionInput(
   const readIds = new Set(read.map((c) => c.id));
   const texts = new Map<Id, Record<Id, string>>();
   const nonEmpty = new Set<Id>();
+  // SET-08: a computed column's cells are its rows' projections; what is stored under them stays hidden.
+  const computed = computedCells(table);
+  const shown: [string, string, boolean][] = [];
   cellsMap(table).forEach((content, key) => {
-    const { rowId, colId } = splitCellKey(key);
-    // A formula cell is content even while its value is pending or blank.
-    if (isFormula(content)) nonEmpty.add(rowId);
+    if (computed.columns.has(splitCellKey(key).colId)) return;
     const text = isFormula(content)
       ? evaluatedText(options.cellValue?.(key as CellKey))
       : fragmentText(content);
-    if (text === '') return;
+    shown.push([key, text, isFormula(content)]);
+  });
+  for (const [key, text] of computed.cells) shown.push([key, text, false]);
+  for (const [key, text, formula] of shown) {
+    const { rowId, colId } = splitCellKey(key);
+    // A formula cell is content even while its value is pending or blank.
+    if (formula) nonEmpty.add(rowId);
+    if (text === '') continue;
     nonEmpty.add(rowId);
-    if (!readIds.has(colId)) return;
+    if (!readIds.has(colId)) continue;
     let row = texts.get(rowId);
     if (row === undefined) {
       row = {};
       texts.set(rowId, row);
     }
     row[colId] = text;
-  });
+  }
   const overrides = cellFormatMap(table);
   const rows: ProjectionRow[] = rowsArray(table)
     .toArray()

@@ -44,7 +44,6 @@ import {
   type FormatOpts,
 } from '../format/types.js';
 import { isMethodName, type MethodName } from '../formula/ast.js';
-import { guardTypedCells } from './fill-guard.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
 import { readRules, type ConditionalRule } from '../style/rules.js';
 import {
@@ -383,8 +382,6 @@ export function openDocument(doc: Y.Doc): GedeDoc {
     meta: doc.getMap<unknown>('meta'),
     origin: { gede: 'local' },
   };
-  // SET-10, SET-11: a value typed while another replica fills its column comes back.
-  guardTypedCells(gd);
   return gd;
 }
 
@@ -937,8 +934,92 @@ export function textFragment(text: string): Y.XmlFragment {
   return fragment;
 }
 
+/**
+ * A tuple's members, `(a, (1, 2), c)` → `a`, `(1, 2)`, `c`: split at top-level
+ * commas, kept in position (a member may repeat). Anything not a tuple is one
+ * member. The fallback when a row stores no members (SET-09): a member with an
+ * unbalanced bracket cannot be split back from the rendering, which is why
+ * `Cross` carries them and the reconciler stores them then.
+ */
+export function tupleMembers(key: string): string[] {
+  if (!key.startsWith('(') || !key.endsWith(')')) return [key];
+  const inner = key.slice(1, -1);
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i];
+    if (ch === '(' || ch === '{') depth += 1;
+    else if ((ch === ')' || ch === '}') && depth > 0) depth -= 1;
+    else if (ch === ',' && depth === 0) {
+      out.push(inner.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(inner.slice(start).trim());
+  return out;
+}
+
+/** The table's computed columns' roles by column id (SET-08). */
+function computedSpecs(table: TableMap): Map<Id, ComputedSpec> {
+  const out = new Map<Id, ComputedSpec>();
+  for (const column of columnsArray(table).toArray()) {
+    if (readColumnSource(column) !== 'computed') continue;
+    const spec = readComputedSpec(column.get('computed'));
+    if (spec !== null) out.set(readString(column, 'id'), spec);
+  }
+  return out;
+}
+
+function projectComputed(meta: RowMetaMap | undefined, spec: ComputedSpec): string {
+  const key = meta?.get('computedKey');
+  if (typeof key !== 'string') return '';
+  if (spec.shape === 'column') return key;
+  const stored = meta?.get('computedMembers');
+  const members: readonly unknown[] = Array.isArray(stored) ? stored : tupleMembers(key);
+  const member = members[spec.spreadIndex ?? 0];
+  return typeof member === 'string' ? member : '';
+}
+
+/**
+ * SET-08: what a computed column's cell shows, or null when the column is not
+ * computed. A computed value is never stored in the cells map: it is projected
+ * from the row's provenance (`computedKey`, or its tuple member at
+ * `spreadIndex` for a spread column), and a row without one shows nothing.
+ * Whatever the cells map holds under that key (a value typed concurrently with
+ * Fill column) stays in the document, hidden while the column is computed.
+ * Every reader goes through this or `computedCells`: the engine, the grid,
+ * copy, Find and the `@` index.
+ */
+export function computedCellText(table: TableMap, rowId: Id, colId: Id): string | null {
+  const spec = computedSpecs(table).get(colId);
+  return spec === undefined ? null : projectComputed(rowMetaMap(table).get(rowId), spec);
+}
+
+/** SET-08: the table's computed columns and the non-empty text each of their cells shows. */
+export function computedCells(table: TableMap): {
+  readonly columns: ReadonlySet<Id>;
+  readonly cells: ReadonlyMap<CellKey, string>;
+} {
+  const specs = computedSpecs(table);
+  const cells = new Map<CellKey, string>();
+  if (specs.size > 0) {
+    const metas = rowMetaMap(table);
+    for (const rowId of rowsArray(table).toArray()) {
+      const meta = metas.get(rowId);
+      for (const [colId, spec] of specs) {
+        const text = projectComputed(meta, spec);
+        if (text !== '') cells.set(cellKey(rowId, colId), text);
+      }
+    }
+  }
+  return { columns: new Set(specs.keys()), cells };
+}
+
 /** The cell's text as the editor shows it: formula source or plain text; '' when empty. */
 export function cellText(table: TableMap, rowId: Id, colId: Id): string {
+  const projected = computedCellText(table, rowId, colId);
+  if (projected !== null) return projected;
   const value = cellsMap(table).get(cellKey(rowId, colId));
   if (value === undefined) return '';
   if (isFormula(value)) return value;

@@ -258,6 +258,9 @@ export const TableView = memo(function TableView({
         : computedOperandsLabel(projectSource(table.doc, record.computedFormula)),
     [table.doc, record.computedFormula, indexVersion],
   );
+  // The column a lost row's words are drawn in: the first computed column on screen, so a
+  // hidden first computed column does not hide them.
+  const lostColumn = record.columns.find((c) => c.computed !== null && !c.hidden)?.id ?? null;
   // SORT-01..05: the rows to render, in view order; held still while a cell here is edited.
   const projection = useTableProjection(
     table,
@@ -905,8 +908,8 @@ export const TableView = memo(function TableView({
                           'gd-table__row--lit': litRows.has(rowId),
                           'gd-table__row--banded': rowInBand,
                           // SET-12: a row whose element left the result, kept for its typed values.
-                          // Dimmed only while the column that says so in words is computed and shown.
-                          'gd-table__row--lost': lostLabelShown(record.columns, rowMetaOf.lostFrom),
+                          // Dimmed only while a computed column on screen says so in words.
+                          'gd-table__row--lost': rowMetaOf.lostFrom !== null && lostColumn !== null,
                         })}
                         role="row"
                         data-lit={litRows.has(rowId) || undefined}
@@ -969,7 +972,7 @@ export const TableView = memo(function TableView({
                               }
                               outlineLocked={outlineLocked}
                               column={col}
-                              lostSets={lostSets}
+                              lostSets={col.id === lostColumn ? lostSets : null}
                               rowMeta={rowMetaOf}
                               locale={locale}
                               undo={undo ?? null}
@@ -1421,7 +1424,10 @@ interface CellProps {
   outlineLocked: string | null;
   /** The column record, resolved once per table render; carries the column's data format (FMT-01). */
   column: ColumnRecord;
-  /** SET-12: the operands of the table's computed formula ("E × C"), or null when it has none. */
+  /**
+   * SET-12: the operands of the table's computed formula ("E × C"), given only to the
+   * column a lost row's words are drawn in; null elsewhere and when the table has none.
+   */
   lostSets: string | null;
   /** The row's meta, resolved once per row render (REF-02 provenance, HIER-07 children). */
   rowMeta: RowMeta;
@@ -1923,7 +1929,7 @@ const Cell = memo(function Cell({
     readOnly === null ? undefined : t('cell.readOnly', { reason: readOnlyLabel(readOnly) });
   // SET-12: the computed cell a lost row's element left from says so in words, not by dimming alone.
   const lostLabel =
-    row.lostFrom === column.id && column.computed !== null && lostSets !== null
+    row.lostFrom !== null && column.computed !== null && lostSets !== null
       ? t('set.lost', { sets: lostSets })
       : null;
   // KEYS-08 (#136): the chevron names its chord, so ⌥← / ⌥→ have a route beside the command.
@@ -2084,17 +2090,3 @@ const Cell = memo(function Cell({
     </div>
   );
 }, cellPropsEqual);
-
-/**
- * SET-12: whether a lost row's words are on screen — the column it left from
- * is still computed and not hidden. The row is dimmed only then, so the state
- * is never carried by its appearance alone (non-negotiable 2).
- */
-function lostLabelShown(
-  columns: readonly Pick<ColumnRecord, 'id' | 'computed' | 'hidden'>[],
-  lostFrom: Id | null,
-): boolean {
-  return (
-    lostFrom !== null && columns.some((c) => c.id === lostFrom && c.computed !== null && !c.hidden)
-  );
-}

@@ -16,6 +16,7 @@ import {
   createTable,
   createUndoManager,
   deleteColumn,
+  hideColumn,
   isGraphDimensionCandidate,
   openDocument,
   rowMeta,
@@ -569,6 +570,39 @@ describe('SET-08 computed columns', () => {
       row: () => gridOf('Sets').querySelector(`[data-row-id="${b!}"][role="row"]`)!,
     };
   }
+
+  it('SET-12 a hidden first computed column does not hide the lost-row words', async () => {
+    const sets = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      columns: 3,
+      rows: 0,
+      title: 'Sets',
+    });
+    const [first, second, note] = tableById(gd, sets)!.columns;
+    render(<Mount gd={gd} tableId={sets} />);
+    act(() => {
+      setTableFormula(gd, sets, '=Cross("a, b", "x")');
+      setComputedColumn(gd, sets, first!.id, { shape: 'spread', spreadIndex: 0 });
+      setComputedColumn(gd, sets, second!.id, { shape: 'spread', spreadIndex: 1 });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(2);
+    });
+    const [, b] = tableById(gd, sets)!.rows;
+    act(() => {
+      hideColumn(gd, sets, first!.id);
+      setCellText(gd, sets, b!, note!.id, 'keep me');
+      setTableFormula(gd, sets, '=Cross("a", "x")');
+    });
+    await settled();
+    await waitFor(() => {
+      const row = gridOf('Sets').querySelector(`[data-row-id="${b!}"][role="row"]`)!;
+      expect(row).toHaveClass('gd-table__row--lost');
+      expect(within(row as HTMLElement).getByText('no longer in "a" × "x"')).toBeInTheDocument();
+    });
+  });
 
   it('SET-12 the lost label follows a move of the set it names', async () => {
     const { source, row } = await lostOver('K5:K6, "z"', 3);

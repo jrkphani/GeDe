@@ -8,6 +8,7 @@ import * as Y from 'yjs';
 import {
   cellsMap,
   columnsArray,
+  computedCellText,
   isFormula,
   readString,
   rowsArray,
@@ -30,6 +31,9 @@ import { fragmentToRich, richToFragment, writeRich } from './yjs.js';
 
 /** The cell's rich text: a formula reads as its source, an empty cell as the empty document. */
 export function cellRich(table: TableMap, rowId: Id, colId: Id): RichDoc {
+  // SET-08: a computed cell shows its row's projection, never what is stored under its key.
+  const projected = computedCellText(table, rowId, colId);
+  if (projected !== null) return projected === '' ? EMPTY_DOC : richFromText(projected);
   const value = cellsMap(table).get(cellKey(rowId, colId));
   if (value === undefined) return EMPTY_DOC;
   if (isFormula(value)) return richFromText(value);

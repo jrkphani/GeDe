@@ -15,28 +15,37 @@
  * any reorder (SET-11). A row whose key left the result stays, marked
  * `lostFrom`, while it holds a typed value, and leaves otherwise (SET-12); a
  * key that returns reclaims its row. A refused result (a capped Cross or
- * Power) is not handed off, so the table keeps its rows. The reconciler
- * records what it wrote in each cell: anything else there is a person's and
- * is never overwritten, and what it wrote goes when the column stops being
- * computed (an undo of Fill column).
+ * Power) is not handed off, so the table keeps its rows.
+ *
+ * The reconciler writes rows only — ids, order, `computedKey`, `lostFrom` and,
+ * where a key's text cannot be split back, its tuple members — never cell
+ * text. A computed cell's value is projected at read time from its row's
+ * provenance (`computedCellText`, doc/schema.ts), so computed text and a
+ * person's text never share a cell key: a value typed under a computed
+ * column's key (concurrently with Fill column) stays in the document, hidden
+ * while the column is computed, and the column is refused after the merge as
+ * it would have been locally (SET-10).
  */
 import * as Y from 'yjs';
 
-import { computedFillKey as filledKey } from '../doc/fill-guard.js';
 import { rowMetaFor } from '../doc/mutations.js';
 import {
   cellsMap,
   cellText,
   columnsArray,
+  fragmentText,
+  isFormula,
   readString,
   rowMeta,
   rowMetaMap,
   rowsArray,
   tableRecord,
-  textFragment,
+  tupleMembers,
   type ColumnRecord,
   type ComputedSpec,
   type GedeDoc,
+  type TableMap,
+  type TableRecord,
 } from '../doc/schema.js';
 import { computedFormulaKey, workbookCellId, type WorkbookCellId } from '../engine/types.js';
 import type { CellValue } from '../formula/evaluate.js';
@@ -57,12 +66,8 @@ export const COMPUTED_ORIGIN = 'ref-computed';
  */
 const AFTER = 'computedAfter';
 
-/*
- * Row-meta key `filledKey(colId)` (doc/fill-guard.ts): the text this reconciler last
- * wrote in column `colId` of the row. A cell that reads anything else is a person's
- * (SET-10, SET-11), and a cell that still reads it is cleared once the column stops
- * being computed (an undo of Fill column).
- */
+/** Row-meta key: a tuple key's members, stored only when `tupleMembers` cannot split the key back. */
+const MEMBERS = 'computedMembers';
 
 /**
  * Table key: the reconciler has filled this table's rows at least once, so a table with
@@ -76,6 +81,28 @@ const REFUSED = 'fillRefused';
 /** The row a result key fills in a table: the same on every replica (SPEC §2.2). */
 export function computedRowId(tableId: Id, key: string): Id {
   return deterministicId(`${tableId}\u0000${key}`);
+}
+
+/** What the cells map stores under a cell, whatever the column: '' when nothing. */
+function storedText(table: TableMap, rowId: Id, colId: Id): string {
+  const value = cellsMap(table).get(cellKey(rowId, colId));
+  if (value === undefined) return '';
+  return isFormula(value) ? value : fragmentText(value);
+}
+
+/**
+ * Whether a row holds something a person typed or picked (SET-11, SET-12): an entered
+ * value or a mapping pick (REF-03). A pulled value does not.
+ */
+function holdsTyped(table: TableMap, record: TableRecord, rowId: Id): boolean {
+  return record.columns.some(
+    (c) =>
+      (c.source === 'entered' || c.source === 'linked') && storedText(table, rowId, c.id) !== '',
+  );
+}
+
+function sameList(a: readonly unknown[], b: readonly unknown[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 function computedColumns(columns: readonly ColumnRecord[]): (ColumnRecord & {
@@ -161,7 +188,7 @@ export interface ComputedItems {
  * A table still evaluating, or whose formula was refused or yields no set,
  * is left out, so its rows stay as they are. A table that has computed rows
  * but no computed column any more (an undo of Fill column) is handed off with
- * no column and no items, so the reconciler clears what it wrote there.
+ * no column and no items, so the reconciler clears the computed rows it left.
  */
 export function computedItemsOf(
   gd: GedeDoc,
@@ -175,16 +202,15 @@ export function computedItemsOf(
     const [driver] = computedColumns(record.columns);
     if (driver === undefined) {
       // A table never filled costs nothing. One that was is left over while a computed row
-      // is still in it, or a removed one holds a cell (a note typed concurrently, SET-12).
+      // is still in it, or a removed one holds a typed value (a note typed concurrently, SET-12).
       // ponytail: a scan of a once-computed table's row metas per hand-off.
       if (table.get(FILLED) !== true) return;
       const rows = new Set(record.rows);
-      const cells = cellsMap(table);
       // Two replicas restoring the same row at once leave it twice until a pass dedupes it.
       let leftover = rows.size !== record.rows.length;
       for (const [id, meta] of leftover ? [] : rowMetaMap(table)) {
         if (typeof meta.get('computedKey') !== 'string') continue;
-        if (rows.has(id) || record.columns.some((c) => cells.has(cellKey(id, c.id)))) {
+        if (rows.has(id) || holdsTyped(table, record, id)) {
           leftover = true;
           break;
         }
@@ -209,31 +235,7 @@ export function computedItemsOf(
   return out;
 }
 
-/**
- * A tuple's members, `(a, (1, 2), c)` → `a`, `(1, 2)`, `c`: split at top-level
- * commas, kept in position (a member may repeat). Anything not a tuple is one
- * member. The fallback when no members came with the key (a tuple that passed
- * through Union, or a restored row): a member with an unbalanced bracket
- * cannot be split back from the rendering, which is why `Cross` carries them.
- */
-export function tupleMembers(key: string): string[] {
-  if (!key.startsWith('(') || !key.endsWith(')')) return [key];
-  const inner = key.slice(1, -1);
-  const out: string[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i < inner.length; i += 1) {
-    const ch = inner[i];
-    if (ch === '(' || ch === '{') depth += 1;
-    else if ((ch === ')' || ch === '}') && depth > 0) depth -= 1;
-    else if (ch === ',' && depth === 0) {
-      out.push(inner.slice(start, i).trim());
-      start = i + 1;
-    }
-  }
-  out.push(inner.slice(start).trim());
-  return out;
-}
+export { tupleMembers };
 
 /**
  * Fill one computed table's rows from its formula's result (SPEC §2.3).
@@ -252,23 +254,19 @@ export function reconcileComputed(
   let writes = 0;
   gd.doc.transact(() => {
     const metas = rowMetaMap(table);
-    const cells = cellsMap(table);
     const editor = new RowEditor(rowsArray(table));
     const keyOf = (id: Id): string | null => rowMeta(table, id).computedKey;
-    /** A cell holds a person's value when it is not empty and not what this reconciler wrote. */
-    const personal = (id: Id, colId: Id): boolean => {
-      if (!cells.has(cellKey(id, colId))) return false;
-      const text = cellText(table, id, colId);
-      return text !== '' && text !== metas.get(id)?.get(filledKey(colId));
-    };
     editor.dedupe();
 
     // SET-10 after a merge: a column made computed while another replica typed into it is
-    // refused here, as it would have been locally; the typed value is never overwritten.
+    // refused here, as it would have been locally. Nothing computed is ever stored, so
+    // anything stored under a computed column's key is a person's — on a removed row too,
+    // which then comes back below.
     let record = tableRecord(table);
     const columnMaps = columnsArray(table).toArray();
+    const candidates = [...editor.ids, ...metas.keys()];
     for (const column of computedColumns(record.columns)) {
-      if (!editor.ids.some((id) => personal(id, column.id))) continue;
+      if (!candidates.some((id) => storedText(table, id, column.id) !== '')) continue;
       const map = columnMaps.find((c) => readString(c, 'id') === column.id);
       map?.set('source', 'entered');
       map?.delete('computed');
@@ -276,18 +274,9 @@ export function reconcileComputed(
       writes += 1;
     }
     if (writes > 0) record = tableRecord(table);
-    const computed = computedColumns(record.columns);
-    const [driver] = computed;
+    const [driver] = computedColumns(record.columns);
 
-    // Only what a person typed or picked holds a row (SET-11, SET-12): an entered value or
-    // a mapping pick (REF-03). A pulled value does not.
-    const holding = record.columns.filter((c) => c.source === 'entered' || c.source === 'linked');
-    const typed = (id: Id): boolean => holding.some((c) => personal(id, c.id));
-    const drop = (id: Id): void => {
-      metas.get(id)?.delete('lostFrom');
-      for (const c of record.columns) cells.delete(cellKey(id, c.id));
-      writes += 1;
-    };
+    const typed = (id: Id): boolean => holdsTyped(table, record, id);
     /** Rows matching `doomed` go; each remembers the row it followed, to come back there. */
     const removeWhere = (doomed: (id: Id) => boolean): void => {
       let previous = '';
@@ -295,7 +284,12 @@ export function reconcileComputed(
         if (!doomed(id)) previous = id;
         else if (metas.get(id)?.get(AFTER) !== previous) rowMetaFor(table, id).set(AFTER, previous);
       }
-      for (const id of editor.remove(doomed)) drop(id);
+      for (const id of editor.remove(doomed)) {
+        const meta = metas.get(id);
+        if (meta?.has('lostFrom') !== true) continue;
+        meta.delete('lostFrom');
+        writes += 1;
+      }
     };
 
     // A removed row keeps its meta (its key): a note typed on it concurrently, or redone
@@ -315,20 +309,6 @@ export function reconcileComputed(
       }
     }
 
-    // What this reconciler wrote in a column that is no longer computed goes.
-    const plain = record.columns.filter((c) => c.computed === null);
-    for (const id of editor.ids) {
-      const meta = metas.get(id);
-      if (meta === undefined) continue;
-      for (const c of plain) {
-        const wrote = meta.get(filledKey(c.id));
-        if (typeof wrote !== 'string') continue;
-        if (cellText(table, id, c.id) === wrote) cells.delete(cellKey(id, c.id));
-        meta.delete(filledKey(c.id));
-        writes += 1;
-      }
-    }
-
     if (driver === undefined) {
       // No computed column left: the rows it filled go unless they hold a typed value; those
       // stay as plain rows.
@@ -338,6 +318,7 @@ export function reconcileComputed(
         if (meta?.has('computedKey') !== true) continue;
         meta.delete('computedKey');
         meta.delete('lostFrom');
+        meta.delete(MEMBERS);
         writes += 1;
       }
       writes += editor.writes;
@@ -354,11 +335,10 @@ export function reconcileComputed(
     }
 
     // A key that left: gone without a trace unless the row holds something typed (SET-12).
+    // A lost row keeps its key and members, so its computed cells still show them.
     removeWhere((id) => isLost(id) && !typed(id));
-    const lost: [Id, string][] = [];
     for (const id of editor.ids) {
       if (!isLost(id)) continue;
-      lost.push([id, keyOf(id) ?? '']);
       const meta = rowMetaFor(table, id);
       if (meta.get('lostFrom') !== driver.id) {
         meta.set('lostFrom', driver.id);
@@ -369,35 +349,8 @@ export function reconcileComputed(
     editor.arrange(wanted);
     writes += editor.writes;
 
-    /**
-     * The computed cells of row `id` read `key`. A lost row keeps what it shows and
-     * fills only an empty cell (a restored row): its members are no longer known, and
-     * a member with an unbalanced bracket cannot be split back from the key (RT3).
-     */
-    const fill = (id: Id, key: string, onlyEmpty = false): void => {
-      const parts = members.get(key) ?? tupleMembers(key);
-      for (const column of computed) {
-        const text =
-          column.computed.shape === 'spread'
-            ? (parts[column.computed.spreadIndex ?? 0] ?? '')
-            : key;
-        // Every other value in a computed column is this reconciler's (see the revert above).
-        let shown = cellText(table, id, column.id);
-        if (shown === '' || (!onlyEmpty && shown !== text)) {
-          cells.set(cellKey(id, column.id), textFragment(text));
-          shown = text;
-          writes += 1;
-        }
-        const meta = rowMetaFor(table, id);
-        if (meta.get(filledKey(column.id)) !== shown) {
-          meta.set(filledKey(column.id), shown);
-          writes += 1;
-        }
-      }
-    };
     keys.forEach((key, i) => {
-      const id = wanted[i] ?? '';
-      const meta = rowMetaFor(table, id);
+      const meta = rowMetaFor(table, wanted[i] ?? '');
       if (meta.get('computedKey') !== key) {
         meta.set('computedKey', key);
         writes += 1;
@@ -406,9 +359,21 @@ export function reconcileComputed(
         meta.delete('lostFrom');
         writes += 1;
       }
-      fill(id, key);
+      // SET-09: members only where the key cannot be split back (a member with an
+      // unbalanced bracket); the same on every replica, since they follow from the key.
+      const given = members.get(key);
+      if (given === undefined) return;
+      const stored: unknown = meta.get(MEMBERS);
+      if (sameList(given, tupleMembers(key))) {
+        if (stored !== undefined) {
+          meta.delete(MEMBERS);
+          writes += 1;
+        }
+      } else if (!Array.isArray(stored) || !sameList(stored, given)) {
+        meta.set(MEMBERS, [...given]);
+        writes += 1;
+      }
     });
-    for (const [id, key] of lost) fill(id, key, true);
   }, origin);
   return writes;
 }

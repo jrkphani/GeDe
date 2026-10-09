@@ -12,6 +12,7 @@ import {
   cellFormatMap,
   cellFormatOverride,
   cellsMap,
+  computedCells,
   fragmentText,
   isFormula,
   readString,
@@ -90,13 +91,19 @@ export function tableStructure(table: TableMap): TableStructure {
   };
 }
 
+/**
+ * The cells the engine reads: what is stored, except under a computed column,
+ * whose cells are projected from row provenance (SET-08, `computedCells`).
+ */
 export function tableCells(table: TableMap): Record<CellKey, CellSnapshot> {
   const out: Record<CellKey, CellSnapshot> = {};
+  const computed = computedCells(table);
   cellsMap(table).forEach((content, key) => {
-    if (!isCellKey(key)) return;
+    if (!isCellKey(key) || computed.columns.has(splitCellKey(key).colId)) return;
     const snap = cellSnapshot(content);
     if (snap !== null) out[key] = snap;
   });
+  for (const [key, text] of computed.cells) out[key] = { kind: 'text', text };
   return out;
 }
 
@@ -144,19 +151,54 @@ export function observeWorkbook(
   gd: GedeDoc,
   listener: (changes: WorkbookChange[]) => void,
 ): () => void {
+  // SET-08: what each table's computed columns showed the engine last, so a structure change
+  // (a row's provenance, a column made or no longer computed) ships only what moved.
+  const shown = new Map<Id, ReturnType<typeof computedCells>>();
   const handler = (events: Y.YEvent<Y.AbstractType<unknown>>[]): void => {
     const changes: WorkbookChange[] = [];
     const structure = new Set<Id>();
     const removed = new Set<Id>();
     const cells = new Map<Id, Record<CellKey, CellSnapshot | null>>();
-    const cellChange = (tableId: Id, key: string, content: CellContent | undefined): void => {
-      if (!isCellKey(key)) return;
+    const set = (tableId: Id, key: CellKey, snap: CellSnapshot | null): void => {
       let bucket = cells.get(tableId);
       if (bucket === undefined) {
         bucket = {};
         cells.set(tableId, bucket);
       }
-      bucket[key] = cellSnapshot(content);
+      bucket[key] = snap;
+    };
+    const cellChange = (tableId: Id, key: string, content: CellContent | undefined): void => {
+      if (!isCellKey(key)) return;
+      // A value stored under a computed column's key stays hidden from the engine.
+      if (shown.get(tableId)?.columns.has(splitCellKey(key).colId) === true) return;
+      set(tableId, key, cellSnapshot(content));
+    };
+    const syncComputed = (tableId: Id, table: TableMap): void => {
+      const before = shown.get(tableId);
+      const now = computedCells(table);
+      if (before === undefined && now.columns.size === 0) return;
+      shown.set(tableId, now);
+      for (const [key, text] of now.cells) {
+        if (before?.cells.get(key) !== text) set(tableId, key, { kind: 'text', text });
+      }
+      for (const key of before?.cells.keys() ?? []) {
+        if (!now.cells.has(key) && now.columns.has(splitCellKey(key).colId))
+          set(tableId, key, null);
+      }
+      const added = [...now.columns].filter((c) => before?.columns.has(c) !== true);
+      const dropped = [...(before?.columns ?? [])].filter((c) => !now.columns.has(c));
+      if (added.length === 0 && dropped.length === 0) return;
+      // A column made computed hides what is stored under it; one no longer computed shows it.
+      const map = cellsMap(table);
+      for (const key of before?.cells.keys() ?? []) {
+        if (dropped.includes(splitCellKey(key).colId)) set(tableId, key, null);
+      }
+      map.forEach((content, key) => {
+        if (!isCellKey(key)) return;
+        const { colId } = splitCellKey(key);
+        if (dropped.includes(colId)) set(tableId, key, cellSnapshot(content));
+        else if (added.includes(colId) && !now.cells.has(key)) set(tableId, key, null);
+      });
     };
 
     for (const event of events) {
@@ -164,14 +206,18 @@ export function observeWorkbook(
         event.changes.keys.forEach((change, key) => {
           if (change.action === 'delete') {
             removed.add(key);
+            shown.delete(key);
             return;
           }
           const table = gd.tables.get(key);
           if (table !== undefined) {
             structure.add(key);
-            const map = cellsMap(table);
-            map.forEach((content, cellId) => {
-              cellChange(key, cellId, content);
+            shown.delete(key);
+            const computed = computedCells(table);
+            cellsMap(table).forEach((content, cellId) => {
+              if (isCellKey(cellId) && !computed.columns.has(splitCellKey(cellId).colId)) {
+                set(key, cellId, cellSnapshot(content));
+              }
             });
           }
         });
@@ -198,7 +244,9 @@ export function observeWorkbook(
     for (const tableId of removed) changes.push({ type: 'table-removed', tableId });
     for (const tableId of structure) {
       const table = gd.tables.get(tableId);
-      if (table !== undefined) changes.push({ type: 'table', table: tableStructure(table) });
+      if (table === undefined) continue;
+      changes.push({ type: 'table', table: tableStructure(table) });
+      syncComputed(tableId, table);
     }
     for (const [tableId, bucket] of cells) {
       if (removed.has(tableId)) continue;
@@ -206,6 +254,10 @@ export function observeWorkbook(
     }
     if (changes.length > 0) listener(changes);
   };
+  gd.tables.forEach((table, tableId) => {
+    const computed = computedCells(table);
+    if (computed.columns.size > 0) shown.set(tableId, computed);
+  });
   listener([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
   gd.tables.observeDeep(handler);
   return () => {
