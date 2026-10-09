@@ -49,8 +49,8 @@ function install(doc: Y.Doc): () => void {
         reconcileSplitChildren(gd, tableId, pieces);
       }
       // SET-08: a computed column's formula, evaluated once in the Worker, fills its table's rows.
-      for (const { tableId, items } of computedItemsOf(gd, (id) => host.result(id))) {
-        reconcileComputed(gd, tableId, items);
+      for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
+        reconcileComputed(gd, tableId, items, members);
       }
       // Results moved: a filtered pull over engine-backed cells may admit different rows now.
       reconcileFilteredPulls(gd, { cellValue });

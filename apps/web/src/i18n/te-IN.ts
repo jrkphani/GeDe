@@ -120,4 +120,5 @@ export const messages: Messages = {
   'forms.power.hint': 'a యొక్క ప్రతి ఉపసమితి',
 
   'set.lost': 'ఇక {sets}లో లేదు',
+  'set.readOnly.computed': 'ఈ నిలువు వరుస లెక్కించబడుతుంది',
 };

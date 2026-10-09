@@ -124,4 +124,5 @@ export const messages: Messages = {
   'forms.power.hint': 'a-இன் ஒவ்வொரு உட்கணமும்',
 
   'set.lost': '{sets}-இல் இனி இல்லை',
+  'set.readOnly.computed': 'இந்த நெடுவரிசை கணக்கிடப்படுகிறது',
 };

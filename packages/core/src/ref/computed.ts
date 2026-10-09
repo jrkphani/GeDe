@@ -38,7 +38,7 @@ import type { CellValue } from '../formula/evaluate.js';
 import { parse } from '../formula/parser.js';
 import { dedupe } from '../formula/sets.js';
 import { cellKey, type Id } from '../ids.js';
-import { orderMembers, RowEditor } from './rows.js';
+import { RowEditor } from './rows.js';
 import { deterministicId } from './split.js';
 
 /** Transaction origin of a computed reconcile: never an undo step. */
@@ -57,8 +57,9 @@ function computedColumns(columns: readonly ColumnRecord[]): (ColumnRecord & {
 
 /**
  * SET-10: make a column computed. Refused (false) while any of its cells holds
- * a typed value; a computed column's own cells are not typed, so its formula
- * can be replaced. Under the person's origin: it is an undo step.
+ * a typed value, or while another column of the table is computed from a
+ * different formula; a computed column's own cells are not typed, so its
+ * formula can be replaced. Under the person's origin: it is an undo step.
  */
 export function setComputedColumn(
   gd: GedeDoc,
@@ -72,6 +73,11 @@ export function setComputedColumn(
     .toArray()
     .find((c) => readString(c, 'id') === colId);
   if (column === undefined) return false;
+  // One formula per table (spread columns share it): a second formula would never be filled.
+  const other = tableRecord(table).columns.find(
+    (c) => c.id !== colId && c.computed !== null && c.computed.formula !== spec.formula,
+  );
+  if (other !== undefined) return false;
   if (column.get('source') !== 'computed') {
     const typed = rowsArray(table)
       .toArray()
@@ -93,6 +99,8 @@ export interface ComputedItems {
   readonly tableId: Id;
   readonly columnId: Id;
   readonly items: readonly string[];
+  /** A `Cross` tuple's members by its key, for a spread column (SET-09). */
+  readonly members: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
@@ -113,19 +121,26 @@ export function computedItemsOf(
     const result = resultOf(workbookCellId(tableId, computedFormulaKey(driver.id)));
     if (result?.error !== null) return;
     const value = result.value;
-    let items: string[];
-    if (value === null || value.kind === 'blank') items = [];
-    else if (value.kind === 'list') {
-      items = value.items.flatMap((item) => (item.kind === 'text' ? [item.text] : []));
-    } else return;
-    out.push({ tableId, columnId: driver.id, items });
+    const items: string[] = [];
+    const members = new Map<string, readonly string[]>();
+    if (value !== null && value.kind === 'list') {
+      for (const item of value.items) {
+        if (item.kind !== 'text') continue;
+        items.push(item.text);
+        if (item.members !== undefined) members.set(item.text, item.members);
+      }
+    } else if (value !== null && value.kind !== 'blank') return;
+    out.push({ tableId, columnId: driver.id, items, members });
   });
   return out;
 }
 
 /**
  * A tuple's members, `(a, (1, 2), c)` → `a`, `(1, 2)`, `c`: split at top-level
- * commas, kept in position (a member may repeat). Anything not a tuple is one member.
+ * commas, kept in position (a member may repeat). Anything not a tuple is one
+ * member. The fallback when no members came with the key (a tuple that passed
+ * through Union, or a restored row): a member with an unbalanced bracket
+ * cannot be split back from the rendering, which is why `Cross` carries them.
  */
 export function tupleMembers(key: string): string[] {
   if (!key.startsWith('(') || !key.endsWith(')')) return [key];
@@ -148,12 +163,14 @@ export function tupleMembers(key: string): string[] {
 
 /**
  * Fill one computed table's rows from its formula's result (SPEC §2.3).
+ * `members` gives a tuple key's members for a spread column (`computedItemsOf`).
  * Returns the number of writes; nothing is transacted when nothing moved.
  */
 export function reconcileComputed(
   gd: GedeDoc,
   tableId: Id,
   result: readonly string[],
+  members: ReadonlyMap<string, readonly string[]> = new Map(),
   origin: unknown = COMPUTED_ORIGIN,
 ): number {
   const table = gd.tables.get(tableId);
@@ -167,63 +184,52 @@ export function reconcileComputed(
     const keys = dedupe(result);
     const wanted = keys.map((key) => computedRowId(tableId, key));
     const wantedSet = new Set(wanted);
-    const computedIds = new Set(computed.map((c) => c.id));
-    const others = record.columns.filter((c) => !computedIds.has(c.id));
+    // Only what a person typed holds a lost row (SET-12): a pulled or linked value does not.
+    const entered = record.columns.filter((c) => c.source === 'entered');
     const metas = rowMetaMap(table);
     const cells = cellsMap(table);
     const editor = new RowEditor(rowsArray(table));
-    const isLost = (id: Id): boolean =>
-      !wantedSet.has(id) && rowMeta(table, id).computedKey !== null;
-    const typed = (id: Id): boolean => others.some((c) => cellText(table, id, c.id) !== '');
+    const keyOf = (id: Id): string | null => rowMeta(table, id).computedKey;
+    const isLost = (id: Id): boolean => !wantedSet.has(id) && keyOf(id) !== null;
+    const typed = (id: Id): boolean => entered.some((c) => cellText(table, id, c.id) !== '');
 
     editor.dedupe();
+    // A removed row keeps its meta (its key): a note typed on it concurrently, or redone
+    // after it went, brings the row back as lost on every replica alike (same id, SET-12).
+    // ponytail: one small meta per key that ever left; compact on snapshot if it matters.
+    for (const [id, meta] of metas) {
+      if (typeof meta.get('computedKey') === 'string' && !editor.has(id) && typed(id)) {
+        editor.insertAt(editor.ids.length, id);
+      }
+    }
     // A key that left: gone without a trace unless the row holds something typed (SET-12).
     for (const id of editor.remove((id) => isLost(id) && !typed(id))) {
-      metas.delete(id);
+      metas.get(id)?.delete('lostFrom');
       for (const c of record.columns) cells.delete(cellKey(id, c.id));
       writes += 1;
     }
+    const lost: [Id, string][] = [];
     for (const id of editor.ids) {
       if (!isLost(id)) continue;
+      lost.push([id, keyOf(id) ?? '']);
       const meta = rowMetaFor(table, id);
       if (meta.get('lostFrom') !== driver.id) {
         meta.set('lostFrom', driver.id);
         writes += 1;
       }
     }
-    // Missing rows behind the previous wanted row; the first before the first one present.
-    wanted.forEach((id, i) => {
-      if (editor.has(id)) return;
-      const previous = i > 0 ? editor.indexOf(wanted[i - 1] ?? '') : -1;
-      if (previous >= 0) {
-        editor.insertAt(previous + 1, id);
-        return;
-      }
-      const next = wanted.find((w) => editor.has(w));
-      editor.insertAt(next === undefined ? editor.ids.length : editor.indexOf(next), id);
-    });
     // Result order among the computed rows; lost and hand-added rows keep their places.
-    // ponytail: orderMembers is O(n²) on a full reversal; fine under the 10,000-row cap.
-    orderMembers(editor, wanted);
+    editor.arrange(wanted);
     writes += editor.writes;
 
-    keys.forEach((key, i) => {
-      const id = wanted[i] ?? '';
-      const meta = rowMetaFor(table, id);
-      if (meta.get('computedKey') !== key) {
-        meta.set('computedKey', key);
-        writes += 1;
-      }
-      if (meta.has('lostFrom')) {
-        meta.delete('lostFrom');
-        writes += 1;
-      }
-      const members = driver.computed.shape === 'spread' ? tupleMembers(key) : [];
+    /** The computed cells of row `id` read `key` (a lost row keeps showing its key). */
+    const fill = (id: Id, key: string): void => {
+      const parts = members.get(key) ?? tupleMembers(key);
       for (const column of computed) {
         if (column.computed.formula !== driver.computed.formula) continue;
         const text =
           column.computed.shape === 'spread'
-            ? (members[column.computed.spreadIndex ?? 0] ?? '')
+            ? (parts[column.computed.spreadIndex ?? 0] ?? '')
             : key;
         const cell = cellKey(id, column.id);
         const content = cells.get(cell);
@@ -236,7 +242,21 @@ export function reconcileComputed(
           writes += 1;
         }
       }
+    };
+    keys.forEach((key, i) => {
+      const id = wanted[i] ?? '';
+      const meta = rowMetaFor(table, id);
+      if (meta.get('computedKey') !== key) {
+        meta.set('computedKey', key);
+        writes += 1;
+      }
+      if (meta.has('lostFrom')) {
+        meta.delete('lostFrom');
+        writes += 1;
+      }
+      fill(id, key);
     });
+    for (const [id, key] of lost) fill(id, key);
   }, origin);
   return writes;
 }

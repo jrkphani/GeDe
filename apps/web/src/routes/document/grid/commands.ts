@@ -103,6 +103,8 @@ import {
 
 import type { CellSelection, GridEvent, GridState } from '../../../doc/selection.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
+import { translate } from '../../../i18n/index.js';
+import { activeLocale } from '../../../locale.js';
 import { columnDisplayName } from './column-name.js';
 import { isFormulaInput } from '../formula/input.js';
 
@@ -380,7 +382,7 @@ export function readOnlyLabel(reason: ReadOnlyReason): string {
     case 'splitChild':
       return 'split child row';
     case 'computed':
-      return 'the column is computed';
+      return translate(activeLocale(), 'set.readOnly.computed');
   }
 }
 

@@ -5,7 +5,9 @@ import {
   addRow,
   cellReadOnlyReason,
   cellText,
+  columnsArray,
   createSheet,
+  createUndoManager,
   createTable,
   openDocument,
   rowMeta,
@@ -17,6 +19,7 @@ import {
 import { FormulaEngine } from '../engine/engine.js';
 import { observeWorkbook } from '../engine/snapshot.js';
 import type { CellResult } from '../engine/types.js';
+import { cross } from '../formula/sets.js';
 import { isId, type Id } from '../ids.js';
 import {
   computedItemsOf,
@@ -24,6 +27,7 @@ import {
   computedRowId,
   reconcileComputed,
   setComputedColumn,
+  tupleMembers,
 } from './computed.js';
 
 function harness() {
@@ -48,6 +52,15 @@ function computedTable(gd: GedeDoc, sheetId: Id, formula: string) {
   if (range === undefined || notes === undefined) throw new Error('shape');
   expect(setComputedColumn(gd, tableId, range.id, { formula, shape: 'column' })).toBe(true);
   return { tableId, range: range.id, notes: notes.id };
+}
+
+/** Every computed table's current result, handed to the reconciler; returns the writes. */
+function handOff(gd: GedeDoc, results: ReadonlyMap<string, CellResult>): number {
+  let writes = 0;
+  for (const h of computedItemsOf(gd, (id) => results.get(id))) {
+    writes += reconcileComputed(gd, h.tableId, h.items, h.members);
+  }
+  return writes;
 }
 
 function rowsOf(gd: GedeDoc, tableId: Id): readonly Id[] {
@@ -218,10 +231,11 @@ describe('SET-08 engine hand-off', () => {
     const { gd, sheetId, results } = harness();
     const { tableId, range } = computedTable(gd, sheetId, '=Cross("a, b", "x, y")');
     const handOff = computedItemsOf(gd, (id) => results.get(id));
-    expect(handOff).toEqual([
+    expect(handOff).toMatchObject([
       { tableId, columnId: range, items: ['(a, x)', '(a, y)', '(b, x)', '(b, y)'] },
     ]);
-    for (const h of handOff) reconcileComputed(gd, h.tableId, h.items);
+    expect(handOff[0]?.members.get('(b, y)')).toEqual(['b', 'y']);
+    for (const h of handOff) reconcileComputed(gd, h.tableId, h.items, h.members);
     expect(rowsOf(gd, tableId)).toHaveLength(4);
     // Writing the rows does not change the formula's result: the hand-off is stable.
     expect(computedItemsOf(gd, (id) => results.get(id))).toEqual(handOff);
@@ -257,5 +271,163 @@ describe('SET-12 lost label', () => {
     expect(computedOperandsLabel('=Comp(@E, @U)')).toBe('U ∖ E');
     expect(computedOperandsLabel('=Power(@E)')).toBe('𝒫(E)');
     expect(computedOperandsLabel('=Sum(A1')).toBe('Sum(A1');
+  });
+});
+
+describe('SET-08 red-team regressions', () => {
+  test('SET-08 a formula reading its own computed column reports circular and settles', () => {
+    const { gd, sheetId, results } = harness();
+    const { tableId, range } = computedTable(gd, sheetId, '=Union("a")');
+    reconcileComputed(gd, tableId, ['a', 'b']);
+    // The table sits at lattice column B; B:B is the computed column itself.
+    expect(
+      setComputedColumn(gd, tableId, range, { formula: '=Cross(B:B, "x")', shape: 'column' }),
+    ).toBe(true);
+    expect(handOff(gd, results)).toBe(0);
+    expect(rowsOf(gd, tableId)).toHaveLength(2);
+    const error = results.get(`${tableId}/00000000000000000000000000:${range}`)?.error;
+    expect(error).toMatchObject({ kind: 'circular' });
+  });
+
+  test('SET-08 a formula that grows its own column stops at the first pass that reads itself', () => {
+    const { gd, sheetId, results } = harness();
+    const { tableId } = computedTable(gd, sheetId, '=Union(B:B, "x")');
+    let passes = 0;
+    while (passes < 6 && handOff(gd, results) > 0) passes += 1;
+    expect(passes).toBeLessThan(6);
+    expect(rowsOf(gd, tableId)).toHaveLength(1);
+  });
+
+  test('SET-08 a source edit recomputes the rows', () => {
+    const { gd, sheetId, results } = harness();
+    const source = createTable(gd, { sheetId, at: { col: 5, row: 1 }, columns: 1, rows: 2 });
+    const src = tableById(gd, source);
+    const [s1 = '', s2 = ''] = src?.rows ?? [];
+    const srcCol = src?.columns[0]?.id ?? '';
+    setCellText(gd, source, s1, srcCol, 'a');
+    setCellText(gd, source, s2, srcCol, 'b');
+    const { tableId, range } = computedTable(gd, sheetId, '=Union(F:F, "")');
+    handOff(gd, results);
+    expect(rowsOf(gd, tableId).map((r) => textAt(gd, tableId, r, range))).toEqual(['a', 'b']);
+    setCellText(gd, source, s2, srcCol, 'c');
+    handOff(gd, results);
+    expect(rowsOf(gd, tableId).map((r) => textAt(gd, tableId, r, range))).toEqual(['a', 'c']);
+    expect(handOff(gd, results)).toBe(0);
+  });
+
+  test('SET-12 a note typed on one replica while the other drops its key survives the merge', () => {
+    const a = harness();
+    const { tableId, notes } = computedTable(a.gd, a.sheetId, '=Union("a, b")');
+    reconcileComputed(a.gd, tableId, ['a', 'b']);
+    const b = openDocument(new Y.Doc());
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc));
+    const idB = computedRowId(tableId, 'b');
+    setCellText(a.gd, tableId, idB, notes, 'keep me');
+    reconcileComputed(b, tableId, ['a']);
+    exchange(a.doc, b.doc);
+    for (let i = 0; i < 3; i += 1) {
+      reconcileComputed(a.gd, tableId, ['a']);
+      reconcileComputed(b, tableId, ['a']);
+      exchange(a.doc, b.doc);
+    }
+    expect(rowsOf(a.gd, tableId)).toEqual(rowsOf(b, tableId));
+    expect(rowsOf(a.gd, tableId)).toContain(idB);
+    expect(textAt(b, tableId, idB, notes)).toBe('keep me');
+    const table = tableMap(b, tableId);
+    if (table === null) throw new Error('no table');
+    expect(rowMeta(table, idB).computedKey).toBe('b');
+    expect(rowMeta(table, idB).lostFrom).not.toBeNull();
+    expect(reconcileComputed(a.gd, tableId, ['a'])).toBe(0);
+  });
+
+  test('SET-12 undo then redo of a note on a lost row brings the note back on a visible row', () => {
+    const { gd, sheetId } = harness();
+    const { tableId, range, notes } = computedTable(gd, sheetId, '=Union("a, b")');
+    reconcileComputed(gd, tableId, ['a', 'b']);
+    const um = createUndoManager(gd, { captureTimeout: 0 });
+    const idB = computedRowId(tableId, 'b');
+    setCellText(gd, tableId, idB, notes, 'note');
+    reconcileComputed(gd, tableId, ['a']);
+    um.undo();
+    reconcileComputed(gd, tableId, ['a']);
+    expect(rowsOf(gd, tableId)).not.toContain(idB);
+    um.redo();
+    reconcileComputed(gd, tableId, ['a']);
+    expect(textAt(gd, tableId, idB, notes)).toBe('note');
+    expect(rowsOf(gd, tableId)).toContain(idB);
+    // The restored row shows its key again, as any lost row does.
+    expect(textAt(gd, tableId, idB, range)).toBe('b');
+  });
+
+  test('SET-12 a pulled value alone does not hold a lost row', () => {
+    const { gd, sheetId } = harness();
+    const { tableId, notes } = computedTable(gd, sheetId, '=Union("a, b")');
+    reconcileComputed(gd, tableId, ['a', 'b']);
+    const table = tableMap(gd, tableId);
+    if (table === null) throw new Error('no table');
+    gd.doc.transact(() => columnsArray(table).get(1).set('source', 'pulled'));
+    setCellText(gd, tableId, computedRowId(tableId, 'b'), notes, 'pulled text');
+    reconcileComputed(gd, tableId, ['a']);
+    expect(rowsOf(gd, tableId)).toEqual([computedRowId(tableId, 'a')]);
+  });
+
+  test('SET-09 10,000 rows (the cap) fill and fully reverse within a frame budget', () => {
+    const { gd, sheetId } = harness();
+    const { tableId } = computedTable(gd, sheetId, '=Union("a")');
+    const keys = Array.from({ length: 10_000 }, (_v, i) => `k${String(i)}`);
+    let t0 = performance.now();
+    reconcileComputed(gd, tableId, keys);
+    const fill = performance.now() - t0;
+    t0 = performance.now();
+    reconcileComputed(gd, tableId, [...keys].reverse());
+    const reverse = performance.now() - t0;
+    expect(rowsOf(gd, tableId)).toEqual([...keys].reverse().map((k) => computedRowId(tableId, k)));
+    expect(reconcileComputed(gd, tableId, [...keys].reverse())).toBe(0);
+    expect({ fill: fill < 2000, reverse: reverse < 2000 }).toEqual({ fill: true, reverse: true });
+  }, 60_000);
+
+  test('SET-09 a reorder moves only the rows out of order', () => {
+    const { gd, sheetId } = harness();
+    const { tableId } = computedTable(gd, sheetId, '=Union("a")');
+    reconcileComputed(gd, tableId, ['a', 'b', 'c', 'd', 'e']);
+    const hand = addRow(gd, tableId, computedRowId(tableId, 'c'));
+    // One row moves (a delete and an insert); the hand-added row keeps its place after c.
+    expect(reconcileComputed(gd, tableId, ['a', 'c', 'd', 'b', 'e'])).toBe(2);
+    expect(rowsOf(gd, tableId)).toEqual([
+      ...['a', 'c'].map((k) => computedRowId(tableId, k)),
+      hand,
+      ...['d', 'b', 'e'].map((k) => computedRowId(tableId, k)),
+    ]);
+  });
+
+  test('SET-09 spread shape splits a tuple whose member holds an unbalanced paren', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
+    const cols = tableById(gd, tableId)?.columns.map((c) => c.id) ?? [];
+    const formula = '=Cross("sad :(", "x")';
+    cols.forEach((colId, spreadIndex) => {
+      setComputedColumn(gd, tableId, colId, { formula, shape: 'spread', spreadIndex });
+    });
+    handOff(gd, results);
+    const [row = ''] = rowsOf(gd, tableId);
+    expect(cols.map((c) => textAt(gd, tableId, row, c))).toEqual(['sad :(', 'x']);
+    // The rendering alone cannot be split back; that is why Cross carries its members.
+    const [tuple = ''] = cross([['sad :('], ['x']]);
+    expect(tupleMembers(tuple)).toEqual(['sad :(, x']);
+  });
+
+  test('SET-08 a second column given a different formula is refused', () => {
+    const { gd, sheetId, results } = harness();
+    const { tableId, range, notes } = computedTable(gd, sheetId, '=Union("a", "b")');
+    expect(
+      setComputedColumn(gd, tableId, notes, { formula: '=Union("x", "y")', shape: 'column' }),
+    ).toBe(false);
+    expect(tableById(gd, tableId)?.columns[1]?.source).toBe('entered');
+    // The same formula, spread, and a new formula on the only computed column are accepted.
+    expect(
+      setComputedColumn(gd, tableId, range, { formula: '=Union("x", "y")', shape: 'column' }),
+    ).toBe(true);
+    handOff(gd, results);
+    expect(rowsOf(gd, tableId).map((r) => textAt(gd, tableId, r, range))).toEqual(['x', 'y']);
   });
 });

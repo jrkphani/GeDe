@@ -894,7 +894,8 @@ export const TableView = memo(function TableView({
                           'gd-table__row--lit': litRows.has(rowId),
                           'gd-table__row--banded': rowInBand,
                           // SET-12: a row whose element left the result, kept for its typed values.
-                          'gd-table__row--lost': rowMetaOf.lostFrom !== null,
+                          // Dimmed only while the column that says so in words is computed and shown.
+                          'gd-table__row--lost': lostLabelShown(record.columns, rowMetaOf.lostFrom),
                         })}
                         role="row"
                         data-lit={litRows.has(rowId) || undefined}
@@ -2067,3 +2068,17 @@ const Cell = memo(function Cell({
     </div>
   );
 }, cellPropsEqual);
+
+/**
+ * SET-12: whether a lost row's words are on screen — the column it left from
+ * is still computed and not hidden. The row is dimmed only then, so the state
+ * is never carried by its appearance alone (non-negotiable 2).
+ */
+function lostLabelShown(
+  columns: readonly Pick<ColumnRecord, 'id' | 'computed' | 'hidden'>[],
+  lostFrom: Id | null,
+): boolean {
+  return (
+    lostFrom !== null && columns.some((c) => c.id === lostFrom && c.computed !== null && !c.hidden)
+  );
+}

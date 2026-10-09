@@ -14,11 +14,12 @@ import type { BoundReference } from './bound.js';
 import { applyMethod } from './methods.js';
 import {
   complement,
-  cross,
   crossCardinality,
+  crossTuples,
   power,
   powerCardinality,
   dedupe,
+  renderTuple,
   unenclosableElement,
   difference,
   intersection,
@@ -31,7 +32,13 @@ import { richFromText, type RichDoc } from '../text/types.js';
 
 export type CellValue =
   /** `rich` carries the cell's marks when it has any, so `Extract(Style=…)` can read them. */
-  | { readonly kind: 'text'; readonly text: string; readonly rich?: RichDoc | undefined }
+  | {
+      readonly kind: 'text';
+      readonly text: string;
+      readonly rich?: RichDoc | undefined;
+      /** A `Cross` tuple's members (SET-09), so a spread column never re-splits `text`. */
+      readonly members?: readonly string[] | undefined;
+    }
   /**
    * `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not
    * `String(value)`. Under an explicit format it is the rendering for the
@@ -350,8 +357,14 @@ class Evaluator {
         // Refused from the operand sizes, before a tuple is allocated (ADR-053).
         const count = crossCardinality(sets);
         if (count > MAX_CROSS_TUPLES) fail({ kind: 'too-many-tuples', count });
-        elements = cross(sets);
-        break;
+        return {
+          kind: 'list',
+          items: crossTuples(sets).map((members) => ({
+            kind: 'text',
+            text: renderTuple(members),
+            members,
+          })),
+        };
       }
       case 'Power': {
         // Refused from the operand size, before a subset is allocated (FX-10).

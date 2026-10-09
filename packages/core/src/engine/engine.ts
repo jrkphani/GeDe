@@ -35,6 +35,7 @@ import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { cellMayRelabel } from './entities.js';
 import { cellsInColumnOn, entityKey, positionKey, type SheetIndex } from './sheet-index.js';
 import {
+  COMPUTED_FORMULA_ROW,
   computedFormulaKey,
   workbookCellId,
   type CellError,
@@ -754,7 +755,7 @@ export class FormulaEngine {
         kind: 'parse',
         error: formula.parseError ?? { message: 'invalid formula', span: { start: 0, end: 0 } },
       };
-    } else if (blocked.has(id) || cycleMembers.has(id)) {
+    } else if (blocked.has(id) || cycleMembers.has(id) || this.readsOwnRows(cell)) {
       error = { kind: 'circular' };
     } else {
       const sheetId = this.tables.get(cell.tableId)?.structure.sheetId ?? '';
@@ -785,6 +786,33 @@ export class FormulaEngine {
     this.results.set(id, result);
     changed.push(result);
   }
+
+  /**
+   * SET-08: a computed column's formula that reads, through any chain, a cell
+   * a computed reconcile writes — its own table's or one whose formula leads
+   * back to it — would rewrite its rows on every pass and never settle. The
+   * graph cannot see that edge (the reconciler writes on the main thread), so
+   * a computed column's cells count here as reading their table's formula.
+   */
+  private readsOwnRows(cell: CellState): boolean {
+    if (splitCellKey(cell.key).rowId !== COMPUTED_FORMULA_ROW) return false;
+    const seen = new Set<string>();
+    const stack = [...this.graph.dependenciesOf(cell.id)];
+    for (let dep = stack.pop(); dep !== undefined; dep = stack.pop()) {
+      if (dep === cell.id) return true;
+      if (seen.has(dep)) continue;
+      seen.add(dep);
+      for (const next of this.graph.dependenciesOf(dep)) stack.push(next);
+      const read = this.cells.get(dep);
+      if (read === undefined) continue;
+      const { colId } = splitCellKey(read.key);
+      const column = this.tables.get(read.tableId)?.structure.columns.find((c) => c.id === colId);
+      if (column?.computed !== undefined) {
+        stack.push(workbookCellId(read.tableId, computedFormulaKey(colId)));
+      }
+    }
+    return false;
+  }
 }
 
 function unchanged(
@@ -807,7 +835,11 @@ function sameValue(a: CellValue | null, b: CellValue | null): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case 'text':
-      return b.kind === 'text' && a.text === b.text;
+      return (
+        b.kind === 'text' &&
+        a.text === b.text &&
+        (a.members ?? []).join('\u0000') === (b.members ?? []).join('\u0000')
+      );
     case 'number':
       return b.kind === 'number' && a.value === b.value && a.text === b.text;
     case 'currency':

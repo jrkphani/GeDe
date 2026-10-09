@@ -103,13 +103,26 @@ export function crossCardinality(sets: readonly (readonly string[])[]): number {
  * caller checks `crossCardinality` against `MAX_CROSS_TUPLES` first.
  */
 export function cross(sets: readonly (readonly string[])[]): string[] {
+  return crossTuples(sets).map(renderTuple);
+}
+
+/**
+ * `cross` before rendering: each tuple's members as an array. A spread
+ * computed column (SET-09) writes these, since the rendering cannot always be
+ * split back — `(sad :(, x)` reads as one member to a bracket-depth splitter.
+ */
+export function crossTuples(sets: readonly (readonly string[])[]): string[][] {
   let tuples: string[][] = [[]];
   for (const set of sets) {
     const next: string[][] = [];
     for (const tuple of tuples) for (const e of dedupe(set)) next.push([...tuple, e]);
     tuples = next;
   }
-  return tuples.map((t) => `(${t.join(', ')})`);
+  return tuples;
+}
+
+export function renderTuple(members: readonly string[]): string {
+  return `(${members.join(', ')})`;
 }
 
 /**

@@ -208,7 +208,7 @@ describe('set operators (FX-09)', () => {
   });
 
   test('FX-09 Cross: A × B = {(1, 2), (1, 3), (2, 2), (2, 3)} in a-major order', () => {
-    expect(run('=Cross(A1, B1)', sets())).toEqual({
+    expect(run('=Cross(A1, B1)', sets())).toMatchObject({
       ok: true,
       value: set('(1, 2)', '(1, 3)', '(2, 2)', '(2, 3)'),
     });

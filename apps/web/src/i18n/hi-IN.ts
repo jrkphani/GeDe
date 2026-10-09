@@ -119,4 +119,5 @@ export const messages: Messages = {
   'forms.power.hint': 'a का हर उपसमुच्चय',
 
   'set.lost': 'अब {sets} में नहीं',
+  'set.readOnly.computed': 'यह स्तंभ परिकलित है',
 };

@@ -8,3 +8,4 @@ package-lock.json
 docs/REQUIREMENTS.md
 docs/*-DIGEST.md
 packages/mail/src/__snapshots__
+.claude

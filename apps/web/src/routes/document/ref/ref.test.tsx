@@ -471,7 +471,7 @@ describe('HIER-07 Split children', () => {
 });
 
 describe('SET-08 computed columns', () => {
-  it('SET-08 SET-12 computed rows render read-only; a lost row with a note stays dimmed and says what it left', async () => {
+  it('SET-08 SET-12 computed rows render read-only; a lost row with a note stays dimmed and says what it left, and is not dimmed once its computed column is deleted', async () => {
     const sets = createTable(gd, {
       sheetId: sheet,
       at: { col: 1, row: 12 },
@@ -511,5 +511,15 @@ describe('SET-08 computed columns', () => {
       expect(within(row as HTMLElement).getByText('keep me')).toBeInTheDocument();
     });
     expect(tableById(gd, sets)!.rows).toHaveLength(3);
+    // Once the column that says so in words is gone, the row is no longer dimmed either.
+    act(() => {
+      deleteColumn(gd, sets, range!.id);
+    });
+    await waitFor(() => {
+      const row = gridOf('Sets').querySelector(`[data-row-id="${b!}"][role="row"]`)!;
+      expect(row).not.toHaveClass('gd-table__row--lost');
+      expect(within(row as HTMLElement).queryByText(/no longer in/u)).toBeNull();
+      expect(within(row as HTMLElement).getByText('keep me')).toBeInTheDocument();
+    });
   });
 });

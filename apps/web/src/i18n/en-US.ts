@@ -154,4 +154,6 @@ export const messages = {
   // SET-12: beside a computed row whose element left the result; `{sets}` is the formula's
   // operands as `computedOperandsLabel` reads them ("E × C").
   'set.lost': 'no longer in {sets}',
+  // SET-08: the read-only reason of a computed column's cells.
+  'set.readOnly.computed': 'the column is computed',
 } as const;
