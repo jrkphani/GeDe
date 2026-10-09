@@ -19,6 +19,7 @@ import {
   power,
   powerCardinality,
   dedupe,
+  unenclosableElement,
   difference,
   intersection,
   MAX_CROSS_TUPLES,
@@ -96,8 +97,12 @@ export type FormulaError =
     }
   /** `⚠ too many tuples` — a Cross product past `MAX_CROSS_TUPLES`, refused before it is built (FX-09). */
   | { readonly kind: 'too-many-tuples'; readonly count: number }
-  /** `⚠ too many subsets` — a Power set past `MAX_CROSS_TUPLES` (more than 13 elements), refused before it is built (FX-10). */
-  | { readonly kind: 'too-many-subsets'; readonly count: number };
+  /**
+   * `⚠ too many subsets` — a Power set past `MAX_CROSS_TUPLES` (more than 13
+   * elements), refused before it is built (FX-10). Carries the element count:
+   * 2^n overflows to Infinity past 1,023 elements.
+   */
+  | { readonly kind: 'too-many-subsets'; readonly elements: number };
 
 /** How the evaluator reads the workbook. Implemented over the Yjs document by the app. */
 export interface Resolver {
@@ -350,8 +355,16 @@ class Evaluator {
       }
       case 'Power': {
         // Refused from the operand size, before a subset is allocated (FX-10).
-        const count = powerCardinality(a);
-        if (count > MAX_CROSS_TUPLES) fail({ kind: 'too-many-subsets', count });
+        if (powerCardinality(a) > MAX_CROSS_TUPLES) {
+          fail({ kind: 'too-many-subsets', elements: dedupe(a).length });
+        }
+        const unenclosable = unenclosableElement(a);
+        if (unenclosable !== undefined) {
+          fail({
+            kind: 'invalid-argument',
+            message: `Power cannot put “${unenclosable}” in a subset: an element needs paired brackets and no separator outside them`,
+          });
+        }
         elements = power(a);
         break;
       }

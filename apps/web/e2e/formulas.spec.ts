@@ -284,7 +284,7 @@ test.describe('formulas', () => {
     await expect.poll(() => JSON.stringify(room.doc.getMap('tables').toJSON())).toMatch(/\{e:/);
   });
 
-  test('FX-09 FX-10 FX-06 A11Y-04 the set operators over the strings in cells: Union, Inter, Diff, Comp and Cross from the forms menu and typed verbatim; a source edit updates the result; the Worker evaluates', async ({
+  test('FX-09 FX-10 FX-06 A11Y-04 the set operators over the strings in cells: Union, Inter, Diff, Comp, Cross and Power from the forms menu and typed verbatim; a source edit updates the result; the Worker evaluates', async ({
     page,
     checkA11y,
   }) => {
@@ -354,6 +354,19 @@ test.describe('formulas', () => {
     await expect(valueOf('E5')).toHaveText('1, 2, 5, 3');
     await expect(valueOf('E7')).toHaveText('1, 5');
     await expect(valueOf('E9')).toHaveText('(1, 2), (1, 3), (2, 2), (2, 3), (5, 2), (5, 3)');
+
+    // FX-10: Power through the Worker — every subset, the empty set first; past 13 elements it is refused.
+    await enter(page, 'E8', '=Power(C5)');
+    await expect(valueOf('E8')).toHaveText('∅, {2}, {3}, {2, 3}');
+    await enter(page, 'E8', '=Power("a, b, c, d, e, f, g, h, i, j, k, l, m, n")');
+    await expect(page.locator('[data-address="E8"] .gd-formula__error-text')).toHaveText(
+      'too many subsets',
+    );
+    await expect(
+      page.locator('[data-address="E8"]').getByRole('img', {
+        name: /^Power over 14 elements would make more than 10,000 subsets/,
+      }),
+    ).toBeVisible();
 
     // A11Y-04: wrong arity is an error with icon and text, never hue alone.
     await enter(page, 'E6', '=Comp(B5)');

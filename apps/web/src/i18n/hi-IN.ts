@@ -115,4 +115,6 @@ export const messages: Messages = {
   'auth.code.sent.eight': 'हमने आपके ईमेल पर आठ अंकों का कोड भेजा है',
   'auth.code.expires.signIn': 'कोड 10 मिनट में समाप्त हो जाते हैं',
   'auth.code.expires.signUp': 'कोड 24 घंटे में समाप्त हो जाते हैं',
+
+  'forms.power.hint': 'a का हर उपसमुच्चय',
 };

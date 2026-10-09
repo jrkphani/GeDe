@@ -11,6 +11,7 @@ import {
   power,
   powerCardinality,
   splitSetElements,
+  unenclosableElement,
   union,
 } from './sets.js';
 
@@ -188,6 +189,32 @@ describe('power set (FX-10)', () => {
         expect(union([p, p])).toEqual(p);
       }),
       { numRuns: 200 },
+    );
+  });
+
+  test('FX-10 an element with unpaired brackets or a separator outside them cannot sit in a subset', () => {
+    expect(unenclosableElement(splitSetElements('a}, b'))).toBe('a}');
+    expect(unenclosableElement(splitSetElements('y, (x'))).toBe('(x');
+    expect(unenclosableElement(['x, y', 'x', 'y'])).toBe('x, y');
+    expect(unenclosableElement([')('])).toBe(')(');
+    expect(unenclosableElement(['(a, b)', '{c; d}', '∅', 'e'])).toBeUndefined();
+    expect(unenclosableElement(power(['a', 'b']))).toBeUndefined();
+  });
+
+  // Brackets and separators included, so unpaired and nested pieces are drawn (red-team RT3).
+  const bracketed = fc
+    .array(fc.stringMatching(/^[a-z(){},]{1,3}$/), { maxLength: 5 })
+    .map((raw) => splitSetElements(raw.join(', ')));
+
+  test('FX-10 property: over any enclosable set, the result re-splits to itself with 2^|A| distinct subsets', () => {
+    fc.assert(
+      fc.property(bracketed, (a) => {
+        fc.pre(unenclosableElement(a) === undefined);
+        const p = power(a);
+        expect(splitSetElements(p.join(', '))).toEqual(p);
+        expect(new Set(p).size).toBe(2 ** a.length);
+      }),
+      { numRuns: 500 },
     );
   });
 });

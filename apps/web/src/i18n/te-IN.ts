@@ -116,4 +116,6 @@ export const messages: Messages = {
   'auth.code.sent.eight': 'మీ ఇమెయిల్‌కు ఎనిమిది అంకెల కోడ్ పంపాము',
   'auth.code.expires.signIn': 'కోడ్‌లు 10 నిమిషాల్లో గడువు ముగుస్తాయి',
   'auth.code.expires.signUp': 'కోడ్‌లు 24 గంటల్లో గడువు ముగుస్తాయి',
+
+  'forms.power.hint': 'a యొక్క ప్రతి ఉపసమితి',
 };

@@ -151,7 +151,7 @@ export function displayOf(
   const error =
     result.error === null
       ? null
-      : { label: cellErrorLabel(result.error), message: cellErrorMessage(result.error) };
+      : { label: cellErrorLabel(result.error), message: cellErrorMessage(result.error, locale) };
   const rendered =
     result.value === null || error !== null
       ? { text: '', align: 'left' as const }

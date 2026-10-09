@@ -120,4 +120,6 @@ export const messages: Messages = {
   'auth.code.sent.eight': 'உங்கள் மின்னஞ்சலுக்கு எட்டு இலக்கக் குறியீட்டை அனுப்பியுள்ளோம்',
   'auth.code.expires.signIn': 'குறியீடுகள் 10 நிமிடங்களில் காலாவதியாகும்',
   'auth.code.expires.signUp': 'குறியீடுகள் 24 மணி நேரத்தில் காலாவதியாகும்',
+
+  'forms.power.hint': 'a-இன் ஒவ்வொரு உட்கணமும்',
 };

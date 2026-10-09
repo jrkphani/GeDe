@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { formatNumber } from '../../../intl.js';
+import { useMessages, type Translate } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 import {
   cellKey,
@@ -113,10 +114,9 @@ const SET_FORMS: readonly FormOption[] = [
     insert: '=Comp(',
   },
   { id: 'cross', label: 'Cross(a, b, …)', hint: 'every ordered pair (a, b)', insert: '=Cross(' },
-  { id: 'power', label: 'Power(a)', hint: 'every subset of a', insert: '=Power(' },
 ];
 
-function forms(summable: boolean): FormOption[] {
+function forms(summable: boolean, t: Translate): FormOption[] {
   return [
     { id: 'concat', label: 'Concat(a, b, …)', hint: 'joins values end to end', insert: '=Concat(' },
     {
@@ -127,6 +127,7 @@ function forms(summable: boolean): FormOption[] {
       disabledReason: summable ? undefined : SUM_DISABLED,
     },
     ...SET_FORMS,
+    { id: 'power', label: 'Power(a)', hint: t('forms.power.hint'), insert: '=Power(' },
     {
       id: 'entity',
       label: '@Group.Entity',
@@ -166,7 +167,8 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   const showEntities =
     entityQuery !== null && dismissed !== text && (isFormulaInput(text) || isReferenceDraft(text));
 
-  const formOptions = useMemo(() => forms(summable), [summable]);
+  const t = useMessages();
+  const formOptions = useMemo(() => forms(summable, t), [summable, t]);
   const tableId = table === null ? null : readString(table, 'id');
   // ADR-054: the cell being edited is never offered — its draft is in the document live.
   const self =

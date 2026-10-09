@@ -4,6 +4,7 @@
  * tooltip and the live-region announcement.
  */
 import { arityText, errorLabel } from '../formula/evaluate.js';
+import { MAX_CROSS_TUPLES } from '../formula/sets.js';
 import type { CellError } from './types.js';
 
 export function cellErrorLabel(error: CellError): string {
@@ -11,7 +12,9 @@ export function cellErrorLabel(error: CellError): string {
   return errorLabel(error);
 }
 
-export function cellErrorMessage(error: CellError): string {
+/** `locale` is the active BCP 47 tag; counts go through Intl for it. */
+export function cellErrorMessage(error: CellError, locale?: string): string {
+  const count = (n: number): string => new Intl.NumberFormat(locale).format(n);
   switch (error.kind) {
     case 'parse':
       return error.error.message;
@@ -32,8 +35,8 @@ export function cellErrorMessage(error: CellError): string {
         ? 'Comp takes exactly 2 arguments: the set, then its universe'
         : `${error.name} takes ${arityText(error.arity)}`;
     case 'too-many-tuples':
-      return `Cross would make ${String(error.count)} tuples; narrow the sets`;
+      return `Cross would make ${count(error.count)} tuples; narrow the sets`;
     case 'too-many-subsets':
-      return `Power would make ${String(error.count)} subsets; a set of at most 13 elements fits`;
+      return `Power over ${count(error.elements)} elements would make more than ${count(MAX_CROSS_TUPLES)} subsets; a set of at most 13 elements fits`;
   }
 }

@@ -147,4 +147,7 @@ export const messages = {
   'auth.code.sent.eight': 'We sent an eight-digit code to your email',
   'auth.code.expires.signIn': 'Codes expire in 10 minutes',
   'auth.code.expires.signUp': 'Codes expire in 24 hours',
+
+  // FX-10: the forms-menu hint beside Power(a); `a` is the typed argument name.
+  'forms.power.hint': 'every subset of a',
 } as const;
