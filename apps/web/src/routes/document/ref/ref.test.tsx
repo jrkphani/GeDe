@@ -659,4 +659,43 @@ describe('SET-08 computed columns', () => {
       resetLocaleForTests();
     }
   });
+
+  it('SET-12 a note merged onto a removed row brings it back on the remote update, with no result to wait for', async () => {
+    const sets = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      columns: 2,
+      rows: 0,
+      title: 'Sets',
+    });
+    const [range, note] = tableById(gd, sets)!.columns;
+    render(<Mount gd={gd} tableId={sets} />);
+    act(() => {
+      setTableFormula(gd, sets, '=Union("a", "b")');
+      setComputedColumn(gd, sets, range!.id, { shape: 'column' });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(2);
+    });
+    const [, b] = tableById(gd, sets)!.rows;
+    // A peer, still seeing b, types a note on it while b leaves here.
+    const peer = openDocument(new Y.Doc());
+    Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+    act(() => {
+      setTableFormula(gd, sets, '=Union("a", "")');
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).not.toContain(b);
+    });
+    setCellText(peer, sets, b!, note!.id, 'remote note');
+    act(() => {
+      Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+    });
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toContain(b);
+      expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range!.id);
+    });
+  });
 });

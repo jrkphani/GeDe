@@ -368,6 +368,17 @@ function settled(commands: GridCommands, settle: (() => void) | undefined): Grid
   return out as unknown as GridCommands;
 }
 
+/**
+ * Why a row cannot be deleted, or undefined (ADR-056 ruling c): a computed row is the
+ * formula's; changing the formula is how it goes. Inline English, as every menu reason is.
+ */
+export function rowDeleteReason(gd: GedeDoc, tableId: Id, rowId: Id): string | undefined {
+  const table = tableMap(gd, tableId);
+  return table !== null && rowMeta(table, rowId).computedKey !== null
+    ? 'the row is computed'
+    : undefined;
+}
+
 /** Sentence for a read-only reason (A11Y-04: the reason is text, not a tint). */
 export function readOnlyLabel(reason: ReadOnlyReason): string {
   return translate(

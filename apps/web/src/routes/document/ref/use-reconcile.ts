@@ -8,7 +8,9 @@
  * Pulls follow the document (`observePulls`). Split children follow the
  * engine: after every batch of results the pieces of each table's split
  * column are read off the results and materialised as rows. Values are never
- * computed here; the engine's Worker did that.
+ * computed here; the engine's Worker did that. Computed tables are also kept
+ * sound on every remote update (ADR-056 ruling d): a merge can refuse a Fill,
+ * return a removed noted row or leave a row twice with no result changing.
  */
 import { useEffect } from 'react';
 import type * as Y from 'yjs';
@@ -51,6 +53,12 @@ function install(doc: Y.Doc): () => void {
     if (column === undefined) return;
     announce(translate(activeLocale(), 'set.fillRefused', { column: column.label }));
   });
+  // SET-08: a computed table's formula, evaluated once in the Worker, fills its table's rows.
+  const fillComputed = (): void => {
+    for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
+      reconcileComputed(gd, tableId, items, members);
+    }
+  };
   let running = false;
   const run = (): void => {
     if (running) return;
@@ -59,10 +67,7 @@ function install(doc: Y.Doc): () => void {
       for (const [tableId, pieces] of splitPiecesOf(gd, (id) => host.result(id))) {
         reconcileSplitChildren(gd, tableId, pieces);
       }
-      // SET-08: a computed column's formula, evaluated once in the Worker, fills its table's rows.
-      for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
-        reconcileComputed(gd, tableId, items, members);
-      }
+      fillComputed();
       // Results moved: a filtered pull over engine-backed cells may admit different rows now.
       reconcileFilteredPulls(gd, { cellValue });
     } finally {
@@ -71,10 +76,24 @@ function install(doc: Y.Doc): () => void {
   };
   const stopResults = host.subscribeAll(run);
   run();
+  // Ruling (d): once per burst of remote updates, coalesced into one pass.
+  let queued = false;
+  let stopped = false;
+  const onUpdate = (_update: Uint8Array, _origin: unknown, _doc: Y.Doc, tr: Y.Transaction) => {
+    if (tr.local || queued) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      if (!stopped) fillComputed();
+    });
+  };
+  doc.on('update', onUpdate);
   return () => {
+    stopped = true;
     stopPulls();
     stopRefusals();
     stopResults();
+    doc.off('update', onUpdate);
   };
 }
 

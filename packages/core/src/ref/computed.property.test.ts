@@ -219,19 +219,6 @@ describe('SET-08 edge results', () => {
     for (let i = 0; i < 3; i += 1) handOff(a);
     expect(handOff(a)).toBe(0);
   });
-
-  test('SET-12 a person deleting a lost row removes it for good', () => {
-    const a = replica(1);
-    const { tableId, notes } = setUp(a);
-    const rowB = computedRowId(tableId, 'b');
-    setCellText(a.gd, tableId, rowB, notes, 'n');
-    setTableFormula(a.gd, tableId, '=Union("a", "")');
-    handOff(a);
-    expect(rowsOf(a.gd, tableId)).toContain(rowB);
-    deleteRow(a.gd, tableId, rowB);
-    for (let i = 0; i < 3; i += 1) handOff(a);
-    expect(rowsOf(a.gd, tableId)).not.toContain(rowB);
-  });
 });
 
 const POOL = ['a', 'b', 'c', 'க', 'कि', '(x, y)', '{p, q}', 'é'] as const;
@@ -393,14 +380,23 @@ describe('SET-08 SET-10 SET-12 a table with no result to fill from is still kept
     });
   }
 
-  test('SET-08 a deleted computed row, undone while another replica re-fills it, is not left twice under an erroring formula', () => {
+  test('SET-08 a computed row deleted by an older client, undone while another replica re-fills it, is not left twice under an erroring formula', () => {
     const a = replica(1);
     const { tableId } = setUp(a);
     const b = replica(2);
     send(a.doc, b.doc);
     const rowA = computedRowId(tableId, 'a');
     const undo = createUndoManager(a.gd, { captureTimeout: 0 });
-    deleteRow(a.gd, tableId, rowA);
+    // What deleteRow did before ADR-056 ruling (c), which now refuses a computed row.
+    expect(deleteRow(a.gd, tableId, rowA)).toBe(false);
+    const table = tableMap(a.gd, tableId);
+    const rows = table?.get('rows');
+    const metas = table?.get('rowMeta');
+    if (!(rows instanceof Y.Array) || !(metas instanceof Y.Map)) throw new Error('no table');
+    a.gd.doc.transact(() => {
+      rows.delete(rows.toArray().indexOf(rowA), 1);
+      metas.delete(rowA);
+    }, a.gd.origin);
     send(a.doc, b.doc);
     handOff(b); // B re-fills row a
     undo.undo(); // A brings row a back
@@ -453,7 +449,7 @@ describe('SET-08 SET-10 SET-12 a table with no result to fill from is still kept
     });
   }
 
-  test('SET-10 refusing a later spread column does not unfill an earlier, settled spread Fill', () => {
+  test('SET-09 SET-10 a spread grown by its formula keeps its settled rows; a neighbour typed concurrently stays entered', () => {
     const a = replica(1);
     const sheetId = createSheet(a.gd);
     const tableId = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 4, rows: 1 });
@@ -468,19 +464,24 @@ describe('SET-08 SET-10 SET-12 a table with no result to fill from is still kept
     const b = replica(2);
     send(a.doc, b.doc);
     setCellText(b.gd, tableId, hand, c2, 'typed');
+    // Ruling (b): the third set adds its member column after the spread's last one.
     setTableFormula(a.gd, tableId, '=Cross(Union("x", "y"), Union("1", "2"), Union("p", "q"))');
-    setComputedColumn(a.gd, tableId, c2, { shape: 'spread', spreadIndex: 2 });
     handOff(a);
     settle(a, b);
-    expect(tableById(a.gd, tableId)?.columns.map((c) => c.source)).toEqual([
-      'computed',
-      'computed',
-      'entered',
-      'entered',
-    ]);
-    // The settled Fill keeps its eight tuple rows, plus the hand-added row.
-    expect(rowsOf(a.gd, tableId)).toHaveLength(9);
-    expect(textAt(a.gd, tableId, hand, c2)).toBe('typed');
+    for (const r of [a, b]) {
+      const columns = tableById(r.gd, tableId)?.columns ?? [];
+      expect(columns.map((c) => c.source)).toEqual([
+        'computed',
+        'computed',
+        'computed',
+        'entered',
+        'entered',
+      ]);
+      expect(columns[3]?.id).toBe(c2);
+      // Eight tuple rows, plus the hand-added row.
+      expect(rowsOf(r.gd, tableId)).toHaveLength(9);
+      expect(textAt(r.gd, tableId, hand, c2)).toBe('typed');
+    }
   });
 
   test('SET-12 a noted row another replica removed comes back while the formula is refused', () => {

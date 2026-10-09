@@ -4,7 +4,7 @@ import { Button, Menu, type MenuEntry } from '@gede/ui';
 import type { CellSelection, Selection } from '../../../doc/selection.js';
 import { LABELS } from '../../../doc/shortcuts.js';
 import { useYVersion } from '../../../doc/use-y.js';
-import type { GridCommands } from './commands.js';
+import { rowDeleteReason, type GridCommands } from './commands.js';
 
 export interface TableMenuProps {
   gd: GedeDoc;
@@ -64,7 +64,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
       id: 'row-delete',
       label: 'Delete row',
       danger: true,
-      disabledReason: needsCell,
+      disabledReason: needsCell ?? rowDeleteReason(gd, tableId, rowId),
       onSelect: () => {
         commands.deleteRow(tableId, rowId);
       },

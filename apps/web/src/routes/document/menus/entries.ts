@@ -32,7 +32,7 @@ import { LABELS } from '../../../doc/shortcuts.js';
 import { activeLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GraphsActions } from '../graph/use-graphs.js';
-import { columnRenameReason, type GridCommands } from '../grid/commands.js';
+import { columnRenameReason, rowDeleteReason, type GridCommands } from '../grid/commands.js';
 import type { RenameTarget } from '../grid/rename.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { RENAME_KEYS, SHEET_KEYS } from '../keys/shortcut-map.js';
@@ -509,7 +509,9 @@ export function cellMenuEntries(
       label: 'Delete row',
       danger: true,
       disabledReason:
-        viewOnly ?? (record.rows.length <= 1 ? 'a table keeps at least one row' : undefined),
+        viewOnly ??
+        rowDeleteReason(gd, tableId, rowId) ??
+        (record.rows.length <= 1 ? 'a table keeps at least one row' : undefined),
       onSelect: () => {
         commands.deleteRow(tableId, rowId);
       },

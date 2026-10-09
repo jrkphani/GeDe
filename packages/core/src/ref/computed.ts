@@ -17,6 +17,8 @@
  * key that returns reclaims its row. A refused result (a capped Cross or
  * Power, an error, no formula) is handed off with no items: the table keeps its
  * rows, which are only kept sound (deduped, a removed typed row brought back).
+ * A computed row cannot be deleted by a person (`deleteRow` refuses it, ADR-056
+ * ruling c); changing the formula is how it goes.
  *
  * The reconciler writes rows only — ids, order, `computedKey`, `lostFrom` and,
  * where a key's text cannot be split back, its tuple members — never cell
@@ -29,7 +31,7 @@
  */
 import * as Y from 'yjs';
 
-import { rowMetaFor } from '../doc/mutations.js';
+import { addColumn, deleteColumn, rowMetaFor } from '../doc/mutations.js';
 import {
   cellsMap,
   cellText,
@@ -79,6 +81,15 @@ const FILLED = 'computedRows';
 /** Column key: set when a Fill column was refused after a merge (`observeRefusedFills`). */
 const REFUSED = 'fillRefused';
 
+/**
+ * Table key: every row id the reconciler has given a key, with that key. A row and its
+ * meta deleted by an older client while another replica re-inserted it leaves the row
+ * with no meta; this record gives it its key back so it is reconciled like any other.
+ * ponytail: one entry per key ever filled, dropped only when the table stops being
+ * computed; prune keys with no row and no meta on snapshot if documents grow.
+ */
+const KEYS = 'computedIds';
+
 /** The row a result key fills in a table: the same on every replica (SPEC §2.2). */
 export function computedRowId(tableId: Id, key: string): Id {
   return deterministicId(`${tableId}\u0000${key}`);
@@ -123,8 +134,61 @@ export function setTableFormula(gd: GedeDoc, tableId: Id, formula: string): bool
   if (table === undefined || !isSetFormula(formula)) return false;
   gd.doc.transact(() => {
     table.set('computedFormula', formula);
+    refitSpread(gd, tableId, table, spreadWidth(formula));
   }, gd.origin);
   return true;
+}
+
+/** The number of sets a top-level `Cross` multiplies, or null for any other formula. */
+function spreadWidth(formula: string | null): number | null {
+  if (formula === null) return null;
+  const parsed = parse(formula);
+  return parsed.ok && parsed.value.kind === 'call' && parsed.value.name === 'Cross'
+    ? parsed.value.args.length
+    : null;
+}
+
+/** A table's spread member columns, in column order. */
+function spreadColumns(table: TableMap): (ColumnRecord & { computed: ComputedSpec })[] {
+  return computedColumns(tableRecord(table).columns).filter((c) => c.computed.shape === 'spread');
+}
+
+/**
+ * SET-09 ruling (b): a spread table has one member column per set of its `Cross`. A
+ * member past the width, or a second column for the same member (two replicas growing
+ * the spread at once), goes; with `add`, a missing member is added after the last one,
+ * in the spread's Fill step. Typed neighbour columns are never touched. Returns writes.
+ */
+function refitSpread(
+  gd: GedeDoc,
+  tableId: Id,
+  table: TableMap,
+  width: number | null,
+  add = true,
+): number {
+  const spread = spreadColumns(table);
+  if (spread.length === 0 || width === null) return 0;
+  let writes = 0;
+  const kept = new Set<number>();
+  for (const c of spread) {
+    const index = c.computed.spreadIndex ?? 0;
+    if (index < width && !kept.has(index)) kept.add(index);
+    else writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+  }
+  if (!add) return writes;
+  const fill = spread[0]?.computed.fill ?? newId();
+  let after = spread.filter((c) => kept.has(c.computed.spreadIndex ?? 0)).at(-1)?.id;
+  for (let index = 0; index < width; index += 1) {
+    if (kept.has(index)) continue;
+    after = addColumn(gd, tableId, { label: `x${String(index + 1)}`, afterColId: after });
+    const map = columnsArray(table)
+      .toArray()
+      .find((c) => readString(c, 'id') === after);
+    map?.set('source', 'computed');
+    map?.set('computed', { shape: 'spread', spreadIndex: index, fill });
+    writes += 1;
+  }
+  return writes;
 }
 
 /**
@@ -179,7 +243,13 @@ export function setComputedColumns(
       return false;
     }
   }
-  const fill = newId();
+  // A spread is one unit, however many steps made it: a spread column joins the table's
+  // spread Fill, so a refusal after a merge reverts the whole spread (SET-09, SET-10).
+  const spreadFill = spreadColumns(table)[0]?.computed.fill;
+  const fill =
+    spreadFill !== undefined && columns.every(({ spec }) => spec.shape === 'spread')
+      ? spreadFill
+      : newId();
   gd.doc.transact(() => {
     for (const { map, spec } of targets) {
       if (map === undefined) continue;
@@ -240,6 +310,13 @@ export function computedItemsOf(
           break;
         }
       }
+      // A row the reconciler keyed, left with no meta by an older client's delete.
+      const keyed = table.get(KEYS);
+      if (!leftover && keyed instanceof Y.Map) {
+        leftover = [...keyed.keys()].some(
+          (id) => rows.has(id) && rowMeta(table, id).computedKey === null,
+        );
+      }
       if (leftover) out.push({ tableId, items: [], members: new Map() });
       return;
     }
@@ -285,6 +362,18 @@ export function reconcileComputed(
     const keyOf = (id: Id): string | null => rowMeta(table, id).computedKey;
     editor.dedupe();
 
+    // A row the reconciler keyed that has no key now lost its meta to an older client's
+    // delete merged with a re-insert (ADR-056 ruling c): it gets its key back, and is then
+    // kept, labelled or removed like any computed row.
+    const known = table.get(KEYS);
+    const keyed = known instanceof Y.Map ? (known as Y.Map<unknown>) : null;
+    for (const id of keyed === null ? [] : editor.ids) {
+      const key = keyed?.get(id);
+      if (typeof key !== 'string' || keyOf(id) !== null) continue;
+      rowMetaFor(table, id).set('computedKey', key);
+      writes += 1;
+    }
+
     // SET-10 after a merge: a column made computed while another replica typed into it is
     // refused here, as it would have been locally. Nothing computed is ever stored, so
     // anything stored under a computed column's key is a person's — on a removed row too,
@@ -318,6 +407,8 @@ export function reconcileComputed(
         writes += 1;
       }
     }
+    // SET-09 after a merge: two replicas re-fitting the spread at once leave a member twice.
+    writes += refitSpread(gd, tableId, table, spreadWidth(record.computedFormula), false);
     if (writes > 0) record = tableRecord(table);
     const [driver] = computedColumns(record.columns);
 
@@ -353,6 +444,11 @@ export function reconcileComputed(
               ? editor.indexOf(after) + 1
               : editor.ids.length;
         editor.insertAt(at, id);
+        // With no result to say otherwise, it is back because its key left: it says so.
+        if (driver !== undefined && result === null && meta.get('lostFrom') !== driver.id) {
+          meta.set('lostFrom', driver.id);
+          writes += 1;
+        }
       }
     }
 
@@ -369,6 +465,7 @@ export function reconcileComputed(
       for (const id of editor.ids) {
         const meta = metas.get(id);
         if (meta?.has('computedKey') !== true) continue;
+        keyed?.delete(id);
         meta.delete('computedKey');
         meta.delete('lostFrom');
         meta.delete(MEMBERS);
@@ -384,6 +481,11 @@ export function reconcileComputed(
     const isLost = (id: Id): boolean => !wantedSet.has(id) && keyOf(id) !== null;
     if (table.get(FILLED) !== true) {
       table.set(FILLED, true);
+      writes += 1;
+    }
+    const keysById = keyed ?? new Y.Map<unknown>();
+    if (keyed === null) {
+      table.set(KEYS, keysById);
       writes += 1;
     }
 
@@ -403,9 +505,14 @@ export function reconcileComputed(
     writes += editor.writes;
 
     keys.forEach((key, i) => {
-      const meta = rowMetaFor(table, wanted[i] ?? '');
+      const id = wanted[i] ?? '';
+      const meta = rowMetaFor(table, id);
       if (meta.get('computedKey') !== key) {
         meta.set('computedKey', key);
+        writes += 1;
+      }
+      if (keysById.get(id) !== key) {
+        keysById.set(id, key);
         writes += 1;
       }
       if (meta.has('lostFrom')) {
