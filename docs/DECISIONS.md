@@ -773,3 +773,25 @@ One overlap is accepted and recorded: the Table tab's row and column _count_ ste
 - **ONB-05, ONB-06 and ONB-14 are read as amended**; no new ONB row is added, the step's contract being ONB-05's.
 
 **Consequences.** `TourBaseline` gains `setCalls` and `setResults`; `TourSubstep` gains `pick-form` and `set-result`; `SET_STEP` is 3 and `GRAPH_STEP` 4 (`useTourGraphSubstep` and the shell's rail behaviour follow the constant). The catalogue gains seven keys in six locales (3b shares 3a's note). The e2e journey's helper `reachGraphStep` now commits the two set formulas; the live journey (replay and Skip at step 1) is unchanged. A person who finished the five-step tour before this change has the flag set and does not see the new step unless they Replay.
+
+## ADR-056 Sets are tables: a set table is a kind chosen at Add table, its range column is the set, computed tables fill rows from a set formula, and sections, summaries, a universal set and locks sit around them (owner-directed; adds SET-01..19 and FX-10; amends DOC-02, GRID-11 and MENU-03)
+
+**Status:** proposed, 2026-10-09 — design and requirements only (`docs/set-layer-requirements`); no code yet. The engine work is specified in `SPEC.md`.
+
+**Context.** The owner asked for GeDe to work with character strings as sets, following _Set Theory and the Structure of Arithmetic_ (Hamilton and Landin, §1.2–1.14): the first tables on a canvas are sets with their metadata, later tables are derived from them by set algebra, and every combination is reachable through Cartesian products. They supplied a component list: canvas tabs with guide lines, gutters and data sections; simple set, family of sets and section summary tables, each with a meta row, a title row and indexed element rows; a canvas summary, a universal set array and a super set array; lock and unlock. ADR-053 had already made set algebra a formula family over the text in one cell. A design canvas (GeDe Sets) drew the components and an overlap review set them against what ships; the owner ruled on every overlap on 2026-10-09.
+
+**Decision.**
+
+- **A set is a column.** In a set table the range column is the set, one element per row. FX-09’s comma cell stays a typed shorthand and a valid operand. The consequence is that a formula must be able to fill rows (SET-08), which nothing does today except the `Split()` and pull reconcilers.
+- **Kinds join Add table.** Add table asks the kind; Plain table is preselected. No separate derive-table command (DOC-02).
+- **Computed, not derived.** “Derived” already names a column extracted from a source (REF). A table or column filled by a set formula is “computed”, and its tag shows the formula.
+- **One route to a computed column:** the column menu’s Fill column with formula…. The Add table and inspector Derive tab alternatives were drawn and declined.
+- **Reuse what ships.** Nesting is HIER’s Nest and Promote; name and definition are the table title and caption (ADR-051); counts go in GRID-11’s footer count strip; a section is a named Pipeline lane on the lattice; a referenced set is an `@` reference (REF-01).
+- **Degree sign.** Row indices use U+00B0 (°), as the design-system digest’s degree code does, not the ordinal indicator U+00BA (º), which assistive technology reads as “o”.
+- **Lost elements stay.** A row whose element left a computed result but which holds a typed value stays, dimmed and labelled, until someone deletes it. Nothing typed is removed by a recompute.
+- **U is referenced, never implied.** `Comp` keeps two arguments; `@U` is the universe when someone writes it.
+- **Lock is section and sheet only**, and is neither View only nor Freeze.
+- **Power set is a formula** (FX-10) under the Cross cap.
+- **One verb per action** (SET-19), taken from shipped copy.
+
+**Consequences.** `docs/REQUIREMENTS.md` gains the SET area (19) and FX-10; the total is 193. Follow-ups filed with this ADR: the toolbar table menu’s “Insert row above” and “Insert column before” become “Add …” (SET-19); the `Cross(a, b, …)` forms-menu hint becomes “every ordered tuple (a, b, …)”; menu, inspector and toolbar strings move into `apps/web/src/i18n` so SET-19 can be checked by a test rather than by review. Open questions — how bound/free and the quantifier are read from a definition, whether a set defined only by a predicate may be infinite, and the cost of the section summary’s pairwise relations — are listed in `SPEC.md` and block the rows that need them, not the rest.

@@ -39,7 +39,7 @@ _The document chooser. Four views over one collection._
 ## DOC — Document shell and sheets (7)
 
 - **DOC-01** — Chrome: The GeDe mark returns to the library. The title row shows the document name, Shared with participant avatars, and — on phone — the read-only note.
-- **DOC-02** — Toolbar: Grouped tool clusters with tooltips: add table, row, column; pin and DAG edges; gridlines, filter, sort; zoom with fit; Format and Organize inspectors. A command must appear in exactly one place.
+- **DOC-02** — Toolbar: Grouped tool clusters with tooltips: add table, row, column; pin and DAG edges; gridlines, filter, sort; zoom with fit; Format and Organize inspectors. A command must appear in exactly one place. _Amended by ADR-056: Add table asks the table’s kind (SET-01); the toolbar has no separate derive-table command._
 - **DOC-03** — Sheet tabs: Ordinal, name and object count per sheet. Selecting a sheet swaps canvas contents, clears cell and graph selection, and resets the viewport to A1. A trailing + appends a sheet at the end.
 - **DOC-04** — Canvas: Drag pans; ⌥scroll and the zoom pill zoom. Pan clamps so A1 remains the top-left; the plane extends right and down without bound.
 - **DOC-05** — Semantic zoom: Micro (≥ 0.48) full rich text; meso structure; macro (< 0.30) block titles only, cell text not laid out at all.
@@ -60,7 +60,7 @@ _The lattice is 160 × 22 px. Geometry and addressing are one fact._
 - **GRID-08** — Resize: A divider at each column header resizes that column; a corner handle scales the whole table. Both snap. _Amended by ADR-049 (#167): a divider under each row's handle resizes that row; a divider on a selected band of rows or columns resizes every member proportionally; a double-click (or Enter on the focused divider) fits the column or row to its content; the corner scales widths and heights alike. Everything snaps to whole lattice units; the minimum is one unit each way._ _Amended by ADR-051: with the header row hidden (GRID-11) the column dividers sit in a one-row strip over the first body row, so a column resizes by pointer and keyboard either way; while the table is selected every column boundary shows its divider at rest._
 - **GRID-09** — Wrap: Wrapped rows occupy two lattice rows so addressing stays exact. _Amended by ADR-049 (#167): a wrapped row occupies as many whole lattice rows as its content needs (n ≥ 1), measured and stored by the replica that edits it, so addressing stays exact on every replica; wrap is a setting at cell, row, column and table scope; off, text clips at the cell._
 - **GRID-10** — Frozen columns: A per-table count shades the leading columns, draws a heavier rule at the boundary, and determines which columns the pinned panel carries.
-- **GRID-11** — Header rows · footer: Counts of 0 or 1 show or hide the column-header row and the footer count strip.
+- **GRID-11** — Header rows · footer: Counts of 0 or 1 show or hide the column-header row and the footer count strip. _Amended by ADR-056: a set table shows its footer count strip by default, holding cardinality and bag (SET-05)._
 
 ## FMT — Column data formats (6)
 
@@ -73,7 +73,7 @@ _Set on the column, overridable per cell._
 - **FMT-05** — Invalid: A value that cannot be parsed under an explicit format tints the cell and is excluded from aggregation; it is never silently coerced to zero.
 - **FMT-06** — Inheritance: Appended rows inherit the column format. The inspector states the scope of the change before it is applied.
 
-## FX — Formulas (9)
+## FX — Formulas (10)
 
 _Typing `=` opens formula entry with a menu of available forms._
 
@@ -86,6 +86,7 @@ _Typing `=` opens formula entry with a menu of available forms._
 - **FX-07** — Presentation: A formula cell renders its value with a reference badge and the expression on a secondary line. Re-opening restores the expression, not the result.
 - **FX-08** — Highlighting: While a formula cell is selected or edited, every cell it reads is outlined in the colour of its operand index; ranges draw as one block. Outlines follow pan and zoom and clear on deselect.
 - **FX-09** — Set operators: `=Union(a, b, …)`, `=Inter(a, b, …)`, `=Diff(a, b, …)`, `=Comp(a, u)` and `=Cross(a, b, …)` read every argument as a set of the strings in its cells: the text split on commas, semicolons and newlines, each element trimmed and NFC-normalised, empties dropped, duplicates collapsed on first occurrence; equality is exact and case-sensitive. Arguments may be cell addresses, ranges, columns, `@` paths, quoted literals or nested calls, separated by `,` or `;`; a blank cell is the empty set; an Automatic cell splits its stored text as typed; under an explicit format a number, amount or date is one element, spelled locale-independently, so every replica computes the same set, and a cell the format could not parse (FMT-05) contributes its stored text; a list (a `Split` or another set) contributes its items as they are. Union is the elements in any set, Inter the elements in every set, Diff the first set less the union of the rest, Comp the elements of the universe `u` (the second argument; there is no implicit universe) not in `a`, Cross every ordered tuple first-operand-major rendered `(a, b)`. Results keep first-seen order, render comma-separated, feed another set function unchanged (a separator inside parentheses does not split) and an empty result is an empty cell. Union, Inter, Diff and Cross take two or more arguments, Comp exactly two; anything else yields `⚠ Comp takes 2 arguments` in the error family. A Cross past 10,000 tuples is refused from the operand sizes as `⚠ too many tuples` before any tuple is built. Names parse case-insensitively with the aliases Intersect, Intsec, Minus, Compl, Prod, Cart, Product and commit in canonical spelling; the `=` forms menu offers the five wherever Concat is. _Added by ADR-053 (owner-directed, 2026-09-19)._
+- **FX-10** — Power set: `=Power(a)` reads `a` as a set under FX-09's rules and yields every subset of it, the empty set first, then by size, each subset in `a`'s first-seen order and rendered `{a, b}`; the empty subset renders `∅`. A separator inside braces does not split, as inside parentheses, so the result feeds another set function unchanged. It takes exactly one argument. A set of more than 13 elements (2¹⁴ = 16,384 subsets) is refused from the operand size as `⚠ too many subsets` before any subset is built, under the same 10,000 cap as Cross. The `=` forms menu offers it beside the five. _Added by ADR-056 (owner-directed, 2026-10-09)._
 
 ## REF — References and cross-table relations (5)
 
@@ -153,7 +154,7 @@ _Right-click on a column header or a cell._
 
 - **MENU-01** — Parity: Menus follow desktop spreadsheet order and grouping, with separators between kinds.
 - **MENU-02** — Disabled: Unavailable commands render disabled with their reason available on hover — never hidden. Absence is more confusing than a greyed item.
-- **MENU-03** — Column menu: Graph this table; freeze; sort and sort options; quick filter and filter options; add, remove and configure a category; add column before/after; delete; hide; fit width; clipboard; wrap text. _Amended by ADR-051: Rename column… (F2) between Add column after and Delete column, disabled with the reason on a derived, pulled or mapping column; the header's ▼ carries it too._
+- **MENU-03** — Column menu: Graph this table; freeze; sort and sort options; quick filter and filter options; add, remove and configure a category; add column before/after; delete; hide; fit width; clipboard; wrap text. _Amended by ADR-051: Rename column… (F2) between Add column after and Delete column, disabled with the reason on a derived, pulled or mapping column; the header's ▼ carries it too._ _Amended by ADR-056: Fill column with formula… between Rename column… and Delete column (SET-10)._
 - **MENU-04** — Cell menu: Freeze; add row above/below; add column before/after; delete row/column; sort, filter, category options; merge controls; cut, copy, copy snapshot, paste, paste and match style, clear all; wrap text. _Amended by ADR-051: Fit column width to content beside Fit row height to content, so a column fits with the header row hidden; the table's context menu (on the title) carries Rename table… (F2); the toolbar's Table menu does not (one home, ADR-041)._
 - **MENU-05** — Dismissal: Escape or a click outside closes; focus returns to the trigger element.
 
@@ -276,6 +277,30 @@ _Deletion is conditional on sharing history. A workscape that has ever had a par
 - **LIB-D10** — Sample exemption: The guided sample workscape must be exempt from both delete and archive. Its toolbar action is disabled with an explanatory tooltip.
 - **LIB-D11** — Shared state: Archive and trash are document states, not library-local flags. A second client signed in to the same account must observe the same state without a reload.
 
+## SET — Set tables, sections and summaries (19)
+
+_GeDe works with character strings as sets. A set is a column of a table, one element per row; FX-09’s comma cell is a typed shorthand for one. Design: the GeDe Sets canvas. Added by ADR-056 (owner-directed, 2026-10-09)._
+
+- **SET-01** — Table kinds: Add table, from the toolbar and from Add table here, asks the table’s kind: Plain table, Simple set, Family of sets, Computed by formula, Cartesian product. Plain table is preselected so Enter adds today’s table. The confirm button reads “Add table” for every kind; a computed kind first reads “Pick sets”. The kind can change while the table has no typed values. Add shaped table here is unchanged.
+- **SET-02** — Set column: A set table’s range column is the set, one element per row, equal under FX-09’s rules (trimmed, NFC, case-sensitive). Typing or pasting a comma-separated value into one range cell offers Split into rows. A repeated element is kept, flagged “repeat of +2°” in words, and counted in the bag but not the cardinality. The range column is an operand to every set formula.
+- **SET-03** — Meta row: A read-only row above the header states the set id (the table’s ULID), finite or infinite, bound or free variable, universal or existential quantifier, and special status: null when the set is empty, singleton at cardinality 1, “—” otherwise. Every value is computed, none is typed. A value GeDe cannot determine from the definition shows “—”, never a guess.
+- **SET-04** — Name and definition: The set’s name is the table title and its definition is the caption, edited where INSP-04 and ADR-051 edit them (Rename table…, the Table tab, F2), unique per ADR-051. The title row shows both; the definition renders as typed, set-builder notation included.
+- **SET-05** — Counts: The footer count strip of a set table states its cardinality (distinct elements) and its bag (every entry, repeats and nested leaves included), with numbers through `Intl.NumberFormat` for the active locale.
+- **SET-06** — Family of sets: A family of sets is a set table with hierarchy on. Rows nest only through Nest and Promote (HIER-01..10). A kind column states each row as “element”, “set” or “family” in words. Cardinality counts top-level members; the bag counts every leaf at any depth. A row may reference another set table through `@` (REF-01); its children then follow that source and are read-only.
+- **SET-07** — Degree index: A set table’s rail labels its rows −2° meta, −1° title, ±0° header, +n° elements and +n.m° by depth, in mono with the degree sign U+00B0. The index is presentation: it never changes a cell’s A1 address (GRID-02, HIER-09).
+- **SET-08** — Computed table: A Computed by formula or Cartesian product table fills its range from one set formula (FX-09, FX-10), one row per result element, recomputed off the main thread when any source changes. Its tag reads “computed” beside the formula, for example `= Cross(E, C, B)`. Computed cells are read-only with the reason “the column is computed”.
+- **SET-09** — Product shape: A Cross asks where each tuple goes: One column, each cell holding the tuple `(a, b, c)`, or One column per set, the tuple’s members in adjacent columns headed `x1 ∈ E`, `x2 ∈ C`. A set may appear more than once and order is kept. A product past FX-09’s cap is refused with `⚠ too many tuples` and the message naming the count and the limit.
+- **SET-10** — Fill column: The column menu’s Fill column with formula… turns an empty column of any table into a computed column; it is the only route to one (DOC-02). It is disabled with the reason “the column is not empty” when any cell holds a typed value.
+- **SET-11** — Neighbouring columns: Columns beside computed columns are ordinary — typed, pulled, mapped or derived. A typed value belongs to its row’s result element or tuple, not to its position: when a source change reorders the result, typed values move with their element.
+- **SET-12** — Lost elements: When an element or tuple leaves the result and its row holds a typed value in another column, the row stays, dimmed and labelled “no longer in E × C” in words, until someone deletes it. A row with no typed values leaves without notice.
+- **SET-13** — Universal set: Each sheet has a read-only table U listing every distinct element of every set table on the sheet once, in first-seen order, kept current. Formulas reference it as `@U`. No formula implies it: `Comp` keeps exactly two arguments.
+- **SET-14** — Super set array: Each sheet has a read-only array of every element in U and every set table’s name, sets distinguished by a label in words, not by colour alone, kept current.
+- **SET-15** — Section summary: Each section has a read-only summary table: a title row, a row stating the set count and element count, and one row per set with its id, name, definition, cardinality and bag, special status, the sets equal to it, the sets it is an improper subset of, the sets it is a proper subset of, the families it is an element of, and the pairs of sets in the section whose intersection, union or difference equals it. “—” means GeDe checked and found none.
+- **SET-16** — Sheet summary: Each sheet has a read-only table listing its sections with each one’s set count and element count, kept current.
+- **SET-17** — Sections: A section is a named lane (INSP-07’s Pipeline lanes) between guide lines on lattice column edges, with a gutter of one empty lattice column. Its heading is renamed with Rename section…. Tables in a section snap within it. Sections never change an A1 address.
+- **SET-18** — Lock: Lock section, Unlock section, Lock sheet and Unlock sheet stop and allow edits by everyone with edit access. A control blocked by a lock is disabled with the reason “the section is locked” or “the sheet is locked”. Lock is distinct from View only, which is access, and from Freeze, which is scrolling. The status line reads “Locked {name}”.
+- **SET-19** — Verbs: Each action has one verb across menus, buttons and tooltips: Add, Rename…, Delete, Nest and Promote, Collapse and Expand, Pick, Fill, Lock and Unlock, Derive (columns only), Pull. Create, Insert, New, Place and Choose do not appear in the interface.
+
 ## Count
 
 | Area | Count |
@@ -285,7 +310,7 @@ _Deletion is conditional on sharing history. A workscape that has ever had a par
 | DOC | 7 |
 | GRID | 11 |
 | FMT | 6 |
-| FX | 9 |
+| FX | 10 |
 | REF | 5 |
 | HIER | 10 |
 | FIND | 10 |
@@ -301,4 +326,5 @@ _Deletion is conditional on sharing history. A workscape that has ever had a par
 | RESP | 5 |
 | ONB | 14 |
 | LIB-D | 11 |
-| **Total** | **173** |
+| SET | 19 |
+| **Total** | **193** |
