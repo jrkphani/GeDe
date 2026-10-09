@@ -8,6 +8,8 @@ import {
   difference,
   intersection,
   MAX_CROSS_TUPLES,
+  power,
+  powerCardinality,
   splitSetElements,
   union,
 } from './sets.js';
@@ -118,6 +120,72 @@ describe('set elements (FX-09)', () => {
         ]) {
           expect(splitSetElements(result.join(', '))).toEqual(result);
         }
+      }),
+      { numRuns: 200 },
+    );
+  });
+});
+
+describe('power set (FX-10)', () => {
+  test('FX-10 Power: the empty set first, then by size, each subset in first-seen order, rendered {a, b} and ∅', () => {
+    expect(power(['a', 'b', 'c'])).toEqual([
+      '∅',
+      '{a}',
+      '{b}',
+      '{c}',
+      '{a, b}',
+      '{a, c}',
+      '{b, c}',
+      '{a, b, c}',
+    ]);
+    expect(power([])).toEqual(['∅']);
+    expect(power(['x', 'x'])).toEqual(['∅', '{x}']);
+  });
+
+  test('FX-10 a separator inside braces does not split, as inside parentheses', () => {
+    expect(splitSetElements('∅, {a}, {a, b}')).toEqual(['∅', '{a}', '{a, b}']);
+    expect(splitSetElements('{a, (b, c)}; {d}')).toEqual(['{a, (b, c)}', '{d}']);
+    expect(splitSetElements('{{a}, {a, b}}, c')).toEqual(['{{a}, {a, b}}', 'c']);
+    expect(splitSetElements('a}, b')).toEqual(['a}', 'b']);
+  });
+
+  test('FX-10 powerCardinality is 2^|A| over the deduplicated set, without building a subset', () => {
+    expect(powerCardinality(['a', 'b', 'a'])).toBe(4);
+    expect(powerCardinality(Array.from({ length: 13 }, (_, i) => String(i)))).toBe(8192);
+    expect(powerCardinality(Array.from({ length: 14 }, (_, i) => String(i)))).toBeGreaterThan(
+      MAX_CROSS_TUPLES,
+    );
+  });
+
+  const elements = fc.uniqueArray(fc.stringMatching(/^[a-z0-9]{1,4}$/), { maxLength: 8 });
+
+  test('FX-10 property: |Power(A)| = 2^|A| and every subset is distinct', () => {
+    fc.assert(
+      fc.property(elements, (a) => {
+        const p = power(a);
+        expect(p).toHaveLength(2 ** a.length);
+        expect(new Set(p).size).toBe(p.length);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  test('FX-10 property: the rendered result re-splits to itself', () => {
+    fc.assert(
+      fc.property(elements, (a) => {
+        const p = power(a);
+        expect(splitSetElements(p.join(', '))).toEqual(p);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  test('FX-10 property: Power feeds Union unchanged', () => {
+    fc.assert(
+      fc.property(elements, (a) => {
+        const p = power(a);
+        expect(union([splitSetElements(p.join(', ')), []])).toEqual(p);
+        expect(union([p, p])).toEqual(p);
       }),
       { numRuns: 200 },
     );

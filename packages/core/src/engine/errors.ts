@@ -33,5 +33,7 @@ export function cellErrorMessage(error: CellError): string {
         : `${error.name} takes ${arityText(error.arity)}`;
     case 'too-many-tuples':
       return `Cross would make ${String(error.count)} tuples; narrow the sets`;
+    case 'too-many-subsets':
+      return `Power would make ${String(error.count)} subsets; a set of at most 13 elements fits`;
   }
 }

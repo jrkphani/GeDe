@@ -108,8 +108,8 @@ describe('useFormulaAdornments', () => {
     const sum = screen.getByRole('option', { name: /Sum/ });
     expect(sum).toHaveAttribute('aria-disabled', 'true');
     expect(sum).toHaveTextContent('Sum is offered on Number or Currency columns');
-    // Concat, Sum, the five set operators (FX-09) and the @ path.
-    expect(forms.querySelectorAll('[role=option]')).toHaveLength(8);
+    // Concat, Sum, the six set operators (FX-09, FX-10) and the @ path.
+    expect(forms.querySelectorAll('[role=option]')).toHaveLength(9);
 
     view.unmount();
     const numberView = render(<Host d={d} colId={d.colId(1)} />);
@@ -141,7 +141,7 @@ describe('useFormulaAdornments', () => {
     expect(screen.getByRole('option', { name: /Sum/ })).toHaveAttribute('aria-disabled', 'true');
   });
 
-  it('FX-09 the forms menu offers Union, Inter, Diff, Comp and Cross wherever Concat is, each with a hint; picking one inserts the call with the caret inside the parentheses', async () => {
+  it('FX-09 FX-10 the forms menu offers Union, Inter, Diff, Comp, Cross and Power wherever Concat is, each with a hint; picking one inserts the call with the caret inside the parentheses', async () => {
     const d = testDoc(3, 3);
     // An Automatic column: Sum is withheld, the set operators are not gated by format.
     render(<Host d={d} colId={d.colId(0)} />);
@@ -159,9 +159,10 @@ describe('useFormulaAdornments', () => {
       'Diff(a, b, …)',
       'Comp(a, u)',
       'Cross(a, b, …)',
+      'Power(a)',
       '@Group.Entity',
     ]);
-    for (const name of ['Union', 'Inter', 'Diff', 'Comp', 'Cross']) {
+    for (const name of ['Union', 'Inter', 'Diff', 'Comp', 'Cross', 'Power']) {
       const option = screen.getByRole('option', { name: new RegExp(`^${name}\\(`) });
       expect(option).not.toHaveAttribute('aria-disabled');
       expect(option.querySelector('.gd-formula-option__hint')?.textContent).not.toBe('');
@@ -169,6 +170,7 @@ describe('useFormulaAdornments', () => {
     expect(screen.getByRole('option', { name: /^Union\(/ })).toHaveTextContent(
       'elements in any of the sets',
     );
+    expect(screen.getByRole('option', { name: /^Power\(/ })).toHaveTextContent('every subset of a');
     // Concat, Sum, Union: two presses of ↓ highlight Union; Enter inserts it and the editor stays open.
     await userEvent.keyboard('{ArrowDown}{ArrowDown}{Enter}');
     expect(editor).toHaveValue('=Union(');

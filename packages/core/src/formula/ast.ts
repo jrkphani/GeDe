@@ -3,7 +3,7 @@
  *
  *   formula   := '=' (call | method | list)
  *   call      := name '(' [arg (sep arg)*] ')'           name ∈ { Concat, Sum, Union, Inter,
- *                                                      Diff, Comp, Cross } — the set operators
+ *                                                      Diff, Comp, Cross, Power } — the set operators
  *                                                      read every argument as a set of the
  *                                                      strings in its cells (FX-09, ADR-053)
  *   sep       := ',' | ';'                               either separates arguments
@@ -104,10 +104,10 @@ export interface NumberLiteral {
 
 /**
  * The set operators (FX-09): Union A ∪ B, Inter A ∩ B, Diff A \ B, Comp Aᶜ
- * within a universe, Cross A × B. The parser also accepts the aliases listed
+ * within a universe, Cross A × B, Power 𝒫(A) (FX-10). The parser also accepts the aliases listed
  * in `parser.ts` and writes back these spellings.
  */
-export const SET_FUNCTION_NAMES = ['Union', 'Inter', 'Diff', 'Comp', 'Cross'] as const;
+export const SET_FUNCTION_NAMES = ['Union', 'Inter', 'Diff', 'Comp', 'Cross', 'Power'] as const;
 export type SetFunctionName = (typeof SET_FUNCTION_NAMES)[number];
 
 export type FunctionName = 'Concat' | 'Sum' | SetFunctionName;

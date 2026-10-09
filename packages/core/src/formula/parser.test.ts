@@ -101,6 +101,11 @@ describe('parse — calls', () => {
     expect(mustParse('=CROSS(B5, C5)')).toMatchObject({ kind: 'call', name: 'Cross' });
   });
 
+  test('FX-10 Power parses in any case and commits as Power', () => {
+    expect(mustParse('=power(B5)')).toMatchObject({ kind: 'call', name: 'Power' });
+    expect(mustParse('=Union(Power(B5), C5)')).toMatchObject({ kind: 'call', name: 'Union' });
+  });
+
   test.each([
     ['Intersect', 'Inter'],
     ['intsec', 'Inter'],
@@ -133,12 +138,12 @@ describe('parse — calls', () => {
     ).toEqual(['A1', '[; ]', 'B1']);
   });
 
-  test('FX-09 the unknown-function message lists every form', () => {
+  test('FX-09 FX-10 the unknown-function message lists every form', () => {
     const result = parse('=Unite(A1)');
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.message).toBe(
-      'unknown function Unite; use Concat, Sum, Union, Inter, Diff, Comp or Cross',
+      'unknown function Unite; use Concat, Sum, Union, Inter, Diff, Comp, Cross or Power',
     );
   });
 

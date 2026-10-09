@@ -47,9 +47,10 @@ const FUNCTION_NAMES: ReadonlyMap<string, FunctionName> = new Map([
   ['prod', 'Cross'],
   ['cart', 'Cross'],
   ['product', 'Cross'],
+  ['power', 'Power'],
 ]);
 
-const KNOWN_FUNCTIONS = 'Concat, Sum, Union, Inter, Diff, Comp or Cross';
+const KNOWN_FUNCTIONS = 'Concat, Sum, Union, Inter, Diff, Comp, Cross or Power';
 
 class ParseFailure extends Error {
   constructor(readonly parseError: ParseError) {

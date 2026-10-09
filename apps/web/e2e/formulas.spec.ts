@@ -284,7 +284,7 @@ test.describe('formulas', () => {
     await expect.poll(() => JSON.stringify(room.doc.getMap('tables').toJSON())).toMatch(/\{e:/);
   });
 
-  test('FX-09 FX-06 A11Y-04 the set operators over the strings in cells: Union, Inter, Diff, Comp and Cross from the forms menu and typed verbatim; a source edit updates the result; the Worker evaluates', async ({
+  test('FX-09 FX-10 FX-06 A11Y-04 the set operators over the strings in cells: Union, Inter, Diff, Comp and Cross from the forms menu and typed verbatim; a source edit updates the result; the Worker evaluates', async ({
     page,
     checkA11y,
   }) => {
@@ -305,20 +305,23 @@ test.describe('formulas', () => {
     await enter(page, 'C5', '2, 3');
     await enter(page, 'D5', '1, 2, 3, 4');
 
-    // The `=` forms menu offers the five on an Automatic column, each with a hint.
+    // The `=` forms menu offers the six on an Automatic column, each with a hint (FX-10 adds Power).
     const e5 = page.locator('[data-address="E5"]');
     await e5.dblclick();
     const editor = page.getByLabel('Edit E5');
     await editor.fill('=');
     const forms = page.getByRole('listbox', { name: 'Formula forms' });
     await expect(forms).toBeVisible();
-    for (const name of ['Union', 'Inter', 'Diff', 'Comp', 'Cross']) {
+    for (const name of ['Union', 'Inter', 'Diff', 'Comp', 'Cross', 'Power']) {
       await expect(
         forms.getByRole('option', { name: new RegExp(`^${name}\\(`) }),
       ).not.toHaveAttribute('aria-disabled');
     }
     await expect(forms.getByRole('option', { name: /^Union\(/ })).toContainText(
       'elements in any of the sets',
+    );
+    await expect(forms.getByRole('option', { name: /^Power\(/ })).toContainText(
+      'every subset of a',
     );
     await page.keyboard.press('Escape');
     await expect(forms).toHaveCount(0);

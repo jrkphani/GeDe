@@ -313,6 +313,44 @@ describe('set operators (FX-09)', () => {
     });
   });
 
+  test('FX-10 Power(a) yields every subset of a, the empty set first, as a list that feeds Union unchanged', () => {
+    const r = fakeResolver({ A1: txt('1, 2') }, {}, { P1: '=Power(A1)' });
+    expect(run('=Power(A1)', r)).toEqual({ ok: true, value: set('∅', '{1}', '{2}', '{1, 2}') });
+    const rendered = run('=Power(A1)', r);
+    if (rendered.ok) expect(defaultFormatValue(rendered.value)).toBe('∅, {1}, {2}, {1, 2}');
+    expect(ELEMENTS(run('=Union(P1, "{1}, x")', r))).toEqual(['∅', '{1}', '{2}', '{1, 2}', 'x']);
+    expect(ELEMENTS(run('=Union(Power(A1), "∅, {2}")', r))).toEqual(['∅', '{1}', '{2}', '{1, 2}']);
+    expect(ELEMENTS(run('=Power("")', r))).toEqual(['∅']);
+  });
+
+  test.each([
+    ['=Power()', '⚠ Power takes 1 argument'],
+    ['=Power(A1, A1)', '⚠ Power takes 1 argument'],
+  ])('FX-10 Power takes exactly one argument: %s', (text, label) => {
+    const result = run(text, sets());
+    expect(result).toEqual({
+      ok: false,
+      error: { kind: 'arity', name: 'Power', arity: { exactly: 1 } },
+    });
+    if (!result.ok) expect(errorLabel(result.error)).toBe(label);
+  });
+
+  test('FX-10 a set of more than 13 elements is refused as too many subsets from its size', () => {
+    const big = (n: number): CellValue =>
+      txt(Array.from({ length: n }, (_, i) => `e${String(i)}`).join(', '));
+    const r = fakeResolver({ A1: big(13), B1: big(14), C1: big(40) });
+    const ok = run('=Power(A1)', r);
+    if (ok.ok && ok.value.kind === 'list') expect(ok.value.items).toHaveLength(8192);
+    else throw new Error('Power of 13 elements was refused');
+    const refused = run('=Power(B1)', r);
+    expect(refused).toEqual({ ok: false, error: { kind: 'too-many-subsets', count: 16_384 } });
+    if (!refused.ok) expect(errorLabel(refused.error)).toBe('⚠ too many subsets');
+    expect(run('=Power(C1)', r)).toEqual({
+      ok: false,
+      error: { kind: 'too-many-subsets', count: 2 ** 40 },
+    });
+  });
+
   test('FX-09 ; separates arguments like , inside a call', () => {
     expect(run('=Union(A1; B1)', sets())).toEqual({ ok: true, value: set('1', '2', '3') });
     expect(run('=Comp(A1;U1)', sets())).toEqual({ ok: true, value: set('3', '4') });

@@ -16,6 +16,8 @@ import {
   complement,
   cross,
   crossCardinality,
+  power,
+  powerCardinality,
   dedupe,
   difference,
   intersection,
@@ -93,7 +95,9 @@ export type FormulaError =
       readonly arity: { readonly exactly: number } | { readonly atLeast: number };
     }
   /** `⚠ too many tuples` — a Cross product past `MAX_CROSS_TUPLES`, refused before it is built (FX-09). */
-  | { readonly kind: 'too-many-tuples'; readonly count: number };
+  | { readonly kind: 'too-many-tuples'; readonly count: number }
+  /** `⚠ too many subsets` — a Power set past `MAX_CROSS_TUPLES` (more than 13 elements), refused before it is built (FX-10). */
+  | { readonly kind: 'too-many-subsets'; readonly count: number };
 
 /** How the evaluator reads the workbook. Implemented over the Yjs document by the app. */
 export interface Resolver {
@@ -153,12 +157,14 @@ export function errorLabel(error: FormulaError): string {
       return `⚠ ${error.name} takes ${arityText(error.arity)}`;
     case 'too-many-tuples':
       return '⚠ too many tuples';
+    case 'too-many-subsets':
+      return '⚠ too many subsets';
   }
 }
 
 export function arityText(arity: { exactly: number } | { atLeast: number }): string {
   return 'exactly' in arity
-    ? `${String(arity.exactly)} arguments`
+    ? `${String(arity.exactly)} argument${arity.exactly === 1 ? '' : 's'}`
     : `at least ${String(arity.atLeast)} arguments`;
 }
 
@@ -312,10 +318,11 @@ class Evaluator {
    * survive, so it renders comma-separated and feeds another set function
    * unchanged. Arity is checked before any operand is read. Union, Inter, Diff
    * and Cross take two or more sets; Comp takes exactly the set and its
-   * universe — there is no implicit universe.
+   * universe — there is no implicit universe; Power takes exactly one set (FX-10).
    */
   private setOperator(name: SetFunctionName, args: readonly Expr[]): CellValue {
-    const arity = name === 'Comp' ? { exactly: 2 } : { atLeast: 2 };
+    const arity =
+      name === 'Comp' ? { exactly: 2 } : name === 'Power' ? { exactly: 1 } : { atLeast: 2 };
     const wrong = 'exactly' in arity ? args.length !== arity.exactly : args.length < arity.atLeast;
     if (wrong) fail({ kind: 'arity', name, arity });
     const sets = args.map((arg) => this.setOf(arg));
@@ -339,6 +346,13 @@ class Evaluator {
         const count = crossCardinality(sets);
         if (count > MAX_CROSS_TUPLES) fail({ kind: 'too-many-tuples', count });
         elements = cross(sets);
+        break;
+      }
+      case 'Power': {
+        // Refused from the operand size, before a subset is allocated (FX-10).
+        const count = powerCardinality(a);
+        if (count > MAX_CROSS_TUPLES) fail({ kind: 'too-many-subsets', count });
+        elements = power(a);
         break;
       }
     }
