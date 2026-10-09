@@ -59,6 +59,7 @@ export {
   observeRefusedFills,
   reconcileComputed,
   setComputedColumn,
+  setComputedColumns,
   setTableFormula,
   type ComputedItems,
 } from './computed.js';

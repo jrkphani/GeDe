@@ -15,7 +15,8 @@
  * any reorder (SET-11). A row whose key left the result stays, marked
  * `lostFrom`, while it holds a typed value, and leaves otherwise (SET-12); a
  * key that returns reclaims its row. A refused result (a capped Cross or
- * Power) is not handed off, so the table keeps its rows.
+ * Power, an error, no formula) is handed off with no items: the table keeps its
+ * rows, which are only kept sound (deduped, a removed typed row brought back).
  *
  * The reconciler writes rows only — ids, order, `computedKey`, `lostFrom` and,
  * where a key's text cannot be split back, its tuple members — never cell
@@ -52,7 +53,7 @@ import type { CellValue } from '../formula/evaluate.js';
 import { isSetFunctionName } from '../formula/ast.js';
 import { parse } from '../formula/parser.js';
 import { dedupe } from '../formula/sets.js';
-import { cellKey, type Id } from '../ids.js';
+import { cellKey, newId, type Id } from '../ids.js';
 import { RowEditor } from './rows.js';
 import { deterministicId } from './split.js';
 
@@ -150,25 +151,45 @@ export function setComputedColumn(
   colId: Id,
   spec: ComputedSpec,
 ): boolean {
+  return setComputedColumns(gd, tableId, [{ colId, spec }]);
+}
+
+/**
+ * SET-09, SET-10: one Fill column step over several columns (a spread Fill's member
+ * columns): all of them or none, as one undo step. The step's id is stamped on each
+ * column, so a refusal after a merge reverts this step's columns together and no other.
+ */
+export function setComputedColumns(
+  gd: GedeDoc,
+  tableId: Id,
+  columns: readonly { readonly colId: Id; readonly spec: ComputedSpec }[],
+): boolean {
   const table = gd.tables.get(tableId);
-  if (table === undefined) return false;
-  const column = columnsArray(table)
-    .toArray()
-    .find((c) => readString(c, 'id') === colId);
-  if (column === undefined) return false;
-  if (column.get('source') !== 'computed') {
-    const typed = rowsArray(table)
-      .toArray()
-      .some((rowId) => cellText(table, rowId, colId) !== '');
-    if (typed) return false;
+  if (table === undefined || columns.length === 0) return false;
+  const maps = columnsArray(table).toArray();
+  const targets = columns.map(({ colId, spec }) => ({
+    spec,
+    map: maps.find((c) => readString(c, 'id') === colId),
+  }));
+  const rows = rowsArray(table).toArray();
+  for (const { map } of targets) {
+    if (map === undefined) return false;
+    const colId = readString(map, 'id');
+    if (map.get('source') !== 'computed' && rows.some((r) => cellText(table, r, colId) !== '')) {
+      return false;
+    }
   }
+  const fill = newId();
   gd.doc.transact(() => {
-    column.set('source', 'computed');
-    column.set('computed', { ...spec });
-    column.delete(REFUSED);
-    column.delete('derive');
-    column.delete('link');
-    column.delete('pull');
+    for (const { map, spec } of targets) {
+      if (map === undefined) continue;
+      map.set('source', 'computed');
+      map.set('computed', { ...spec, fill });
+      map.delete(REFUSED);
+      map.delete('derive');
+      map.delete('link');
+      map.delete('pull');
+    }
   }, gd.origin);
   return true;
 }
@@ -176,7 +197,12 @@ export function setComputedColumn(
 /** What the engine hands the main thread for one computed table (SPEC §2.4). */
 export interface ComputedItems {
   readonly tableId: Id;
-  readonly items: readonly string[];
+  /**
+   * The result's keys, or null when there is no result to fill from (still evaluating,
+   * refused, or no formula): the reconciler then only keeps the rows sound — duplicates
+   * dropped, a Fill that met typed text refused, a removed row holding typed text back.
+   */
+  readonly items: readonly string[] | null;
   /** A `Cross` tuple's members by its key, for a spread column (SET-09). */
   readonly members: ReadonlyMap<string, readonly string[]>;
 }
@@ -184,7 +210,8 @@ export interface ComputedItems {
 /**
  * The result of every computed table's formula as the engine evaluated it.
  * A table still evaluating, or whose formula was refused or yields no set,
- * is left out, so its rows stay as they are. A table that has computed rows
+ * is handed off with no items, so its rows stay as they are (SPEC §2.4) but are
+ * still kept sound (`ComputedItems.items`). A table that has computed rows
  * but no computed column any more (an undo of Fill column) is handed off with
  * no column and no items, so the reconciler clears the computed rows it left.
  */
@@ -217,17 +244,19 @@ export function computedItemsOf(
       return;
     }
     const result = resultOf(workbookCellId(tableId, computedFormulaKey(driver.id)));
-    if (result?.error !== null) return;
-    const value = result.value;
+    const value = result?.error === null ? result.value : undefined;
     const items: string[] = [];
     const members = new Map<string, readonly string[]>();
-    if (value !== null && value.kind === 'list') {
+    if (value?.kind === 'list') {
       for (const item of value.items) {
         if (item.kind !== 'text') continue;
         items.push(item.text);
         if (item.members !== undefined) members.set(item.text, item.members);
       }
-    } else if (value !== null && value.kind !== 'blank') return;
+    } else if (value === undefined || (value !== null && value.kind !== 'blank')) {
+      out.push({ tableId, items: null, members });
+      return;
+    }
     out.push({ tableId, items, members });
   });
   return out;
@@ -243,7 +272,7 @@ export { tupleMembers };
 export function reconcileComputed(
   gd: GedeDoc,
   tableId: Id,
-  result: readonly string[],
+  result: readonly string[] | null,
   members: ReadonlyMap<string, readonly string[]> = new Map(),
   origin: unknown = COMPUTED_ORIGIN,
 ): number {
@@ -260,7 +289,8 @@ export function reconcileComputed(
     // refused here, as it would have been locally. Nothing computed is ever stored, so
     // anything stored under a computed column's key is a person's — on a removed row too,
     // which then comes back below. A spread Fill column makes its member columns computed
-    // in one step, so they are refused as one unit: never half of a tuple (SET-09).
+    // in one step (`setComputedColumns`), so that step's columns are refused as one unit:
+    // never half of a tuple (SET-09), and never an earlier step's columns.
     let record = tableRecord(table);
     const candidates = [...editor.ids, ...metas.keys()];
     const filled = computedColumns(record.columns);
@@ -269,10 +299,13 @@ export function reconcileComputed(
     );
     if (typedInto.length > 0) {
       const refused = new Set(typedInto.map((c) => c.id));
-      const spread = typedInto.some((c) => c.computed.shape === 'spread');
+      const steps = new Set(typedInto.map((c) => c.computed.fill).filter((f) => f !== undefined));
       const all = new Set(
         filled
-          .filter((c) => refused.has(c.id) || (spread && c.computed.shape === 'spread'))
+          .filter(
+            (c) =>
+              refused.has(c.id) || (c.computed.fill !== undefined && steps.has(c.computed.fill)),
+          )
           .map((c) => c.id),
       );
       for (const map of columnsArray(table).toArray()) {
@@ -323,6 +356,12 @@ export function reconcileComputed(
       }
     }
 
+    // No result to fill from: the rows stay as they are (SPEC §2.4).
+    if (driver !== undefined && result === null) {
+      writes += editor.writes;
+      return;
+    }
+
     if (driver === undefined) {
       // No computed column left: the rows it filled go unless they hold a typed value; those
       // stay as plain rows.
@@ -339,7 +378,7 @@ export function reconcileComputed(
       return;
     }
 
-    const keys = dedupe(result);
+    const keys = dedupe(result ?? []);
     const wanted = keys.map((key) => computedRowId(tableId, key));
     const wantedSet = new Set(wanted);
     const isLost = (id: Id): boolean => !wantedSet.has(id) && keyOf(id) !== null;

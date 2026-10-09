@@ -249,7 +249,10 @@ describe('SET-08 engine hand-off', () => {
     const many = Array.from({ length: 101 }, (_v, i) => `e${String(i)}`).join(', ');
     // A computed table's own cells are not typed values: its formula can be replaced.
     expect(setTableFormula(gd, tableId, `=Cross("${many}", "${many}")`)).toBe(true);
-    expect(computedItemsOf(gd, (id) => results.get(id))).toEqual([]);
+    expect(computedItemsOf(gd, (id) => results.get(id))).toEqual([
+      { tableId, items: null, members: new Map() },
+    ]);
+    handOff(gd, results);
     expect(rowsOf(gd, tableId)).toEqual(before);
   });
 });
@@ -415,6 +418,26 @@ describe('SET-08 red-team regressions', () => {
       setComputedColumn(gd, tableId, colId, { shape: 'spread', spreadIndex });
     });
     handOff(gd, results);
+    expect(rowsOf(gd, tableId).map((row) => cols.map((c) => textAt(gd, tableId, row, c)))).toEqual([
+      ['sad :(', 'x'],
+      ['p', 'q'],
+    ]);
+  });
+});
+
+describe('SET-09 tuple members through a reference', () => {
+  test('SET-09 a Cross reached through a cell reference keeps its members for a spread column', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
+    const cols = tableById(gd, tableId)?.columns.map((c) => c.id) ?? [];
+    const source = createTable(gd, { sheetId, at: { col: 5, row: 1 }, columns: 1, rows: 1 });
+    const src = tableById(gd, source);
+    setCellText(gd, source, src?.rows[0] ?? '', src?.columns[0]?.id ?? '', '=Cross("sad :(", "x")');
+    setTableFormula(gd, tableId, '=Union(F:F, "(p, q)")');
+    cols.forEach((colId, spreadIndex) => {
+      setComputedColumn(gd, tableId, colId, { shape: 'spread', spreadIndex });
+    });
+    for (let i = 0; i < 3; i += 1) handOff(gd, results);
     expect(rowsOf(gd, tableId).map((row) => cols.map((c) => textAt(gd, tableId, row, c)))).toEqual([
       ['sad :(', 'x'],
       ['p', 'q'],

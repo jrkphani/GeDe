@@ -127,6 +127,8 @@ export type ColumnSource = 'entered' | 'derived' | 'linked' | 'pulled' | 'comput
 export interface ComputedSpec {
   readonly shape: 'column' | 'spread';
   readonly spreadIndex?: number;
+  /** The Fill column step that made this column computed; columns made in one step share it (SET-10). */
+  readonly fill?: string;
 }
 
 /** What a table is (SET-01). Absent reads `plain`, so documents written before ADR-056 read unchanged. */
@@ -481,14 +483,15 @@ export function readTableKind(value: unknown): TableKind {
 /** The `computed` role on a column map, or null when absent or malformed (a newer client's shape). */
 export function readComputedSpec(value: unknown): ComputedSpec | null {
   if (!isRecord(value)) return null;
-  const { shape, spreadIndex } = value;
+  const { shape, spreadIndex, fill } = value;
+  const step = typeof fill === 'string' ? { fill } : {};
   if (shape === 'spread') {
     if (typeof spreadIndex !== 'number' || !Number.isInteger(spreadIndex) || spreadIndex < 0) {
       return null;
     }
-    return { shape, spreadIndex };
+    return { shape, spreadIndex, ...step };
   }
-  return shape === 'column' ? { shape } : null;
+  return shape === 'column' ? { shape, ...step } : null;
 }
 
 export function readColumnSource(map: ColumnMap): ColumnSource {

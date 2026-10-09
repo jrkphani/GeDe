@@ -29,6 +29,7 @@ import {
   computedRowId,
   reconcileComputed,
   setComputedColumn,
+  setComputedColumns,
   setTableFormula,
 } from './computed.js';
 
@@ -84,6 +85,15 @@ function setUp(a: Replica, formula = '=Union("a", "b")') {
   expect(setComputedColumn(a.gd, tableId, range, { shape: 'column' })).toBe(true);
   handOff(a);
   return { sheetId, tableId, range, notes };
+}
+
+function settle(a: Replica, b: Replica, rounds = 4): void {
+  for (let i = 0; i < rounds; i += 1) {
+    handOff(a);
+    handOff(b);
+    send(a.doc, b.doc);
+    send(b.doc, a.doc);
+  }
 }
 
 function textAt(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): string {
@@ -304,7 +314,7 @@ function runProperty(withSweep: boolean): void {
       const rows = rowsOf(a.gd, tableId);
       expect(new Set(rows).size).toBe(rows.length);
     }),
-    { numRuns: 150, seed: 20261009 },
+    { numRuns: 300 },
   );
 }
 
@@ -320,8 +330,12 @@ describe('SET-09 SET-10 spread shape refusal', () => {
     // B, concurrently, types into the second column of the hand-added row.
     setCellText(b.gd, tableId, hand, c1, 'typed');
     setTableFormula(a.gd, tableId, '=Cross(Union("x", "y"), Union("1", "2"))');
-    expect(setComputedColumn(a.gd, tableId, c0, { shape: 'spread', spreadIndex: 0 })).toBe(true);
-    expect(setComputedColumn(a.gd, tableId, c1, { shape: 'spread', spreadIndex: 1 })).toBe(true);
+    expect(
+      setComputedColumns(a.gd, tableId, [
+        { colId: c0, spec: { shape: 'spread', spreadIndex: 0 } },
+        { colId: c1, spec: { shape: 'spread', spreadIndex: 1 } },
+      ]),
+    ).toBe(true);
     handOff(a);
     for (let i = 0; i < 4; i += 1) {
       send(a.doc, b.doc);
@@ -346,5 +360,145 @@ describe('SET-08 SET-11 SET-12 two-replica property', () => {
 
   test('SET-12 the same property with the grid orphan sweep installed on both replicas', () => {
     runProperty(true);
+  });
+});
+
+describe('SET-08 SET-10 SET-12 a table with no result to fill from is still kept sound', () => {
+  const capped = `=Power(Union(${Array.from({ length: 14 }, (_, i) => `"e${String(i)}"`).join(', ')}))`;
+
+  for (const [ca, cb] of [
+    [2, 1],
+    [1, 2],
+  ] as const) {
+    test(`SET-08 FX-10 a row filled on two replicas at once is not left twice when the formula is then refused (clients ${String(ca)},${String(cb)})`, () => {
+      const a = replica(ca);
+      const { tableId } = setUp(a);
+      const b = replica(cb);
+      send(a.doc, b.doc);
+      for (const r of [a, b]) installGridSweep(r.gd);
+      setTableFormula(a.gd, tableId, '=Union("a", "b", "z")');
+      handOff(a);
+      setTableFormula(b.gd, tableId, '=Union("a", "b", "z")');
+      handOff(b);
+      setTableFormula(a.gd, tableId, capped);
+      handOff(a);
+      settle(a, b, 8);
+      for (const r of [a, b]) {
+        const rows = rowsOf(r.gd, tableId);
+        expect(new Set(rows).size).toBe(rows.length);
+        expect(rows).toHaveLength(3);
+      }
+      expect(handOff(a)).toBe(0);
+      expect(handOff(b)).toBe(0);
+    });
+  }
+
+  test('SET-08 a deleted computed row, undone while another replica re-fills it, is not left twice under an erroring formula', () => {
+    const a = replica(1);
+    const { tableId } = setUp(a);
+    const b = replica(2);
+    send(a.doc, b.doc);
+    const rowA = computedRowId(tableId, 'a');
+    const undo = createUndoManager(a.gd, { captureTimeout: 0 });
+    deleteRow(a.gd, tableId, rowA);
+    send(a.doc, b.doc);
+    handOff(b); // B re-fills row a
+    undo.undo(); // A brings row a back
+    setTableFormula(a.gd, tableId, '=Union("")'); // arity error
+    send(b.doc, a.doc);
+    settle(a, b, 8);
+    for (const r of [a, b]) {
+      const rows = rowsOf(r.gd, tableId);
+      expect(new Set(rows).size).toBe(rows.length);
+    }
+  });
+
+  test('SET-08 a once-filled table whose formula is gone still dedupes its rows', () => {
+    const a = replica(1);
+    const { tableId } = setUp(a);
+    const table = tableMap(a.gd, tableId);
+    if (table === null) throw new Error('no table');
+    const rows = table.get('rows');
+    if (!(rows instanceof Y.Array)) throw new Error('no rows');
+    a.doc.transact(() => {
+      table.delete('computedFormula');
+      rows.push([computedRowId(tableId, 'a')]);
+    });
+    handOff(a);
+    expect(rowsOf(a.gd, tableId)).toEqual([
+      computedRowId(tableId, 'a'),
+      computedRowId(tableId, 'b'),
+    ]);
+    expect(handOff(a)).toBe(0);
+  });
+
+  for (const formula of ['=Union("x")', capped]) {
+    test(`SET-10 a value typed concurrently with Fill column is refused even while the formula errors or is capped (${formula.slice(0, 12)})`, () => {
+      const a = replica(1);
+      const sheetId = createSheet(a.gd);
+      const tableId = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 1 });
+      const [c0 = ''] = tableById(a.gd, tableId)?.columns.map((c) => c.id) ?? [];
+      const hand = rowsOf(a.gd, tableId)[0] ?? '';
+      const b = replica(2);
+      send(a.doc, b.doc);
+      setCellText(b.gd, tableId, hand, c0, 'typed');
+      setTableFormula(a.gd, tableId, formula);
+      expect(setComputedColumn(a.gd, tableId, c0, { shape: 'column' })).toBe(true);
+      handOff(a);
+      settle(a, b);
+      for (const r of [a, b]) {
+        expect(tableById(r.gd, tableId)?.columns[0]?.source).toBe('entered');
+        expect(textAt(r.gd, tableId, hand, c0)).toBe('typed');
+      }
+    });
+  }
+
+  test('SET-10 refusing a later spread column does not unfill an earlier, settled spread Fill', () => {
+    const a = replica(1);
+    const sheetId = createSheet(a.gd);
+    const tableId = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 4, rows: 1 });
+    const [c0 = '', c1 = '', c2 = ''] = tableById(a.gd, tableId)?.columns.map((c) => c.id) ?? [];
+    const hand = rowsOf(a.gd, tableId)[0] ?? '';
+    setTableFormula(a.gd, tableId, '=Cross(Union("x", "y"), Union("1", "2"))');
+    setComputedColumns(a.gd, tableId, [
+      { colId: c0, spec: { shape: 'spread', spreadIndex: 0 } },
+      { colId: c1, spec: { shape: 'spread', spreadIndex: 1 } },
+    ]);
+    handOff(a);
+    const b = replica(2);
+    send(a.doc, b.doc);
+    setCellText(b.gd, tableId, hand, c2, 'typed');
+    setTableFormula(a.gd, tableId, '=Cross(Union("x", "y"), Union("1", "2"), Union("p", "q"))');
+    setComputedColumn(a.gd, tableId, c2, { shape: 'spread', spreadIndex: 2 });
+    handOff(a);
+    settle(a, b);
+    expect(tableById(a.gd, tableId)?.columns.map((c) => c.source)).toEqual([
+      'computed',
+      'computed',
+      'entered',
+      'entered',
+    ]);
+    // The settled Fill keeps its eight tuple rows, plus the hand-added row.
+    expect(rowsOf(a.gd, tableId)).toHaveLength(9);
+    expect(textAt(a.gd, tableId, hand, c2)).toBe('typed');
+  });
+
+  test('SET-12 a noted row another replica removed comes back while the formula is refused', () => {
+    const a = replica(1);
+    const { tableId, notes } = setUp(a, `=Union(${POOL.map((p) => `"${p}"`).join(', ')})`);
+    const b = replica(2);
+    send(a.doc, b.doc);
+    installGridSweep(a.gd);
+    installGridSweep(b.gd);
+    setTableFormula(a.gd, tableId, '=Union("க", "é")');
+    send(a.doc, b.doc); // B sees the new formula, not the note
+    const rowA = computedRowId(tableId, 'a');
+    setCellText(a.gd, tableId, rowA, notes, 'n1');
+    setTableFormula(a.gd, tableId, '=Union("")'); // refused (arity)
+    settle(a, b);
+    for (const r of [a, b]) {
+      expect(rowsOf(r.gd, tableId)).toContain(rowA);
+      expect(textAt(r.gd, tableId, rowA, notes)).toBe('n1');
+    }
   });
 });

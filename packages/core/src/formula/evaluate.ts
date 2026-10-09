@@ -400,20 +400,17 @@ class Evaluator {
         return splitSetElements(arg.value);
       case 'number':
         return [String(arg.value)];
-      case 'call': {
-        const value = this.call(arg);
-        if (value.kind === 'list') {
-          for (const item of value.items) {
-            if (item.kind === 'text' && item.members !== undefined)
-              tuples.set(item.text, item.members);
-          }
-        }
-        return this.elementsOf(value);
-      }
+      case 'call':
+        return this.elementsOf(keepTuples(this.call(arg), tuples));
       case 'method':
-        return this.elementsOf(this.method(arg));
+        return this.elementsOf(keepTuples(this.method(arg), tuples));
       default:
-        return dedupe(this.operands(arg).flatMap((o) => this.elementsOf(this.unwrap(o.value))));
+        // A reference to a cell holding a Cross keeps its members too (SET-09).
+        return dedupe(
+          this.operands(arg).flatMap((o) =>
+            this.elementsOf(keepTuples(this.unwrap(o.value), tuples)),
+          ),
+        );
     }
   }
 
@@ -595,4 +592,13 @@ export function evaluate(
     if (e instanceof EvalFailure) return err(e.formulaError);
     throw e;
   }
+}
+
+/** Records a `Cross` list's tuple members by their text (SET-09) and returns the value unchanged. */
+function keepTuples(value: CellValue, tuples: Map<string, readonly string[]>): CellValue {
+  if (value.kind !== 'list') return value;
+  for (const item of value.items) {
+    if (item.kind === 'text' && item.members !== undefined) tuples.set(item.text, item.members);
+  }
+  return value;
 }
