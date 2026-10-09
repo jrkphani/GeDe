@@ -44,6 +44,7 @@ import {
   type FormatOpts,
 } from '../format/types.js';
 import { isMethodName, type MethodName } from '../formula/ast.js';
+import { guardTypedCells } from './fill-guard.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
 import { readRules, type ConditionalRule } from '../style/rules.js';
 import {
@@ -374,7 +375,7 @@ export interface DocumentMeta {
 
 /** Open (or lazily create) the four top-level types of a document. */
 export function openDocument(doc: Y.Doc): GedeDoc {
-  return {
+  const gd: GedeDoc = {
     doc,
     sheets: doc.getArray<SheetMap>('sheets'),
     tables: doc.getMap<TableMap>('tables'),
@@ -382,6 +383,9 @@ export function openDocument(doc: Y.Doc): GedeDoc {
     meta: doc.getMap<unknown>('meta'),
     origin: { gede: 'local' },
   };
+  // SET-10, SET-11: a value typed while another replica fills its column comes back.
+  guardTypedCells(gd);
+  return gd;
 }
 
 // ---------------------------------------------------------------------------

@@ -56,6 +56,7 @@ export {
   computedItemsOf,
   computedOperandsLabel,
   computedRowId,
+  observeRefusedFills,
   reconcileComputed,
   setComputedColumn,
   setTableFormula,

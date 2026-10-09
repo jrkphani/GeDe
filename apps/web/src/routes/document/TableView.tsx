@@ -87,6 +87,7 @@ import {
   columnRenameReason,
   EMPTY_COLUMN_NAME_REASON,
   EMPTY_TABLE_TITLE_REASON,
+  readOnlyAnnouncement,
   readOnlyLabel,
   type GridCommands,
 } from './grid/commands.js';
@@ -1742,7 +1743,7 @@ const Cell = memo(function Cell({
 
   const refuse = () => {
     if (readOnly !== null) {
-      announce(`${address ?? 'The cell'} is read-only: ${readOnlyLabel(readOnly)}`);
+      announce(readOnlyAnnouncement(address, readOnly));
     }
   };
 

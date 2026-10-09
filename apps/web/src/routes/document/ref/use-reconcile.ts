@@ -15,16 +15,21 @@ import type * as Y from 'yjs';
 import {
   computedItemsOf,
   observePulls,
+  observeRefusedFills,
   openDocument,
   reconcileComputed,
   reconcileFilteredPulls,
   reconcileSplitChildren,
   splitPiecesOf,
+  tableById,
   workbookCellId,
   type CellKey,
 } from '@gede/core';
 
+import { announce } from '../../../announce.js';
 import { engineFor } from '../../../doc/engine.js';
+import { translate } from '../../../i18n/index.js';
+import { activeLocale } from '../../../locale.js';
 
 interface Installation {
   count: number;
@@ -40,6 +45,12 @@ function install(doc: Y.Doc): () => void {
   const cellValue = (tableId: string, key: CellKey) =>
     host.result(workbookCellId(tableId, key))?.value;
   const stopPulls = observePulls(gd, { cellValue });
+  // SET-10 after a merge: a Fill column refused here or on another replica is said, not silent.
+  const stopRefusals = observeRefusedFills(gd, (tableId, colId) => {
+    const column = tableById(gd, tableId)?.columns.find((c) => c.id === colId);
+    if (column === undefined) return;
+    announce(translate(activeLocale(), 'set.fillRefused', { column: column.label }));
+  });
   let running = false;
   const run = (): void => {
     if (running) return;
@@ -62,6 +73,7 @@ function install(doc: Y.Doc): () => void {
   run();
   return () => {
     stopPulls();
+    stopRefusals();
     stopResults();
   };
 }

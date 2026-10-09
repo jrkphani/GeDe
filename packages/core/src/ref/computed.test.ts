@@ -25,6 +25,7 @@ import {
   computedItemsOf,
   computedOperandsLabel,
   computedRowId,
+  observeRefusedFills,
   reconcileComputed,
   setComputedColumn,
   setTableFormula,
@@ -619,3 +620,144 @@ describe('SET-08 red-team round 4 regressions', () => {
     expect(setTableFormula(gd, tableId, '=union("a", "b")')).toBe(true);
   });
 });
+
+describe('SET-08 red-team round 5 regressions', () => {
+  /** A replica with its own engine and a fixed client id, so both merge orders are tested. */
+  function replica(clientID: number) {
+    const doc = new Y.Doc();
+    doc.clientID = clientID;
+    const gd = openDocument(doc);
+    const engine = new FormulaEngine();
+    const results = new Map<string, CellResult>();
+    observeWorkbook(gd, (changes) => {
+      const out = engine.apply(changes);
+      for (const id of out.removed) results.delete(id);
+      for (const r of out.results) results.set(r.cellId, r);
+    });
+    return { doc, gd, results };
+  }
+
+  for (const [ca, cb] of [
+    [1, 2],
+    [2, 1],
+  ] as const) {
+    test(`SET-10 SET-11 a note typed while the other replica fills and reconciles at once survives (clients ${String(ca)},${String(cb)})`, () => {
+      const a = replica(ca);
+      const sheetId = createSheet(a.gd);
+      const { tableId, notes } = computedTable(a.gd, sheetId, '=Union("a", "b")');
+      handOff(a.gd, a.results);
+      const b = replica(cb);
+      exchange(a.doc, b.doc);
+      const rowA = computedRowId(tableId, 'a');
+      setCellText(b.gd, tableId, rowA, notes, 'important');
+      expect(setComputedColumn(a.gd, tableId, notes, { shape: 'column' })).toBe(true);
+      handOff(a.gd, a.results); // A fills before B's note arrives
+      exchange(a.doc, b.doc);
+      for (let i = 0; i < 3; i += 1) {
+        handOff(a.gd, a.results);
+        handOff(b.gd, b.results);
+        exchange(a.doc, b.doc);
+      }
+      for (const gd of [a.gd, b.gd]) {
+        expect(textAt(gd, tableId, rowA, notes)).toBe('important');
+        // SET-10: the fill is refused after the merge; the other row's fill goes with it.
+        expect(tableById(gd, tableId)?.columns.find((c) => c.id === notes)?.source).toBe('entered');
+        expect(textAt(gd, tableId, computedRowId(tableId, 'b'), notes)).toBe('');
+      }
+    });
+
+    test(`SET-10 SET-11 a note survives on a replica with no engine at all (clients ${String(ca)},${String(cb)})`, () => {
+      const a = replica(ca);
+      const sheetId = createSheet(a.gd);
+      const { tableId, notes } = computedTable(a.gd, sheetId, '=Union("a", "b")');
+      handOff(a.gd, a.results);
+      const db = new Y.Doc();
+      db.clientID = cb;
+      const b = openDocument(db);
+      exchange(a.doc, db);
+      const rowA = computedRowId(tableId, 'a');
+      setCellText(b, tableId, rowA, notes, 'important');
+      expect(setComputedColumn(a.gd, tableId, notes, { shape: 'column' })).toBe(true);
+      handOff(a.gd, a.results);
+      exchange(a.doc, db);
+      for (let i = 0; i < 3; i += 1) {
+        handOff(a.gd, a.results);
+        exchange(a.doc, db);
+      }
+      expect([a.gd, b].map((gd) => textAt(gd, tableId, rowA, notes))).toEqual([
+        'important',
+        'important',
+      ]);
+    });
+
+    test(`SET-11 SET-12 a note typed while the other replica undoes Fill column survives (clients ${String(ca)},${String(cb)})`, () => {
+      const a = replica(ca);
+      const sheetId = createSheet(a.gd);
+      const tableId = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
+      const [range = '', notes = ''] = tableById(a.gd, tableId)?.columns.map((c) => c.id) ?? [];
+      const um = createUndoManager(a.gd, { captureTimeout: 0 });
+      setTableFormula(a.gd, tableId, '=Union("a", "b")');
+      setComputedColumn(a.gd, tableId, range, { shape: 'column' });
+      handOff(a.gd, a.results);
+      const b = replica(cb);
+      exchange(a.doc, b.doc);
+      const rowA = computedRowId(tableId, 'a');
+      setCellText(b.gd, tableId, rowA, notes, 'important');
+      um.undo();
+      handOff(a.gd, a.results);
+      exchange(a.doc, b.doc);
+      for (let i = 0; i < 3; i += 1) {
+        handOff(a.gd, a.results);
+        handOff(b.gd, b.results);
+        exchange(a.doc, b.doc);
+      }
+      for (const gd of [a.gd, b.gd]) {
+        expect(rowsOf(gd, tableId)).toEqual([rowA]);
+        expect(textAt(gd, tableId, rowA, notes)).toBe('important');
+        expect(rowMeta(tableMap(gd, tableId) ?? fail(), rowA).computedKey).toBeNull();
+      }
+      // Settled: nothing left over to hand off.
+      expect(computedItemsOf(a.gd, (id) => a.results.get(id))).toEqual([]);
+    });
+  }
+
+  test('SET-10 a Fill column refused after a merge is reported once on each replica', () => {
+    const a = replica(1);
+    const sheetId = createSheet(a.gd);
+    const { tableId, notes } = computedTable(a.gd, sheetId, '=Union("a", "b")');
+    handOff(a.gd, a.results);
+    const b = replica(2);
+    exchange(a.doc, b.doc);
+    const heard: string[][] = [];
+    const stops = [a, b].map((r, i) =>
+      observeRefusedFills(r.gd, (t, c) => heard.push([String(i), t, c])),
+    );
+    setCellText(b.gd, tableId, computedRowId(tableId, 'a'), notes, 'important');
+    setComputedColumn(a.gd, tableId, notes, { shape: 'column' });
+    exchange(a.doc, b.doc);
+    for (let i = 0; i < 3; i += 1) {
+      handOff(a.gd, a.results);
+      handOff(b.gd, b.results);
+      exchange(a.doc, b.doc);
+    }
+    for (const stop of stops) stop();
+    expect(heard.sort()).toEqual([
+      ['0', tableId, notes],
+      ['1', tableId, notes],
+    ]);
+    // Fill column again later is not refused by the old report.
+    setCellText(a.gd, tableId, computedRowId(tableId, 'a'), notes, '');
+    expect(setComputedColumn(a.gd, tableId, notes, { shape: 'column' })).toBe(true);
+  });
+
+  test('SET-08 a table that was never computed is not handed off, whatever its rows hold', () => {
+    const { gd, sheetId, results } = harness();
+    const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 3 });
+    expect(tableById(gd, tableId)?.rows).toHaveLength(3);
+    expect(computedItemsOf(gd, (id) => results.get(id))).toEqual([]);
+  });
+});
+
+function fail(): never {
+  throw new Error('missing');
+}

@@ -376,6 +376,17 @@ export function readOnlyLabel(reason: ReadOnlyReason): string {
   );
 }
 
+/** The live-region sentence when a read-only cell refuses an edit; `address` may be unknown. */
+export function readOnlyAnnouncement(
+  address: string | null | undefined,
+  reason: ReadOnlyReason,
+): string {
+  const label = readOnlyLabel(reason);
+  return address === null || address === undefined
+    ? translate(activeLocale(), 'cell.readOnly.announceUnaddressed', { reason: label })
+    : translate(activeLocale(), 'cell.readOnly.announce', { cell: address, reason: label });
+}
+
 /**
  * ADR-051 / MENU-02: why a column cannot be renamed by hand, or undefined
  * when it can. A label that is lineage is rewritten from its spec: the
@@ -509,7 +520,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
   const refuseReadOnly = (cell: CellSelection): boolean => {
     const reason = readOnlyReason(cell);
     if (reason === null) return false;
-    announce(`${addressOf(cell)} is read-only: ${readOnlyLabel(reason)}`);
+    announce(readOnlyAnnouncement(addressOf(cell), reason));
     return true;
   };
   /**
@@ -527,7 +538,12 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     const column = rec?.columns.find((c) => c.id === colId);
     if (!editable() || rec === null || t === null || column === undefined) return null;
     if (column.source !== 'entered') {
-      announce(`Column ${column.label} is read-only: ${readOnlyLabel(column.source)}`);
+      announce(
+        translate(activeLocale(), 'column.readOnly.announce', {
+          column: column.label,
+          reason: readOnlyLabel(column.source),
+        }),
+      );
       return null;
     }
     const rows: Id[] = [];
@@ -947,7 +963,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       if (!editable() || t === null) return false;
       const rowReason = rowReadOnlyReason(rowMeta(t, cell.rowId));
       if (rowReason !== null) {
-        announce(`${addressOf(cell)} is read-only: ${readOnlyLabel(rowReason)}`);
+        announce(readOnlyAnnouncement(addressOf(cell), rowReason));
         return false;
       }
       const ok = setMappingValue(gd, cell.tableId, cell.rowId, cell.colId, value, locale);

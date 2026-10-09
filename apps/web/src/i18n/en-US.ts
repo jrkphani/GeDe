@@ -159,6 +159,12 @@ export const messages = {
   // A read-only cell's accessible name; `{reason}` is one of the readOnly.* reasons below
   // or set.readOnly.computed.
   'cell.readOnly': 'Read-only: {reason}',
+  // The live-region sentence when a read-only cell or column refuses an edit.
+  'cell.readOnly.announce': '{cell} is read-only: {reason}',
+  'cell.readOnly.announceUnaddressed': 'The cell is read-only: {reason}',
+  'column.readOnly.announce': 'Column {column} is read-only: {reason}',
+  // SET-10: Fill column refused after a merge, because another person typed into the column.
+  'set.fillRefused': 'Column {column} is not filled: one of its cells holds a typed value',
   'readOnly.derived': 'derived column',
   'readOnly.linked': 'linked column',
   'readOnly.pulled': 'pulled from another table',
