@@ -422,11 +422,10 @@ export class FormulaEngine {
         );
       }
     }
-    // SET-08: a computed column's formula is one synthetic cell, evaluated once per column.
-    for (const column of structure.columns) {
-      if (column.computed !== undefined) {
-        wanted.set(computedFormulaKey(column.id), column.computed.formula);
-      }
+    // SET-08: a computed table's one formula is one synthetic cell, on its first computed column.
+    const driver = structure.columns.find((c) => c.computed !== undefined);
+    if (driver !== undefined && structure.computedFormula !== undefined) {
+      wanted.set(computedFormulaKey(driver.id), structure.computedFormula);
     }
     table.derivedColumns = derivedColumns;
     for (const cell of [...table.cells.values()]) {
@@ -808,12 +807,11 @@ export class FormulaEngine {
       const { colId } = splitCellKey(read.key);
       const columns = this.tables.get(read.tableId)?.structure.columns ?? [];
       if (columns.find((c) => c.id === colId)?.computed !== undefined) {
-        // Every computed column of a table is filled from one result: reading any of them
-        // reads the formula of each (a sibling column sharing the driver's formula, RT3).
-        for (const c of columns) {
-          if (c.computed !== undefined) {
-            stack.push(workbookCellId(read.tableId, computedFormulaKey(c.id)));
-          }
+        // Every computed column of a table is filled from its one formula: reading any of
+        // them reads that formula, kept on the first computed column.
+        const driver = columns.find((c) => c.computed !== undefined);
+        if (driver !== undefined) {
+          stack.push(workbookCellId(read.tableId, computedFormulaKey(driver.id)));
         }
       }
     }

@@ -117,13 +117,14 @@ export interface SheetRecord {
 export type ColumnSource = 'entered' | 'derived' | 'linked' | 'pulled' | 'computed';
 
 /**
- * A computed column (SET-08, ADR-056): one set formula fills the table's
- * rows, one per result element (`ref/computed.ts`). In `spread` shape a
- * product writes one column per operand; those columns share the formula
- * and each holds the tuple member at its `spreadIndex` (SET-09).
+ * A computed column's role (SET-08, ADR-056). The set formula that fills the
+ * table's rows, one per result element (`ref/computed.ts`), is the table's
+ * and stored once on it (`TableRecord.computedFormula`): a table has exactly
+ * one, so every computed column follows a change to it in the same step. In
+ * `spread` shape a product writes one column per operand and each holds the
+ * tuple member at its `spreadIndex` (SET-09).
  */
 export interface ComputedSpec {
-  readonly formula: string;
   readonly shape: 'column' | 'spread';
   readonly spreadIndex?: number;
 }
@@ -305,6 +306,8 @@ export interface TableRecord {
   readonly pinned: boolean;
   /** SET-01: the kind chosen at Add table; `plain` when absent. */
   readonly kind: TableKind;
+  /** SET-08: the one set formula the table's computed columns fill from; null when absent. */
+  readonly computedFormula: string | null;
 }
 
 /** The two halves of a graph pair (GRAPH-01, GRAPH-02). */
@@ -475,18 +478,17 @@ export function readTableKind(value: unknown): TableKind {
     : 'plain';
 }
 
-/** The `computed` spec on a column map, or null when absent or malformed (a newer client's shape). */
+/** The `computed` role on a column map, or null when absent or malformed (a newer client's shape). */
 export function readComputedSpec(value: unknown): ComputedSpec | null {
   if (!isRecord(value)) return null;
-  const { formula, shape, spreadIndex } = value;
-  if (typeof formula !== 'string' || formula === '') return null;
+  const { shape, spreadIndex } = value;
   if (shape === 'spread') {
     if (typeof spreadIndex !== 'number' || !Number.isInteger(spreadIndex) || spreadIndex < 0) {
       return null;
     }
-    return { formula, shape, spreadIndex };
+    return { shape, spreadIndex };
   }
-  return { formula, shape: 'column' };
+  return shape === 'column' ? { shape } : null;
 }
 
 export function readColumnSource(map: ColumnMap): ColumnSource {
@@ -646,6 +648,7 @@ export function tableRecord(map: TableMap): TableRecord {
     z: Math.round(readNumber(map, 'z', 0)),
     pinned: readBoolean(map, 'pinned', false),
     kind: readTableKind(map.get('kind')),
+    computedFormula: readString(map, 'computedFormula') || null,
   };
 }
 

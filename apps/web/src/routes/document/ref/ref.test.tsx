@@ -21,6 +21,7 @@ import {
   rowMeta,
   setCellText,
   setComputedColumn,
+  setTableFormula,
   setPull,
   tableById,
   tableMap,
@@ -482,7 +483,8 @@ describe('SET-08 computed columns', () => {
     const [range, note] = tableById(gd, sets)!.columns;
     render(<Mount gd={gd} tableId={sets} />);
     act(() => {
-      setComputedColumn(gd, sets, range!.id, { formula: '=Union("a, b", "c")', shape: 'column' });
+      setTableFormula(gd, sets, '=Union("a, b", "c")');
+      setComputedColumn(gd, sets, range!.id, { shape: 'column' });
     });
     await settled();
     await waitFor(() => {
@@ -498,7 +500,7 @@ describe('SET-08 computed columns', () => {
     });
     act(() => {
       setCellText(gd, sets, b!, note!.id, 'keep me');
-      setComputedColumn(gd, sets, range!.id, { formula: '=Union("a", "c")', shape: 'column' });
+      setTableFormula(gd, sets, '=Union("a", "c")');
     });
     await settled();
     await waitFor(() => {

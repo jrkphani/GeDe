@@ -78,6 +78,7 @@ export function tableStructure(table: TableMap): TableStructure {
       ...(c.computed === null ? {} : { computed: c.computed }),
       format: columnFormat(c),
     })),
+    ...(record.computedFormula === null ? {} : { computedFormula: record.computedFormula }),
     rows: record.rows,
     rowHeights: rowHeights(table, record),
     // Effective depths (HIER-02): a merge can leave a stored depth deeper than the

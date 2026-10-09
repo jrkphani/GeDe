@@ -37,6 +37,7 @@ const table = (frozen: number, columns = [col('a'), col('b', 2), col('c')]): Tab
   z: 0,
   pinned: false,
   kind: 'plain',
+  computedFormula: null,
 });
 
 describe('pinned panel (GRID-10)', () => {

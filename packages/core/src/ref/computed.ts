@@ -3,11 +3,11 @@
  *
  * One set formula fills a table's rows, one per result element or tuple. It
  * is the third reconciler of the shape pulls (`pull.ts`) and `Split()`
- * children (`split.ts`) already have: the engine evaluates the column's
- * formula once, as the synthetic cell `computedFormulaKey(column)`, and the
- * main thread hands `{ tableId, columnId, items }` (`computedItemsOf`) to
- * `reconcileComputed`, which edits the rows by the minimal diff (`rows.ts`)
- * under `COMPUTED_ORIGIN`, so it is never an undo step.
+ * children (`split.ts`) already have: the engine evaluates the table's one
+ * formula once, as the synthetic cell `computedFormulaKey(driver)` of its
+ * first computed column, and the main thread hands `{ tableId, columnId,
+ * items }` (`computedItemsOf`) to `reconcileComputed`, which edits the rows
+ * by the minimal diff (`rows.ts`) under `COMPUTED_ORIGIN`, so it is never an undo step.
  *
  * A row's id derives from its key (`computedRowId`), so every replica names
  * the same row the same way and two concurrent reconciles converge. A typed
@@ -63,12 +63,25 @@ function computedColumns(columns: readonly ColumnRecord[]): (ColumnRecord & {
 }
 
 /**
- * SET-10: make a column computed. Refused (false) while any of its cells holds
- * a typed value, or while another column of the table is computed from a
- * formula that is neither the new one nor this column's current one; a
- * computed column's own cells are not typed, so its formula can be replaced,
- * and a spread table's shared formula is replaced column by column.
+ * SET-08: the table's one computed formula. Stored once on the table, so this
+ * one mutation re-points every computed column at once and two people
+ * changing it concurrently converge on one formula (the later write wins).
  * Under the person's origin: it is an undo step.
+ */
+export function setTableFormula(gd: GedeDoc, tableId: Id, formula: string): boolean {
+  const table = gd.tables.get(tableId);
+  if (table === undefined || formula === '') return false;
+  gd.doc.transact(() => {
+    table.set('computedFormula', formula);
+  }, gd.origin);
+  return true;
+}
+
+/**
+ * SET-10: make a column computed in `spec`'s role; it fills from the table's
+ * formula (`setTableFormula`). Refused (false) while any of its cells holds a
+ * typed value; a computed column's own cells are not typed, so its role can
+ * be changed. Under the person's origin: it is an undo step.
  */
 export function setComputedColumn(
   gd: GedeDoc,
@@ -82,18 +95,6 @@ export function setComputedColumn(
     .toArray()
     .find((c) => readString(c, 'id') === colId);
   if (column === undefined) return false;
-  // One formula per table (spread columns share it): a second formula would never be filled.
-  // A column still on this column's current formula is mid-way through the same change.
-  const columns = tableRecord(table).columns;
-  const current = columns.find((c) => c.id === colId)?.computed?.formula;
-  const other = columns.find(
-    (c) =>
-      c.id !== colId &&
-      c.computed !== null &&
-      c.computed.formula !== spec.formula &&
-      c.computed.formula !== current,
-  );
-  if (other !== undefined) return false;
   if (column.get('source') !== 'computed') {
     const typed = rowsArray(table)
       .toArray()
@@ -259,7 +260,6 @@ export function reconcileComputed(
     const fill = (id: Id, key: string, onlyEmpty = false): void => {
       const parts = members.get(key) ?? tupleMembers(key);
       for (const column of computed) {
-        if (column.computed.formula !== driver.computed.formula) continue;
         const text =
           column.computed.shape === 'spread'
             ? (parts[column.computed.spreadIndex ?? 0] ?? '')

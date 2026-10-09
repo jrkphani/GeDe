@@ -58,6 +58,7 @@ export {
   computedRowId,
   reconcileComputed,
   setComputedColumn,
+  setTableFormula,
   tupleMembers,
   type ComputedItems,
 } from './computed.js';

@@ -27,11 +27,11 @@ import {
   computedRowId,
   reconcileComputed,
   setComputedColumn,
+  setTableFormula,
   tupleMembers,
 } from './computed.js';
 
-function harness() {
-  const doc = new Y.Doc();
+function harness(doc = new Y.Doc()) {
   const gd = openDocument(doc);
   const engine = new FormulaEngine();
   const results = new Map<string, CellResult>();
@@ -50,7 +50,8 @@ function computedTable(gd: GedeDoc, sheetId: Id, formula: string) {
   const record = tableById(gd, tableId);
   const [range, notes] = record?.columns ?? [];
   if (range === undefined || notes === undefined) throw new Error('shape');
-  expect(setComputedColumn(gd, tableId, range.id, { formula, shape: 'column' })).toBe(true);
+  expect(setTableFormula(gd, tableId, formula)).toBe(true);
+  expect(setComputedColumn(gd, tableId, range.id, { shape: 'column' })).toBe(true);
   return { tableId, range: range.id, notes: notes.id };
 }
 
@@ -137,9 +138,7 @@ describe('SET-08 computed column reconciler', () => {
     const record = tableById(gd, tableId);
     const colId = record?.columns[0]?.id ?? '';
     setCellText(gd, tableId, record?.rows[0] ?? '', colId, 'typed');
-    expect(setComputedColumn(gd, tableId, colId, { formula: '=Union("a")', shape: 'column' })).toBe(
-      false,
-    );
+    expect(setComputedColumn(gd, tableId, colId, { shape: 'column' })).toBe(false);
     expect(tableById(gd, tableId)?.columns[0]?.source).toBe('entered');
   });
 
@@ -213,11 +212,9 @@ describe('SET-08 computed column reconciler', () => {
     const { gd, sheetId } = harness();
     const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
     const cols = tableById(gd, tableId)?.columns.map((c) => c.id) ?? [];
-    const formula = '=Cross("a, b", "(1, 2), z", "x")';
+    setTableFormula(gd, tableId, '=Cross("a, b", "(1, 2), z", "x")');
     cols.forEach((colId, spreadIndex) => {
-      expect(setComputedColumn(gd, tableId, colId, { formula, shape: 'spread', spreadIndex })).toBe(
-        true,
-      );
+      expect(setComputedColumn(gd, tableId, colId, { shape: 'spread', spreadIndex })).toBe(true);
     });
     reconcileComputed(gd, tableId, ['(a, (1, 2), x)', '(b, z, x)']);
     const [r0 = '', r1 = ''] = rowsOf(gd, tableId);
@@ -243,20 +240,15 @@ describe('SET-08 engine hand-off', () => {
 
   test('SET-09 a capped result reconciles nothing: the table keeps its rows', () => {
     const { gd, sheetId, results } = harness();
-    const { tableId, range } = computedTable(gd, sheetId, '=Union("a", "b")');
+    const { tableId } = computedTable(gd, sheetId, '=Union("a", "b")');
     for (const h of computedItemsOf(gd, (id) => results.get(id))) {
       reconcileComputed(gd, h.tableId, h.items);
     }
     const before = rowsOf(gd, tableId);
     expect(before).toHaveLength(2);
     const many = Array.from({ length: 101 }, (_v, i) => `e${String(i)}`).join(', ');
-    // A computed column's own cells are not typed values: its formula can be replaced.
-    expect(
-      setComputedColumn(gd, tableId, range, {
-        formula: `=Cross("${many}", "${many}")`,
-        shape: 'column',
-      }),
-    ).toBe(true);
+    // A computed table's own cells are not typed values: its formula can be replaced.
+    expect(setTableFormula(gd, tableId, `=Cross("${many}", "${many}")`)).toBe(true);
     expect(computedItemsOf(gd, (id) => results.get(id))).toEqual([]);
     expect(rowsOf(gd, tableId)).toEqual(before);
   });
@@ -280,9 +272,7 @@ describe('SET-08 red-team regressions', () => {
     const { tableId, range } = computedTable(gd, sheetId, '=Union("a")');
     reconcileComputed(gd, tableId, ['a', 'b']);
     // The table sits at lattice column B; B:B is the computed column itself.
-    expect(
-      setComputedColumn(gd, tableId, range, { formula: '=Cross(B:B, "x")', shape: 'column' }),
-    ).toBe(true);
+    expect(setTableFormula(gd, tableId, '=Cross(B:B, "x")')).toBe(true);
     expect(handOff(gd, results)).toBe(0);
     expect(rowsOf(gd, tableId)).toHaveLength(2);
     const error = results.get(`${tableId}/00000000000000000000000000:${range}`)?.error;
@@ -404,9 +394,9 @@ describe('SET-08 red-team regressions', () => {
     const { gd, sheetId, results } = harness();
     const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
     const cols = tableById(gd, tableId)?.columns.map((c) => c.id) ?? [];
-    const formula = '=Cross("sad :(", "x")';
+    setTableFormula(gd, tableId, '=Cross("sad :(", "x")');
     cols.forEach((colId, spreadIndex) => {
-      setComputedColumn(gd, tableId, colId, { formula, shape: 'spread', spreadIndex });
+      setComputedColumn(gd, tableId, colId, { shape: 'spread', spreadIndex });
     });
     handOff(gd, results);
     const [row = ''] = rowsOf(gd, tableId);
@@ -415,21 +405,6 @@ describe('SET-08 red-team regressions', () => {
     const [tuple = ''] = cross([['sad :('], ['x']]);
     expect(tupleMembers(tuple)).toEqual(['sad :(, x']);
   });
-
-  test('SET-08 a second column given a different formula is refused', () => {
-    const { gd, sheetId, results } = harness();
-    const { tableId, range, notes } = computedTable(gd, sheetId, '=Union("a", "b")');
-    expect(
-      setComputedColumn(gd, tableId, notes, { formula: '=Union("x", "y")', shape: 'column' }),
-    ).toBe(false);
-    expect(tableById(gd, tableId)?.columns[1]?.source).toBe('entered');
-    // The same formula, spread, and a new formula on the only computed column are accepted.
-    expect(
-      setComputedColumn(gd, tableId, range, { formula: '=Union("x", "y")', shape: 'column' }),
-    ).toBe(true);
-    handOff(gd, results);
-    expect(rowsOf(gd, tableId).map((r) => textAt(gd, tableId, r, range))).toEqual(['x', 'y']);
-  });
 });
 
 describe('SET-08 red-team round 3 regressions', () => {
@@ -437,9 +412,9 @@ describe('SET-08 red-team round 3 regressions', () => {
     const { gd, sheetId, results } = harness();
     const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 0 });
     const [b = '', c = ''] = tableById(gd, tableId)?.columns.map((x) => x.id) ?? [];
-    const formula = '=Cross(Union(C:C, "a"), "x")';
-    expect(setComputedColumn(gd, tableId, b, { formula, shape: 'column' })).toBe(true);
-    expect(setComputedColumn(gd, tableId, c, { formula, shape: 'column' })).toBe(true);
+    setTableFormula(gd, tableId, '=Cross(Union(C:C, "a"), "x")');
+    expect(setComputedColumn(gd, tableId, b, { shape: 'column' })).toBe(true);
+    expect(setComputedColumn(gd, tableId, c, { shape: 'column' })).toBe(true);
     let passes = 0;
     while (passes < 6 && handOff(gd, results) > 0) passes += 1;
     expect(passes).toBeLessThan(6);
@@ -455,9 +430,9 @@ describe('SET-08 red-team round 3 regressions', () => {
     const srcCol = src?.columns[0]?.id ?? '';
     setCellText(gd, source, s1, srcCol, 'ok');
     setCellText(gd, source, s2, srcCol, 'sad :(');
-    const formula = '=Cross(F:F, "x")';
-    setComputedColumn(gd, tableId, c0, { formula, shape: 'spread', spreadIndex: 0 });
-    setComputedColumn(gd, tableId, c1, { formula, shape: 'spread', spreadIndex: 1 });
+    setTableFormula(gd, tableId, '=Cross(F:F, "x")');
+    setComputedColumn(gd, tableId, c0, { shape: 'spread', spreadIndex: 0 });
+    setComputedColumn(gd, tableId, c1, { shape: 'spread', spreadIndex: 1 });
     handOff(gd, results);
     const sad = rowsOf(gd, tableId).find((r) => textAt(gd, tableId, r, c0) === 'sad :(') ?? '';
     expect(textAt(gd, tableId, sad, c1)).toBe('x');
@@ -468,25 +443,68 @@ describe('SET-08 red-team round 3 regressions', () => {
     expect([textAt(gd, tableId, sad, c0), textAt(gd, tableId, sad, c1)]).toEqual(['sad :(', 'x']);
   });
 
-  test('SET-10 a spread table formula can be changed column by column', () => {
+  test('SET-08 a two-column table changed in one step ends on one formula with every computed column filled', () => {
     const { gd, sheetId, results } = harness();
     const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
     const [c0 = '', c1 = '', c2 = ''] = tableById(gd, tableId)?.columns.map((x) => x.id) ?? [];
-    const f1 = '=Cross("a", "x")';
-    setComputedColumn(gd, tableId, c0, { formula: f1, shape: 'spread', spreadIndex: 0 });
-    setComputedColumn(gd, tableId, c1, { formula: f1, shape: 'spread', spreadIndex: 1 });
-    const f2 = '=Cross("b", "y")';
-    expect([
-      setComputedColumn(gd, tableId, c0, { formula: f2, shape: 'spread', spreadIndex: 0 }),
-      setComputedColumn(gd, tableId, c1, { formula: f2, shape: 'spread', spreadIndex: 1 }),
-    ]).toEqual([true, true]);
-    // A third formula on another column is still refused once the change is done.
-    expect(setComputedColumn(gd, tableId, c2, { formula: '=Union("z")', shape: 'column' })).toBe(
-      false,
-    );
+    setTableFormula(gd, tableId, '=Cross("a", "x")');
+    setComputedColumn(gd, tableId, c0, { shape: 'spread', spreadIndex: 0 });
+    setComputedColumn(gd, tableId, c1, { shape: 'spread', spreadIndex: 1 });
+    handOff(gd, results);
+    const um = createUndoManager(gd, { captureTimeout: 0 });
+    expect(setTableFormula(gd, tableId, '=Cross("b", "y")')).toBe(true);
+    // One undo step: the change is one table-level mutation, never column by column.
+    expect(um.undoStack).toHaveLength(1);
+    expect(tableById(gd, tableId)?.computedFormula).toBe('=Cross("b", "y")');
     handOff(gd, results);
     const [row = ''] = rowsOf(gd, tableId);
+    expect(rowsOf(gd, tableId)).toEqual([computedRowId(tableId, '(b, y)')]);
     expect([textAt(gd, tableId, row, c0), textAt(gd, tableId, row, c1)]).toEqual(['b', 'y']);
+    // A column made computed later takes the table's one formula, not one of its own.
+    expect(setComputedColumn(gd, tableId, c2, { shape: 'column' })).toBe(true);
+    handOff(gd, results);
+    expect(textAt(gd, tableId, row, c2)).toBe('(b, y)');
+    expect(handOff(gd, results)).toBe(0);
+  });
+
+  test('SET-08 two replicas changing the formula concurrently converge on one formula with every column filled', () => {
+    const a = harness();
+    const tableId = createTable(a.gd, {
+      sheetId: a.sheetId,
+      at: { col: 1, row: 1 },
+      columns: 2,
+      rows: 0,
+    });
+    const [c0 = '', c1 = ''] = tableById(a.gd, tableId)?.columns.map((x) => x.id) ?? [];
+    setTableFormula(a.gd, tableId, '=Cross("a", "x")');
+    setComputedColumn(a.gd, tableId, c0, { shape: 'spread', spreadIndex: 0 });
+    setComputedColumn(a.gd, tableId, c1, { shape: 'spread', spreadIndex: 1 });
+    handOff(a.gd, a.results);
+    const bDoc = new Y.Doc();
+    Y.applyUpdate(bDoc, Y.encodeStateAsUpdate(a.doc));
+    const b = harness(bDoc);
+    setTableFormula(a.gd, tableId, '=Cross("b", "y")');
+    setTableFormula(b.gd, tableId, '=Cross("c", "z")');
+    handOff(a.gd, a.results);
+    handOff(b.gd, b.results);
+    for (let i = 0; i < 4; i += 1) {
+      exchange(a.doc, b.doc);
+      handOff(a.gd, a.results);
+      handOff(b.gd, b.results);
+    }
+    exchange(a.doc, b.doc);
+    const formula = tableById(a.gd, tableId)?.computedFormula;
+    expect(['=Cross("b", "y")', '=Cross("c", "z")']).toContain(formula);
+    expect(tableById(b.gd, tableId)?.computedFormula).toBe(formula);
+    const want = formula === '=Cross("b", "y")' ? ['b', 'y'] : ['c', 'z'];
+    for (const gd of [a.gd, b.gd]) {
+      const rows = rowsOf(gd, tableId);
+      expect(rows).toEqual([computedRowId(tableId, `(${want.join(', ')})`)]);
+      const [row = ''] = rows;
+      expect([textAt(gd, tableId, row, c0), textAt(gd, tableId, row, c1)]).toEqual(want);
+    }
+    expect(handOff(a.gd, a.results)).toBe(0);
+    expect(handOff(b.gd, b.results)).toBe(0);
   });
 
   test('SET-12 a row restored after a concurrent removal goes back to its place', () => {

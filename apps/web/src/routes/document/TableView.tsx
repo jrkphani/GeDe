@@ -247,6 +247,14 @@ export const TableView = memo(function TableView({
   // One record per document change: its `rows` and `columns` keep identity between
   // renders that change nothing, so what derives from them can be memoised.
   const record = useMemo(() => tableRecord(table), [table, version]);
+  // SET-12: the words a lost row shows, from the table's one computed formula as displayed.
+  const lostSets = useMemo(
+    () =>
+      record.computedFormula === null || table.doc === null
+        ? null
+        : computedOperandsLabel(projectSource(table.doc, record.computedFormula)),
+    [table.doc, record.computedFormula],
+  );
   // SORT-01..05: the rows to render, in view order; held still while a cell here is edited.
   const projection = useTableProjection(
     table,
@@ -958,6 +966,7 @@ export const TableView = memo(function TableView({
                               }
                               outlineLocked={outlineLocked}
                               column={col}
+                              lostSets={lostSets}
                               rowMeta={rowMetaOf}
                               locale={locale}
                               undo={undo ?? null}
@@ -1409,6 +1418,8 @@ interface CellProps {
   outlineLocked: string | null;
   /** The column record, resolved once per table render; carries the column's data format (FMT-01). */
   column: ColumnRecord;
+  /** SET-12: the operands of the table's computed formula ("E × C"), or null when it has none. */
+  lostSets: string | null;
   /** The row's meta, resolved once per row render (REF-02 provenance, HIER-07 children). */
   rowMeta: RowMeta;
   locale: FormatLocale;
@@ -1584,6 +1595,7 @@ const COMPARED_CELL_PROPS = {
   outline: true,
   outlineLocked: true,
   column: true,
+  lostSets: true,
   rowMeta: true,
   locale: true,
   undo: true,
@@ -1619,6 +1631,7 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
     a.editing !== b.editing ||
     a.editable !== b.editable ||
     a.readOnly !== b.readOnly ||
+    a.lostSets !== b.lostSets ||
     a.outlineLocked !== b.outlineLocked ||
     !outlineRowsEqual(a.outline, b.outline) ||
     a.locale !== b.locale ||
@@ -1668,6 +1681,7 @@ const Cell = memo(function Cell({
   outline,
   outlineLocked,
   column,
+  lostSets,
   rowMeta: row,
   locale,
   undo,
@@ -1905,10 +1919,8 @@ const Cell = memo(function Cell({
   const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
   // SET-12: the computed cell a lost row's element left from says so in words, not by dimming alone.
   const lostLabel =
-    row.lostFrom === column.id && column.computed !== null && table.doc !== null
-      ? t('set.lost', {
-          sets: computedOperandsLabel(projectSource(table.doc, column.computed.formula)),
-        })
+    row.lostFrom === column.id && column.computed !== null && lostSets !== null
+      ? t('set.lost', { sets: lostSets })
       : null;
   // KEYS-08 (#136): the chevron names its chord, so ⌥← / ⌥→ have a route beside the command.
   const chevronControl =
