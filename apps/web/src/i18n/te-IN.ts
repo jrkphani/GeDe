@@ -118,4 +118,6 @@ export const messages: Messages = {
   'auth.code.expires.signUp': 'కోడ్‌లు 24 గంటల్లో గడువు ముగుస్తాయి',
 
   'forms.power.hint': 'a యొక్క ప్రతి ఉపసమితి',
+
+  'set.lost': 'ఇక {sets}లో లేదు',
 };

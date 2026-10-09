@@ -117,4 +117,6 @@ export const messages: Messages = {
   'auth.code.expires.signUp': 'कोड 24 घंटे में समाप्त हो जाते हैं',
 
   'forms.power.hint': 'a का हर उपसमुच्चय',
+
+  'set.lost': 'अब {sets} में नहीं',
 };

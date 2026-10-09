@@ -10,6 +10,7 @@
  *     every write path.
  *   - `observePulls(gd)` — install once per editable document.
  *   - `reconcileSplitChildren(gd, tableId, pieces)` — feed engine results.
+ *   - `reconcileComputed(gd, tableId, items)` — SET-08: feed `computedItemsOf`.
  */
 export {
   isReferenceSource,
@@ -51,6 +52,17 @@ export {
   tablesWithPulls,
 } from './pull.js';
 export {
+  COMPUTED_ORIGIN,
+  computedItemsOf,
+  computedOperandsLabel,
+  computedRowId,
+  reconcileComputed,
+  setComputedColumn,
+  tupleMembers,
+  type ComputedItems,
+} from './computed.js';
+export {
+  deterministicId,
   reconcileSplitChildren,
   SPLIT_ORIGIN,
   splitChildId,

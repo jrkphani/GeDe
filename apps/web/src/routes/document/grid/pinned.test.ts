@@ -13,6 +13,7 @@ const col = (id: string, width = 1, hidden = false) => ({
   derive: null,
   link: null,
   pull: null,
+  computed: null,
   format: 'auto' as const,
   formatOpts: {},
   appearance: {},
@@ -35,6 +36,7 @@ const table = (frozen: number, columns = [col('a'), col('b', 2), col('c')]): Tab
   look: DEFAULT_TABLE_LOOK,
   z: 0,
   pinned: false,
+  kind: 'plain',
 });
 
 describe('pinned panel (GRID-10)', () => {

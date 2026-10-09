@@ -379,6 +379,8 @@ export function readOnlyLabel(reason: ReadOnlyReason): string {
       return 'category band';
     case 'splitChild':
       return 'split child row';
+    case 'computed':
+      return 'the column is computed';
   }
 }
 

@@ -14,6 +14,7 @@ import {
 import {
   appearanceEqual,
   CAPTION_ROWS,
+  computedOperandsLabel,
   cellFormatFor,
   cellFragment,
   cellKey,
@@ -73,6 +74,7 @@ import {
 import { CellContent, layoutCell, RichCellEditor, toFormatLocale } from './cell/index.js';
 import { formatNumber } from '../../intl.js';
 import { useLocale } from '../../locale.js';
+import { useMessages } from '../../i18n/index.js';
 import {
   FormulaCell,
   insertClickedAddress,
@@ -891,6 +893,8 @@ export const TableView = memo(function TableView({
                         className={clsx('gd-table__row', {
                           'gd-table__row--lit': litRows.has(rowId),
                           'gd-table__row--banded': rowInBand,
+                          // SET-12: a row whose element left the result, kept for its typed values.
+                          'gd-table__row--lost': rowMetaOf.lostFrom !== null,
                         })}
                         role="row"
                         data-lit={litRows.has(rowId) || undefined}
@@ -1474,6 +1478,7 @@ const COLUMN_KEYS = {
   derive: true,
   link: true,
   pull: true,
+  computed: true,
   appearance: true,
   rules: true,
 } as const satisfies Record<keyof ColumnRecord, true>;
@@ -1493,6 +1498,8 @@ const ROW_META_KEYS = {
   splitChild: true,
   pulledFrom: true,
   splitOf: true,
+  computedKey: true,
+  lostFrom: true,
   outlineColumn: true,
 } as const satisfies Record<keyof RowMeta, true>;
 
@@ -1520,6 +1527,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     derive: _da,
     link: _la,
     pull: _pa,
+    computed: _ca,
     appearance: _aa,
     rules: _ra,
     ...restA
@@ -1529,6 +1537,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     derive: _db,
     link: _lb,
     pull: _pb,
+    computed: _cb,
     appearance: _ab,
     rules: _rb,
     ...restB
@@ -1538,6 +1547,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     derive: _kd,
     link: _kl,
     pull: _kp,
+    computed: _kc,
     appearance: _ka,
     rules: _kr,
     ...restKeys
@@ -1548,6 +1558,7 @@ function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
     specsEqual(a.derive, b.derive) &&
     specsEqual(a.link, b.link) &&
     specsEqual(a.pull, b.pull) &&
+    specsEqual(a.computed, b.computed) &&
     appearanceEqual(a.appearance, b.appearance) &&
     specsEqual(a.rules, b.rules)
   );
@@ -1669,6 +1680,7 @@ const Cell = memo(function Cell({
   actions,
   commands,
 }: CellProps) {
+  const t = useMessages();
   // Micro only: below it cell text is not laid out at all (DOC-05).
   const rich = tier === 'micro' ? cellRich(table, cell.rowId, cell.colId) : EMPTY_DOC;
   const source = plainText(rich);
@@ -1890,6 +1902,13 @@ const Cell = memo(function Cell({
     );
   }
   const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
+  // SET-12: the computed cell a lost row's element left from says so in words, not by dimming alone.
+  const lostLabel =
+    row.lostFrom === column.id && column.computed !== null && table.doc !== null
+      ? t('set.lost', {
+          sets: computedOperandsLabel(projectSource(table.doc, column.computed.formula)),
+        })
+      : null;
   // KEYS-08 (#136): the chevron names its chord, so ⌥← / ⌥→ have a route beside the command.
   const chevronControl =
     outline !== null && outline.hasChildren && editable
@@ -1913,7 +1932,7 @@ const Cell = memo(function Cell({
       aria-label={
         address === undefined
           ? undefined
-          : `${address}${text === '' ? '' : `, ${text}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
+          : `${address}${text === '' ? '' : `, ${text}`}${lostLabel === null ? '' : `, ${lostLabel}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
       }
       aria-keyshortcuts={
         outline === null || !editable
@@ -2023,6 +2042,11 @@ const Cell = memo(function Cell({
         tier === 'micro' && (
           <CellContent content={rich} layout={layout} format={format} locale={locale} />
         )
+      )}
+      {lostLabel !== null && (
+        <span className="gd-cell__lost" aria-hidden="true">
+          {lostLabel}
+        </span>
       )}
       {readOnly !== null && (
         <span className="gd-cell__lock" aria-hidden="true">

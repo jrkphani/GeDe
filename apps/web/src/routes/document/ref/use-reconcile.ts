@@ -1,5 +1,5 @@
 /**
- * Keeps pulls (REF-02) and `Split()` children (HIER-07) reconciled while a
+ * Keeps pulls (REF-02), `Split()` children (HIER-07) and computed rows (SET-08) reconciled while a
  * document is open for editing. One installation per document, reference-
  * counted by the tables that mount it; a read-only session (phone, viewer)
  * installs nothing — the replica that can write reconciles for both, and
@@ -13,8 +13,10 @@
 import { useEffect } from 'react';
 import type * as Y from 'yjs';
 import {
+  computedItemsOf,
   observePulls,
   openDocument,
+  reconcileComputed,
   reconcileFilteredPulls,
   reconcileSplitChildren,
   splitPiecesOf,
@@ -45,6 +47,10 @@ function install(doc: Y.Doc): () => void {
     try {
       for (const [tableId, pieces] of splitPiecesOf(gd, (id) => host.result(id))) {
         reconcileSplitChildren(gd, tableId, pieces);
+      }
+      // SET-08: a computed column's formula, evaluated once in the Worker, fills its table's rows.
+      for (const { tableId, items } of computedItemsOf(gd, (id) => host.result(id))) {
+        reconcileComputed(gd, tableId, items);
       }
       // Results moved: a filtered pull over engine-backed cells may admit different rows now.
       reconcileFilteredPulls(gd, { cellValue });

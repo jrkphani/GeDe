@@ -114,7 +114,22 @@ export interface SheetRecord {
  * typing; the derive, link and pull features set the others when they bind a
  * column, and the grid renders those cells locked.
  */
-export type ColumnSource = 'entered' | 'derived' | 'linked' | 'pulled';
+export type ColumnSource = 'entered' | 'derived' | 'linked' | 'pulled' | 'computed';
+
+/**
+ * A computed column (SET-08, ADR-056): one set formula fills the table's
+ * rows, one per result element (`ref/computed.ts`). In `spread` shape a
+ * product writes one column per operand; those columns share the formula
+ * and each holds the tuple member at its `spreadIndex` (SET-09).
+ */
+export interface ComputedSpec {
+  readonly formula: string;
+  readonly shape: 'column' | 'spread';
+  readonly spreadIndex?: number;
+}
+
+/** What a table is (SET-01). Absent reads `plain`, so documents written before ADR-056 read unchanged. */
+export type TableKind = 'plain' | 'simple' | 'family' | 'computed' | 'product';
 
 /**
  * A derived column (REF-04): `@Source.Method(args)` applied to every row's
@@ -187,6 +202,8 @@ export interface ColumnRecord {
   readonly link: LinkSpec | null;
   /** Set when `source` is `pulled` (REF-02). */
   readonly pull: PullSpec | null;
+  /** Set when `source` is `computed` (SET-08). */
+  readonly computed: ComputedSpec | null;
   /** Data format every cell in the column inherits (FMT-01, FMT-06). Missing key → `auto`. */
   readonly format: FormatKind;
   /** Options for `format` (decimals, currency, date pattern, text case). */
@@ -236,6 +253,18 @@ export interface RowMeta {
   /** Which parent and piece a `Split()` child came from (HIER-07 provenance); null otherwise. */
   readonly splitOf: SplitOf | null;
   /**
+   * The result element or tuple a computed table's row stands for (SET-08):
+   * its canonical text (FX-09 spelling, NFC). Provenance, like `splitOf`;
+   * null on a row a person added.
+   */
+  readonly computedKey: string | null;
+  /**
+   * Set while the row's key is no longer in the result but the row holds
+   * typed values (SET-12): the id of the computed column it left. The label
+   * is rendered from that column's formula, never stored.
+   */
+  readonly lostFrom: Id | null;
+  /**
    * The column this row's outline — indentation, ↳ and the chevron — is drawn
    * in (ADR-052): the column of the cell that was selected when the row was
    * nested. Null falls back to the table's `outlineColumnId`. Presentation
@@ -274,6 +303,8 @@ export interface TableRecord {
   readonly z: number;
   /** Pinned to the viewport (INSP-07, PRD §10): sticks at the screen edge while the sheet pans. */
   readonly pinned: boolean;
+  /** SET-01: the kind chosen at Add table; `plain` when absent. */
+  readonly kind: TableKind;
 }
 
 /** The two halves of a graph pair (GRAPH-01, GRAPH-02). */
@@ -429,7 +460,34 @@ export function rowMetaMap(table: TableMap): Y.Map<RowMetaMap> {
   return map;
 }
 
-const COLUMN_SOURCES: readonly ColumnSource[] = ['entered', 'derived', 'linked', 'pulled'];
+const COLUMN_SOURCES: readonly ColumnSource[] = [
+  'entered',
+  'derived',
+  'linked',
+  'pulled',
+  'computed',
+];
+const TABLE_KINDS: readonly TableKind[] = ['plain', 'simple', 'family', 'computed', 'product'];
+
+export function readTableKind(value: unknown): TableKind {
+  return typeof value === 'string' && (TABLE_KINDS as readonly string[]).includes(value)
+    ? (value as TableKind)
+    : 'plain';
+}
+
+/** The `computed` spec on a column map, or null when absent or malformed (a newer client's shape). */
+export function readComputedSpec(value: unknown): ComputedSpec | null {
+  if (!isRecord(value)) return null;
+  const { formula, shape, spreadIndex } = value;
+  if (typeof formula !== 'string' || formula === '') return null;
+  if (shape === 'spread') {
+    if (typeof spreadIndex !== 'number' || !Number.isInteger(spreadIndex) || spreadIndex < 0) {
+      return null;
+    }
+    return { formula, shape, spreadIndex };
+  }
+  return { formula, shape: 'column' };
+}
 
 export function readColumnSource(map: ColumnMap): ColumnSource {
   const v = map.get('source');
@@ -517,6 +575,7 @@ export function columnRecord(map: ColumnMap): ColumnRecord {
     derive: source === 'derived' ? readDeriveSpec(map.get('derive')) : null,
     link: source === 'linked' ? readLinkSpec(map.get('link')) : null,
     pull: source === 'pulled' ? readPullSpec(map.get('pull')) : null,
+    computed: source === 'computed' ? readComputedSpec(map.get('computed')) : null,
     format: isFormatKind(format) ? format : 'auto',
     formatOpts: readFormatOpts(map.get('formatOpts')),
     appearance: readAppearance(map.get('appearance')),
@@ -586,6 +645,7 @@ export function tableRecord(map: TableMap): TableRecord {
     look: tableLook(map),
     z: Math.round(readNumber(map, 'z', 0)),
     pinned: readBoolean(map, 'pinned', false),
+    kind: readTableKind(map.get('kind')),
   };
 }
 
@@ -740,6 +800,8 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
       splitChild: false,
       pulledFrom: null,
       splitOf: null,
+      computedKey: null,
+      lostFrom: null,
       outlineColumn: null,
     };
   }
@@ -762,8 +824,14 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
     splitChild: readBoolean(meta, 'splitChild', false),
     pulledFrom: readPulledFrom(meta.get('pulledFrom')),
     splitOf: readSplitOf(meta.get('splitOf')),
+    computedKey: readNullableString(meta.get('computedKey')),
+    lostFrom: readNullableString(meta.get('lostFrom')),
     outlineColumn: readOutlineColumn(meta.get('outlineColumn')),
   };
+}
+
+function readNullableString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 /** ADR-052: a stored column id, or null; anything else stored reads as unset. */

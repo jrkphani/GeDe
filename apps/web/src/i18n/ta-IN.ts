@@ -122,4 +122,6 @@ export const messages: Messages = {
   'auth.code.expires.signUp': 'குறியீடுகள் 24 மணி நேரத்தில் காலாவதியாகும்',
 
   'forms.power.hint': 'a-இன் ஒவ்வொரு உட்கணமும்',
+
+  'set.lost': '{sets}-இல் இனி இல்லை',
 };

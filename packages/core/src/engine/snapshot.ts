@@ -75,6 +75,7 @@ export function tableStructure(table: TableMap): TableStructure {
       label: c.label,
       width: c.hidden ? 0 : c.width,
       ...(c.derive === null ? {} : { derive: c.derive }),
+      ...(c.computed === null ? {} : { computed: c.computed }),
       format: columnFormat(c),
     })),
     rows: record.rows,

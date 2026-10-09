@@ -663,6 +663,17 @@
   color: var(--ink-muted);
 }
 
+/* ---- lost computed rows (SET-12): dimmed, and the computed cell names what the row left */
+.gd-table__row--lost .gd-cell {
+  color: var(--ink-muted);
+}
+.gd-cell__lost {
+  flex: none;
+  padding-left: var(--space-1);
+  font-style: italic;
+  white-space: nowrap;
+}
+
 /* ---- wrap and clip (GRID-09, ADR-049, #167 criteria 11–14) ----------------
    A wrapped cell lays its text on as many lines as the row holds; an unwrapped one keeps one
    line per paragraph and clips hard at the cell's content box, as Numbers does — no ellipsis,

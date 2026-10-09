@@ -20,6 +20,7 @@ import {
   openDocument,
   rowMeta,
   setCellText,
+  setComputedColumn,
   setPull,
   tableById,
   tableMap,
@@ -466,5 +467,49 @@ describe('HIER-07 Split children', () => {
     await waitFor(() => {
       expect(tableById(gd, notes)!.rows).toEqual(n.rows);
     });
+  });
+});
+
+describe('SET-08 computed columns', () => {
+  it('SET-08 SET-12 computed rows render read-only; a lost row with a note stays dimmed and says what it left', async () => {
+    const sets = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      columns: 2,
+      rows: 0,
+      title: 'Sets',
+    });
+    const [range, note] = tableById(gd, sets)!.columns;
+    render(<Mount gd={gd} tableId={sets} />);
+    act(() => {
+      setComputedColumn(gd, sets, range!.id, { formula: '=Union("a, b", "c")', shape: 'column' });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(3);
+    });
+    const [, b] = tableById(gd, sets)!.rows;
+    await waitFor(() => {
+      const cells = cellsOf('Sets');
+      expect(cells[0]).toHaveTextContent('a');
+      expect(cells[0]).toHaveAttribute('data-read-only', 'computed');
+      expect(cells[0]).toHaveAccessibleName(/the column is computed/u);
+      expect(cells[1]).not.toHaveAttribute('data-read-only');
+    });
+    act(() => {
+      setCellText(gd, sets, b!, note!.id, 'keep me');
+      setComputedColumn(gd, sets, range!.id, { formula: '=Union("a", "c")', shape: 'column' });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range!.id);
+    });
+    await waitFor(() => {
+      const row = gridOf('Sets').querySelector(`[data-row-id="${b!}"][role="row"]`)!;
+      expect(row).toHaveClass('gd-table__row--lost');
+      expect(within(row as HTMLElement).getByText('no longer in "a" ∪ "c"')).toBeInTheDocument();
+      expect(within(row as HTMLElement).getByText('keep me')).toBeInTheDocument();
+    });
+    expect(tableById(gd, sets)!.rows).toHaveLength(3);
   });
 });

@@ -35,6 +35,7 @@ import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { cellMayRelabel } from './entities.js';
 import { cellsInColumnOn, entityKey, positionKey, type SheetIndex } from './sheet-index.js';
 import {
+  computedFormulaKey,
   workbookCellId,
   type CellError,
   type CellResult,
@@ -418,6 +419,12 @@ export class FormulaEngine {
           cellKey(rowId, column.id),
           derivedCellSource(structure.id, rowId, column.derive),
         );
+      }
+    }
+    // SET-08: a computed column's formula is one synthetic cell, evaluated once per column.
+    for (const column of structure.columns) {
+      if (column.computed !== undefined) {
+        wanted.set(computedFormulaKey(column.id), column.computed.formula);
       }
     }
     table.derivedColumns = derivedColumns;

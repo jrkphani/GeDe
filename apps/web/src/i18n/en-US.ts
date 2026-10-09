@@ -150,4 +150,8 @@ export const messages = {
 
   // FX-10: the forms-menu hint beside Power(a); `a` is the typed argument name.
   'forms.power.hint': 'every subset of a',
+
+  // SET-12: beside a computed row whose element left the result; `{sets}` is the formula's
+  // operands as `computedOperandsLabel` reads them ("E × C").
+  'set.lost': 'no longer in {sets}',
 } as const;
