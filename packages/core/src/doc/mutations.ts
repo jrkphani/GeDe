@@ -390,14 +390,16 @@ function deleteCells(table: TableMap, predicate: (key: string) => boolean): void
 /**
  * Delete a row with its cells and meta; the rows below recompute their
  * addresses (GRID-02). Returns false when the row is not in the table — a
- * concurrent delete already removed it, which is not an error.
+ * concurrent delete already removed it, which is not an error. A computed
+ * row (one with a `computedKey`, lost or not) is refused: it is the formula's,
+ * and changing the formula is how it goes (SET-08, ADR-056 ruling c).
  */
 export function deleteRow(gd: GedeDoc, tableId: Id, rowId: Id): boolean {
   return transact(gd, () => {
     const table = requireTable(gd, tableId);
     const rows = rowsArray(table);
     const index = rows.toArray().indexOf(rowId);
-    if (index < 0) return false;
+    if (index < 0 || rowMeta(table, rowId).computedKey !== null) return false;
     rows.delete(index, 1);
     rowMetaMap(table).delete(rowId);
     deleteCells(table, (key) => key.startsWith(`${rowId}:`));

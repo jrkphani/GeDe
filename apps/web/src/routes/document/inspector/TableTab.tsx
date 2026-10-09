@@ -23,6 +23,7 @@ import {
   columnRenameReason,
   EMPTY_COLUMN_NAME_REASON,
   EMPTY_TABLE_TITLE_REASON,
+  rowDeleteReason,
   type GridCommands,
 } from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
@@ -63,6 +64,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
   const columns = record.columns.length;
   const visibleWidth = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);
   const lastRow = record.rows[rows - 1];
+  const lastRowReason = lastRow === undefined ? undefined : rowDeleteReason(gd, record.id, lastRow);
   const lastColumn = record.columns[columns - 1];
   const { look } = record;
   // Fit-to-content measures with canvas `measureText`; where no 2D context exists the
@@ -259,9 +261,9 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             label="Rows"
             unit="rows"
             value={rows}
-            min={1}
+            min={lastRowReason === undefined ? 1 : rows}
             disabledReason={viewOnly}
-            decrementReason="a table keeps at least one row"
+            decrementReason={lastRowReason ?? 'a table keeps at least one row'}
             onChange={(next) => {
               if (next > rows) commands.insertRowBelow(record.id);
               else if (lastRow !== undefined) commands.deleteRow(record.id, lastRow);
