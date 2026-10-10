@@ -201,8 +201,7 @@ function snapUnits(at: LatticeUnits): LatticeUnits {
 }
 
 /** A prelim column map cannot be read back until integrated, so the id is returned alongside it. */
-export function newColumn(label: string): { id: Id; map: ColumnMap } {
-  const id = newId();
+export function newColumn(label: string, id: Id = newId()): { id: Id; map: ColumnMap } {
   const map: ColumnMap = new Y.Map<unknown>();
   map.set('id', id);
   map.set('label', label);
@@ -359,11 +358,16 @@ export function addColumn(
     label?: string | undefined;
     afterColId?: Id | undefined;
     beforeColId?: Id | undefined;
+    /** A deterministic id, so two replicas adding the same column name it alike (SET-09). */
+    id?: Id | undefined;
   } = {},
 ): Id {
   return transact(gd, () => {
     const columns = columnsArray(requireTable(gd, tableId));
-    const { id, map: column } = newColumn(options.label ?? `Column ${String(columns.length + 1)}`);
+    const { id, map: column } = newColumn(
+      options.label ?? `Column ${String(columns.length + 1)}`,
+      options.id,
+    );
     let index = columns.length;
     if (options.beforeColId !== undefined) {
       const before = columnIndexOf(columns, options.beforeColId);

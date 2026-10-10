@@ -19,6 +19,7 @@ import {
   hideColumn,
   isGraphDimensionCandidate,
   openDocument,
+  reconcileComputed,
   rowMeta,
   setCellText,
   setComputedColumn,
@@ -33,7 +34,7 @@ import {
 } from '@gede/core';
 
 import { LiveRegion } from '../../../announce.js';
-import { engineFor } from '../../../doc/engine.js';
+import { engineFor, inlineTransport, setEngineTransportForTests } from '../../../doc/engine.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
 import { resetLocaleForTests, setLocale } from '../../../locale.js';
 import { useYVersion } from '../../../doc/use-y.js';
@@ -697,5 +698,110 @@ describe('SET-08 computed columns', () => {
       expect(tableById(gd, sets)!.rows).toContain(b);
       expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range!.id);
     });
+  });
+
+  /** A table `Sets` filled by `=Union("a", "b")` in its first column, with a note column. */
+  async function unionTable() {
+    const sets = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      columns: 2,
+      rows: 0,
+      title: 'Sets',
+    });
+    const [range, note] = tableById(gd, sets)!.columns;
+    render(<Mount gd={gd} tableId={sets} />);
+    act(() => {
+      setTableFormula(gd, sets, '=Union("a", "b")');
+      setComputedColumn(gd, sets, range!.id, { shape: 'column' });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(2);
+    });
+    return { sets, range: range!.id, note: note!.id };
+  }
+
+  it('SET-12 a lost row leaves once its typed value is cleared in the app', async () => {
+    const { sets, range, note } = await unionTable();
+    const [a, b] = tableById(gd, sets)!.rows;
+    act(() => {
+      setCellText(gd, sets, b!, note, 'kept');
+      setTableFormula(gd, sets, '=Union("a", "")');
+    });
+    await settled();
+    await waitFor(() => {
+      expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range);
+    });
+    // Clearing a note is a plain entered cell: the engine answers nothing for it.
+    act(() => {
+      setCellText(gd, sets, b!, note, '');
+    });
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toEqual([a]);
+    });
+  });
+
+  it('SET-08 a remote formula change is not reverted by a reconcile against the stale result', async () => {
+    // A labelled fake: the real inline engine, answering 40 ms late as a Worker may.
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        post: (request) => {
+          setTimeout(() => {
+            inner.post(request);
+          }, 40);
+        },
+      };
+    });
+    try {
+      const { sets } = await unionTable();
+      const peer = openDocument(new Y.Doc());
+      Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+      setTableFormula(peer, sets, '=Union("a", "c")');
+      reconcileComputed(peer, sets, ['a', 'c']);
+      const peerRows = tableById(peer, sets)!.rows;
+      let staleWrites = 0;
+      gd.doc.on('update', (_u: Uint8Array, origin: unknown) => {
+        if (origin === 'ref-computed') staleWrites += 1;
+      });
+      act(() => {
+        Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+      });
+      await act(() => new Promise((r) => setTimeout(r, 5)));
+      expect({ rows: tableById(gd, sets)!.rows, staleWrites }).toEqual({
+        rows: peerRows,
+        staleWrites: 0,
+      });
+      await settled();
+      await act(() => new Promise((r) => setTimeout(r, 60)));
+      expect(tableById(gd, sets)!.rows).toEqual(peerRows);
+    } finally {
+      setEngineTransportForTests(null);
+    }
+  });
+
+  it('SET-12 a lost row is not dimmed without its words when the table has no formula', async () => {
+    const { sets, range, note } = await unionTable();
+    const [, b] = tableById(gd, sets)!.rows;
+    act(() => {
+      setCellText(gd, sets, b!, note, 'kept');
+      setTableFormula(gd, sets, '=Union("a", "")');
+    });
+    await settled();
+    await waitFor(() => {
+      expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range);
+    });
+    // A computed column whose table holds no formula (as a document may arrive).
+    act(() => {
+      tableMap(gd, sets)!.delete('computedFormula');
+    });
+    await waitFor(() => {
+      const row = gridOf('Sets').querySelector(`[data-row-id="${b!}"][role="row"]`)!;
+      expect(row).not.toHaveClass('gd-table__row--lost');
+      expect(within(row as HTMLElement).getByText('kept')).toBeInTheDocument();
+    });
+    expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range);
   });
 });

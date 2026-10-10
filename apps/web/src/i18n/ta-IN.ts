@@ -125,6 +125,7 @@ export const messages: Messages = {
 
   'set.lost': '{sets}-இல் இனி இல்லை',
   'set.readOnly.computed': 'இந்த நெடுவரிசை கணக்கிடப்படுகிறது',
+  'set.rowComputed': 'இந்த வரிசை கணக்கிடப்படுகிறது',
   'cell.readOnly': 'படிக்க மட்டும்: {reason}',
   'cell.readOnly.announce': '{cell} படிக்க மட்டும்: {reason}',
   'cell.readOnly.announceUnaddressed': 'இந்தக் கலம் படிக்க மட்டும்: {reason}',

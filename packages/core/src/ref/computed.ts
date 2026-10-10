@@ -139,11 +139,18 @@ export function setTableFormula(gd: GedeDoc, tableId: Id, formula: string): bool
   return true;
 }
 
-/** The number of sets a top-level `Cross` multiplies, or null for any other formula. */
+/**
+ * The number of sets a top-level `Cross` multiplies, or null for any other formula — and
+ * for a `Cross` of the wrong arity (fewer than two sets), which evaluates to an error and
+ * so reconciles nothing (SPEC §2.4): the spread is not re-fitted to it.
+ */
 function spreadWidth(formula: string | null): number | null {
   if (formula === null) return null;
   const parsed = parse(formula);
-  return parsed.ok && parsed.value.kind === 'call' && parsed.value.name === 'Cross'
+  return parsed.ok &&
+    parsed.value.kind === 'call' &&
+    parsed.value.name === 'Cross' &&
+    parsed.value.args.length >= 2
     ? parsed.value.args.length
     : null;
 }
@@ -156,34 +163,39 @@ function spreadColumns(table: TableMap): (ColumnRecord & { computed: ComputedSpe
 /**
  * SET-09 ruling (b): a spread table has one member column per set of its `Cross`. A
  * member past the width, or a second column for the same member (two replicas growing
- * the spread at once), goes; with `add`, a missing member is added after the last one,
- * in the spread's Fill step. Typed neighbour columns are never touched. Returns writes.
+ * the spread at once), goes; a missing member is added after the last one, in the
+ * spread's Fill step, under an id derived from that step and its index, so replicas
+ * adding the same member at once (or a merge of a widen with a narrow) converge on one
+ * column. Typed neighbour columns are never touched. Returns writes.
  */
-function refitSpread(
-  gd: GedeDoc,
-  tableId: Id,
-  table: TableMap,
-  width: number | null,
-  add = true,
-): number {
+function refitSpread(gd: GedeDoc, tableId: Id, table: TableMap, width: number | null): number {
   const spread = spreadColumns(table);
   if (spread.length === 0 || width === null) return 0;
   let writes = 0;
-  const kept = new Set<number>();
+  /** Member index → the column kept for it. */
+  const kept = new Map<number, Id>();
   for (const c of spread) {
     const index = c.computed.spreadIndex ?? 0;
-    if (index < width && !kept.has(index)) kept.add(index);
+    if (index < width && !kept.has(index)) kept.set(index, c.id);
     else writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
   }
-  if (!add) return writes;
   const fill = spread[0]?.computed.fill ?? newId();
-  let after = spread.filter((c) => kept.has(c.computed.spreadIndex ?? 0)).at(-1)?.id;
   for (let index = 0; index < width; index += 1) {
     if (kept.has(index)) continue;
-    after = addColumn(gd, tableId, { label: `x${String(index + 1)}`, afterColId: after });
+    // Beside its neighbouring member, so member order is column order whatever merged.
+    const below = [...kept.keys()].filter((i) => i < index);
+    const above = [...kept.keys()].filter((i) => i > index);
+    const id = addColumn(gd, tableId, {
+      label: `x${String(index + 1)}`,
+      afterColId: below.length > 0 ? kept.get(Math.max(...below)) : undefined,
+      beforeColId:
+        below.length === 0 && above.length > 0 ? kept.get(Math.min(...above)) : undefined,
+      id: deterministicId(`${tableId}\u0000${fill}\u0000${String(index)}`),
+    });
+    kept.set(index, id);
     const map = columnsArray(table)
       .toArray()
-      .find((c) => readString(c, 'id') === after);
+      .find((c) => readString(c, 'id') === id);
     map?.set('source', 'computed');
     map?.set('computed', { shape: 'spread', spreadIndex: index, fill });
     writes += 1;
@@ -407,8 +419,9 @@ export function reconcileComputed(
         writes += 1;
       }
     }
-    // SET-09 after a merge: two replicas re-fitting the spread at once leave a member twice.
-    writes += refitSpread(gd, tableId, table, spreadWidth(record.computedFormula), false);
+    // SET-09 after a merge: two replicas re-fitting the spread at once leave a member twice,
+    // or (a widen merged with a narrow) none at all.
+    writes += refitSpread(gd, tableId, table, spreadWidth(record.computedFormula));
     if (writes > 0) record = tableRecord(table);
     const [driver] = computedColumns(record.columns);
 
@@ -452,8 +465,11 @@ export function reconcileComputed(
       }
     }
 
-    // No result to fill from: the rows stay as they are (SPEC §2.4).
+    // No result to fill from: the rows stay as they are (SPEC §2.4), except a lost row
+    // whose typed values were cleared, which leaves (SET-12): its key left the result
+    // already, and a key that returns brings it back under the same id.
     if (driver !== undefined && result === null) {
+      removeWhere((id) => metas.get(id)?.has('lostFrom') === true && !typed(id));
       writes += editor.writes;
       return;
     }

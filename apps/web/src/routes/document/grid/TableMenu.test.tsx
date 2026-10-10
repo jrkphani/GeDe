@@ -18,10 +18,11 @@ import {
 import { TooltipProvider } from '@gede/ui';
 
 import { engineFor } from '../../../doc/engine.js';
+import { resetLocaleForTests, setLocale } from '../../../locale.js';
 import { TableTab } from '../inspector/TableTab.js';
 import { cellMenuEntries, type MenuContext } from '../menus/entries.js';
 
-import { createGridCommands, type GridCommands } from './commands.js';
+import { createGridCommands, rowDeleteReason, type GridCommands } from './commands.js';
 import { frozenOptions, TableMenu } from './TableMenu.js';
 
 let gd: GedeDoc;
@@ -96,6 +97,14 @@ describe('SET-08 ruling (c): a computed row cannot be deleted', () => {
 
     expect(commands.deleteRow(sets, last!)).toBe(false);
     expect(tableById(gd, sets)!.rows).toHaveLength(2);
+
+    // The reason is in the active locale, as the cell's read-only reason is.
+    setLocale('ta-IN');
+    try {
+      expect(rowDeleteReason(gd, sets, first!)).toBe('இந்த வரிசை கணக்கிடப்படுகிறது');
+    } finally {
+      resetLocaleForTests();
+    }
   });
 });
 

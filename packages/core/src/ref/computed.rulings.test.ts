@@ -306,3 +306,99 @@ describe('SET-09 ruling (b): spread columns re-fit to the formula', () => {
     });
   }
 });
+
+/** A table whose first `members` columns spread `formula`, plus `notes` typed columns. */
+function spreadTable(a: Replica, formula = '=Cross("x", "1")', members = 2, notes = 0) {
+  const sheetId = createSheet(a.gd);
+  const tableId = createTable(a.gd, {
+    sheetId,
+    at: { col: 1, row: 1 },
+    columns: members + notes,
+    rows: 0,
+  });
+  const ids = tableById(a.gd, tableId)?.columns.map((c) => c.id) ?? [];
+  expect(setTableFormula(a.gd, tableId, formula)).toBe(true);
+  ids.slice(0, members).forEach((id, spreadIndex) => {
+    expect(setComputedColumn(a.gd, tableId, id, { shape: 'spread', spreadIndex })).toBe(true);
+  });
+  handOff(a);
+  return { tableId, ids };
+}
+
+const spreadIdx = (gd: GedeDoc, tableId: Id) =>
+  (tableById(gd, tableId)?.columns ?? [])
+    .filter((c) => c.computed?.shape === 'spread')
+    .map((c) => c.computed?.spreadIndex);
+
+describe('SET-09 a Cross of the wrong arity reconciles nothing', () => {
+  test('SET-09 an intermediate =Cross() keeps the spread columns and the rows', () => {
+    const a = replica(1);
+    const { tableId, ids } = spreadTable(a);
+    const before = rowsOf(a.gd, tableId);
+    expect(before).toHaveLength(1);
+    for (const f of ['=Cross()', '=Cross("x")']) {
+      expect(setTableFormula(a.gd, tableId, f)).toBe(true);
+      handOff(a);
+      expect(spreadIdx(a.gd, tableId)).toEqual([0, 1]);
+      expect(tableById(a.gd, tableId)?.columns.map((c) => c.id)).toEqual(ids);
+      expect(rowsOf(a.gd, tableId)).toEqual(before);
+    }
+    expect(setTableFormula(a.gd, tableId, '=Cross("x", "1")')).toBe(true);
+    handOff(a);
+    expect(spreadIdx(a.gd, tableId)).toEqual([0, 1]);
+    expect(rowsOf(a.gd, tableId)).toEqual(before);
+  });
+
+  test('SET-11 a note beside a tuple keeps its key through a transient =Cross()', () => {
+    const a = replica(1);
+    const { tableId, ids } = spreadTable(a, '=Cross("x, y", "1")', 2, 1);
+    const tuple = computedRowId(tableId, '(y, 1)');
+    setCellText(a.gd, tableId, tuple, ids[2] ?? '', 'n');
+    setTableFormula(a.gd, tableId, '=Cross()');
+    handOff(a);
+    setTableFormula(a.gd, tableId, '=Cross("x, y", "1")');
+    handOff(a);
+    expect(rowMeta(tableMap(a.gd, tableId)!, tuple).computedKey).toBe('(y, 1)');
+    expect(textAt(a.gd, tableId, tuple, ids[2] ?? '')).toBe('n');
+  });
+});
+
+describe('SET-12 a lost row leaves once its typed value is cleared, with no result to hand', () => {
+  test('SET-12 a soundness pass (no items) removes an untyped lost row', () => {
+    const a = replica(1);
+    const { tableId, notes } = setUp(a);
+    const rowB = computedRowId(tableId, 'b');
+    setCellText(a.gd, tableId, rowB, notes, 'kept');
+    setTableFormula(a.gd, tableId, '=Union("a", "")');
+    handOff(a);
+    expect(rowMeta(tableMap(a.gd, tableId)!, rowB).lostFrom).not.toBeNull();
+    setCellText(a.gd, tableId, rowB, notes, '');
+    reconcileComputed(a.gd, tableId, null);
+    expect(rowsOf(a.gd, tableId)).toEqual([computedRowId(tableId, 'a')]);
+  });
+});
+
+describe('SET-09 concurrent widen and narrow of a spread', () => {
+  for (const [ca, cb] of ORDERS) {
+    const order = `(clients ${String(ca)},${String(cb)})`;
+    test(`SET-09 a 3-set spread narrowed to 2 on one replica and widened to 4 on the other converges whole ${order}`, () => {
+      const a = replica(ca);
+      const { tableId } = spreadTable(a, '=Cross("x", "1", "p")', 3);
+      const b = replica(cb);
+      send(a.doc, b.doc);
+      setTableFormula(a.gd, tableId, '=Cross("x", "1", "p", "z")');
+      setTableFormula(b.gd, tableId, '=Cross("x", "1")');
+      settle(a, b);
+      const f = tableById(a.gd, tableId)?.computedFormula ?? '';
+      const width = f === '=Cross("x", "1")' ? 2 : 4;
+      for (const r of [a, b]) {
+        expect(tableById(r.gd, tableId)?.computedFormula).toBe(f);
+        expect(spreadIdx(r.gd, tableId)).toEqual(Array.from({ length: width }, (_, i) => i));
+        expect(handOff(r)).toBe(0);
+      }
+      expect(tableById(a.gd, tableId)?.columns.map((c) => c.id)).toEqual(
+        tableById(b.gd, tableId)?.columns.map((c) => c.id),
+      );
+    });
+  }
+});
