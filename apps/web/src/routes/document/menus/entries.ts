@@ -29,6 +29,7 @@ import type { MenuEntry } from '@gede/ui';
 
 import { peekEngine } from '../../../doc/engine.js';
 import { LABELS } from '../../../doc/shortcuts.js';
+import { translate } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GraphsActions } from '../graph/use-graphs.js';
@@ -37,6 +38,7 @@ import type { RenameTarget } from '../grid/rename.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { RENAME_KEYS, SHEET_KEYS } from '../keys/shortcut-map.js';
 import { TRACKED } from '../inspector/controls.js';
+import { fillColumnReason } from '../sets/set-tables.js';
 import { LAST_SHEET_REASON } from '../sheets.js';
 import {
   canMeasure,
@@ -110,6 +112,8 @@ export interface MenuContext {
    * its graph pairs go as one undo step; the shell moves focus afterwards.
    */
   deleteTable?: ((tableId: Id) => void) | undefined;
+  /** SET-10: open Fill column with formula… on a column. Absent where nothing can be written. */
+  fillColumn?: ((tableId: Id, colId: Id) => void) | undefined;
   /** ADR-047: the graph menu's commands (the Graph tab is their home). */
   graphs?: Pick<GraphsActions, 'select' | 'remove' | 'removeHalf' | 'setCollapsed'> | undefined;
   slots?: MenuSlots | undefined;
@@ -711,6 +715,18 @@ export function columnMenuEntries(
         viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY : columnRenameReason(column)),
       onSelect: () => {
         ctx.rename?.({ kind: 'column', tableId, colId });
+      },
+    },
+    {
+      // SET-10 / MENU-03 (ADR-056): the one route to a computed column, on an empty column.
+      kind: 'item',
+      id: 'col-fill',
+      label: translate(activeLocale(), 'fill.menu'),
+      disabledReason:
+        viewOnly ??
+        (ctx.fillColumn === undefined ? VIEW_ONLY : fillColumnReason(gd, tableId, colId)),
+      onSelect: () => {
+        ctx.fillColumn?.(tableId, colId);
       },
     },
     sep('s-delete'),

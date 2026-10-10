@@ -1,0 +1,75 @@
+/* SET-01, SET-10: Add table's kind picker and the operand picker (ADR-056). Tokens only. */
+.gd-add-table.gd-dialog--modal {
+  width: min(calc(100vw - var(--space-6)), 40rem);
+}
+
+.gd-set-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.gd-set-picker__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.gd-set-picker__legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.gd-set-picker__sets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gd-set-picker__set {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.gd-set-picker__index {
+  flex: none;
+  min-width: 2rem;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+
+.gd-set-picker__select {
+  flex: 1;
+  min-width: 0;
+}
+
+.gd-set-picker__note,
+.gd-set-picker__empty {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+.gd-set-picker__formula {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.gd-set-picker__formula-label {
+  color: var(--ink-muted);
+}
