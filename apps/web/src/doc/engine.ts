@@ -73,6 +73,11 @@ export interface EngineHost {
   readonly version: number;
   /** Resolves once every change posted so far has been answered. */
   settled(): Promise<void>;
+  /**
+   * A change posted is still unanswered, so a cached result may predate the document
+   * (read inside a `subscribeAll` callback, the batch being delivered is already answered).
+   */
+  readonly busy: boolean;
   /** Engine time of the last batch, for the §20 budget in devtools. */
   readonly lastElapsedMs: number;
   dispose(): void;
@@ -199,6 +204,8 @@ export function createEngineHost(
       return;
     }
     lastElapsedMs = response.elapsedMs;
+    // Answered before listeners run, so `busy` there means a later request is outstanding.
+    pending.delete(response.seq);
     const touched: WorkbookCellId[] = [];
     const now = Date.now();
     for (const id of response.removed) {
@@ -215,7 +222,6 @@ export function createEngineHost(
       for (const id of touched) notify(id);
       for (const cb of allListeners) cb(touched);
     }
-    pending.delete(response.seq);
     if (pending.size === 0) for (const resolve of settleWaiters.splice(0)) resolve();
   };
 
@@ -335,6 +341,9 @@ export function createEngineHost(
     },
     get lastElapsedMs() {
       return lastElapsedMs;
+    },
+    get busy() {
+      return pending.size > 0;
     },
     settled: () =>
       pending.size === 0

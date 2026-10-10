@@ -12,12 +12,15 @@
  * sound after every other update, remote or local (ADR-056 ruling d): a merge
  * can refuse a Fill, return a removed noted row or leave a row twice, and a
  * cleared note lets a lost row go (SET-12), with no result changing. That pass
- * hands off no items: the cached result may still be the previous formula's (a
- * Worker answers later), so removing and labelling rows by it would revert a
- * peer's formula change; only a result batch fills rows.
+ * hands off no items and runs only for the tables a transaction touched. Rows
+ * are filled only from a result batch answered while nothing else is
+ * outstanding: a Worker answers in order, so while a later request is pending
+ * any table's cached result may still be the previous formula's (or the
+ * previous operands'), and filling from it would revert a peer's change and
+ * broadcast the revert.
  */
 import { useEffect } from 'react';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import {
   COMPUTED_ORIGIN,
   computedItemsOf,
@@ -58,15 +61,30 @@ function install(doc: Y.Doc): () => void {
     if (column === undefined) return;
     announce(translate(activeLocale(), 'set.fillRefused', { column: column.label }));
   });
-  // SET-08: a computed table's formula, evaluated once in the Worker, fills its table's rows.
+  let stopped = false;
+  let awaitingSettle = false;
+  // SET-08: a computed table's formula, evaluated once in the Worker, fills its table's rows —
+  // only once every request is answered (see the header); the settle that follows fills them.
+  // ponytail: one gate for every table; key each result by the request that made it if a
+  // session never goes quiet long enough for rows to follow.
   const fillComputed = (): void => {
+    if (host.busy) {
+      if (!awaitingSettle) {
+        awaitingSettle = true;
+        void host.settled().then(() => {
+          awaitingSettle = false;
+          if (!stopped) run();
+        });
+      }
+      return;
+    }
     for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
       reconcileComputed(gd, tableId, items, members);
     }
   };
   // Ruling (d): the soundness pass, with no items (see the header).
-  const keepComputedSound = (): void => {
-    for (const { tableId } of computedItemsOf(gd, () => undefined)) {
+  const keepComputedSound = (tables: ReadonlySet<string>): void => {
+    for (const { tableId } of computedItemsOf(gd, () => undefined, tables)) {
       reconcileComputed(gd, tableId, null);
     }
   };
@@ -87,26 +105,32 @@ function install(doc: Y.Doc): () => void {
   };
   const stopResults = host.subscribeAll(run);
   run();
-  // Ruling (d): once per burst of updates other than its own, coalesced into one pass.
-  // ponytail: runs after every local edit too (a scan of each computed table's rows);
-  // gate on the transaction touching a computed table if keystrokes ever feel it.
-  let queued = false;
-  let stopped = false;
-  const onUpdate = (_update: Uint8Array, origin: unknown) => {
-    if (origin === COMPUTED_ORIGIN || queued) return;
-    queued = true;
+  // Ruling (d): once per burst of transactions other than its own, coalesced into one pass
+  // over the tables they touched.
+  const touched = new Set<string>();
+  const onTransaction = (tr: Y.Transaction): void => {
+    if (tr.origin === COMPUTED_ORIGIN) return;
+    const before = touched.size;
+    for (const type of tr.changed.keys()) {
+      let t: unknown = type;
+      while (t instanceof Y.AbstractType && t.parent !== gd.tables) t = t.parent;
+      const id: unknown = t instanceof Y.Map ? t.get('id') : undefined;
+      if (typeof id === 'string') touched.add(id);
+    }
+    if (before > 0 || touched.size === 0) return;
     queueMicrotask(() => {
-      queued = false;
-      if (!stopped) keepComputedSound();
+      const tables = new Set(touched);
+      touched.clear();
+      if (!stopped) keepComputedSound(tables);
     });
   };
-  doc.on('update', onUpdate);
+  doc.on('afterTransaction', onTransaction);
   return () => {
     stopped = true;
     stopPulls();
     stopRefusals();
     stopResults();
-    doc.off('update', onUpdate);
+    doc.off('afterTransaction', onTransaction);
   };
 }
 

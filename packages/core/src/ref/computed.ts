@@ -128,6 +128,9 @@ function computedColumns(columns: readonly ColumnRecord[]): (ColumnRecord & {
  * one mutation re-points every computed column at once and two people
  * changing it concurrently converge on one formula (the later write wins).
  * Under the person's origin: it is an undo step.
+ * Known limit (Yjs map undo): undoing a change that won a concurrent change restores
+ * neither the losing value nor the previous one, so both replicas converge on no formula;
+ * the columns stay computed and the rows stay put until a formula is typed again.
  */
 export function setTableFormula(gd: GedeDoc, tableId: Id, formula: string): boolean {
   const table = gd.tables.get(tableId);
@@ -172,14 +175,28 @@ function refitSpread(gd: GedeDoc, tableId: Id, table: TableMap, width: number | 
   const spread = spreadColumns(table);
   if (spread.length === 0 || width === null) return 0;
   let writes = 0;
-  /** Member index → the column kept for it. */
-  const kept = new Map<number, Id>();
+  const fill = spread[0]?.computed.fill ?? newId();
+  const derived = (index: number): Id =>
+    deterministicId(`${tableId}\u0000${fill}\u0000${String(index)}`);
+  /**
+   * Member index → the column kept for it: a column a person filled wins over one this
+   * re-fit added (a spread Fill made one column at a time keeps the person's column), then
+   * column order. Both are the same on every replica, so replicas keep the same column.
+   */
+  const keep = new Map<number, ColumnRecord>();
   for (const c of spread) {
     const index = c.computed.spreadIndex ?? 0;
-    if (index < width && !kept.has(index)) kept.set(index, c.id);
-    else writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+    const held = keep.get(index);
+    if (index < width && (held === undefined || (held.id === derived(index) && c.id !== held.id))) {
+      keep.set(index, c);
+    }
   }
-  const fill = spread[0]?.computed.fill ?? newId();
+  // By record, not id: replicas adding the same member at once leave two columns with its id.
+  const keptRecords = new Set(keep.values());
+  for (const c of spread) {
+    if (!keptRecords.has(c)) writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+  }
+  const kept = new Map([...keep].map(([index, c]) => [index, c.id]));
   for (let index = 0; index < width; index += 1) {
     if (kept.has(index)) continue;
     // Beside its neighbouring member, so member order is column order whatever merged.
@@ -190,7 +207,7 @@ function refitSpread(gd: GedeDoc, tableId: Id, table: TableMap, width: number | 
       afterColId: below.length > 0 ? kept.get(Math.max(...below)) : undefined,
       beforeColId:
         below.length === 0 && above.length > 0 ? kept.get(Math.min(...above)) : undefined,
-      id: deterministicId(`${tableId}\u0000${fill}\u0000${String(index)}`),
+      id: derived(index),
     });
     kept.set(index, id);
     const map = columnsArray(table)
@@ -296,15 +313,18 @@ export interface ComputedItems {
  * still kept sound (`ComputedItems.items`). A table that has computed rows
  * but no computed column any more (an undo of Fill column) is handed off with
  * no column and no items, so the reconciler clears the computed rows it left.
+ * `only` limits the hand-off to those tables (the ones a transaction touched).
  */
 export function computedItemsOf(
   gd: GedeDoc,
   resultOf: (
     cellId: WorkbookCellId,
   ) => { readonly value: CellValue | null; readonly error: unknown } | undefined,
+  only?: ReadonlySet<Id>,
 ): ComputedItems[] {
   const out: ComputedItems[] = [];
   gd.tables.forEach((table, tableId) => {
+    if (only !== undefined && !only.has(tableId)) return;
     const record = tableRecord(table);
     const [driver] = computedColumns(record.columns);
     if (driver === undefined) {
