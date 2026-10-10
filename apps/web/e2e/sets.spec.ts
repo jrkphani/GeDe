@@ -1,0 +1,339 @@
+/**
+ * Set tables, phase 3 (SET-01, SET-09, SET-10, SET-11, DOC-02, MENU-03; ADR-056, SPEC §1):
+ * the sets E, C and B are on the sheet; the product E × C × B is built through Add table
+ * (Cartesian product, One column per set) and through Fill column with formula… on a plain
+ * table (One column), and a note typed beside a tuple stays on that tuple's row. Against the
+ * built bundle at 1440 and 1024 px, axe on every new surface. Everything outside the browser
+ * is a labelled FAKE at the network edge: Cognito (`fakes/cognito`), the documents REST API
+ * and the room (`fakes/room`).
+ */
+import type { Page } from '@playwright/test';
+import {
+  addRow,
+  computedRowId,
+  createSheet,
+  createTable,
+  listSheets,
+  openDocument,
+  renameColumn,
+  setCellText,
+  tableRecord,
+  tablesOnSheet,
+  type GedeDoc,
+  type Id,
+} from '@gede/core';
+import { asDesktop, expect, test, zoomed200 } from './fixtures/test.js';
+import { FAKE_SIGN_IN_CODE, installFakeCognito } from './fakes/cognito.js';
+import type { FakeSession } from './fakes/jwt.js';
+import { FakeRoom } from './fakes/room.js';
+
+const DOC_ID = '6f1b2c3d-0000-4000-8000-00000000se56';
+const SESSION: FakeSession = {
+  region: 'ap-southeast-1',
+  userPoolId: 'ap-southeast-1_fakepool',
+  clientId: 'fakeclientid0000000000000',
+  sub: 'e2e-user-56',
+  email: 'priya@1cloudhub.com',
+  name: 'Priya',
+};
+const CONFIG = {
+  region: SESSION.region,
+  userPoolId: SESSION.userPoolId,
+  userPoolClientId: SESSION.clientId,
+  apiUrl: '/api',
+  wsUrl: '/ws',
+  appleSignIn: false,
+  statusUrl: null,
+};
+const record = {
+  id: DOC_ID,
+  title: 'Sets',
+  ownerId: SESSION.sub,
+  permission: 'owner',
+  linkAccess: 'none',
+  updatedAt: '2026-10-10T00:00:00.000Z',
+  deletedAt: null,
+};
+
+async function installFakes(page: Page): Promise<FakeRoom> {
+  await page.route('**/config.json', (route) => route.fulfill({ json: CONFIG }));
+  await installFakeCognito(page, SESSION);
+  await page.route(`**/api/documents/${DOC_ID}`, (route) =>
+    route.fulfill({ json: { document: record } }),
+  );
+  await page.route(/\/api\/documents\?view=/, (route) =>
+    route.fulfill({ json: { documents: [record] } }),
+  );
+  await page.route('**/api/me', (route) =>
+    route.fulfill({
+      json: {
+        id: SESSION.sub,
+        sub: SESSION.sub,
+        email: SESSION.email,
+        displayName: SESSION.name,
+        locale: 'en-US',
+      },
+    }),
+  );
+  const room = new FakeRoom();
+  await room.install(page);
+  return room;
+}
+
+async function signInTo(page: Page, path: string): Promise<void> {
+  await page.goto(path);
+  await expect(page).toHaveURL(/\/sign-in$/);
+  await page.getByLabel('Email').fill(SESSION.email);
+  await page.getByLabel('Email').press('Enter');
+  await page.getByRole('button', { name: 'Email me a one-time code' }).click();
+  await page.getByLabel('Eight-digit code').fill(FAKE_SIGN_IN_CODE);
+  await page.getByRole('button', { name: 'Verify and sign in' }).click();
+  const notNow = page.getByRole('button', { name: 'Not now' });
+  const target = new RegExp(`${path}$`);
+  await Promise.race([
+    notNow.waitFor({ state: 'visible', timeout: 8000 }).then(() => notNow.click()),
+    page.waitForURL(target, { timeout: 8000 }),
+  ]).catch(() => undefined);
+  await expect(page).toHaveURL(target);
+}
+
+/** A Simple set as Add table makes one (range, description), holding `elements`. */
+function seedSet(gd: GedeDoc, sheetId: Id, title: string, col: number, elements: string[]) {
+  const id = createTable(gd, {
+    sheetId,
+    at: { col, row: 1 },
+    columns: 2,
+    rows: 1,
+    title,
+    kind: 'simple',
+  });
+  const [range, description] = tableRecord(gd.tables.get(id)!).columns;
+  renameColumn(gd, id, range!.id, 'range');
+  renameColumn(gd, id, description!.id, 'description');
+  for (let i = 1; i < elements.length; i += 1) addRow(gd, id);
+  tableRecord(gd.tables.get(id)!).rows.forEach((rowId, i) => {
+    setCellText(gd, id, rowId, range!.id, elements[i] ?? '');
+  });
+}
+
+const tableTitled = (room: FakeRoom, title: string) => {
+  const gd = openDocument(room.doc);
+  return tablesOnSheet(gd, listSheets(gd)[0]?.id ?? '').find((t) => t.title === title);
+};
+
+/** Wait for the dialog's entrance (and every transition in it) before axe measures. */
+async function settled(page: Page): Promise<void> {
+  await page
+    .getByRole('dialog')
+    .evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)));
+  await page.evaluate(() =>
+    Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))),
+  );
+}
+
+/** Pick `title` for the `n`th set of the product. */
+async function pickSet(page: Page, n: number, title: string) {
+  await page.getByRole('combobox', { name: `Set ${String(n)} of the product` }).click();
+  await page.getByRole('option', { name: new RegExp(`^${title}\\b`) }).click();
+}
+
+/** Type `text` into the cell of `grid` at row `row` (0 = first body row), column `col`. */
+async function typeInto(page: Page, gridName: string, row: number, col: number, text: string) {
+  const grid = page.getByRole('grid', { name: gridName });
+  const cell = grid
+    .getByRole('row')
+    .nth(row + 1)
+    .getByRole('gridcell')
+    .nth(col);
+  const address = await cell.getAttribute('data-address');
+  await cell.dblclick();
+  await page.getByLabel(`Edit ${address ?? ''}`).fill(text);
+  await page.keyboard.press('Enter');
+}
+
+for (const width of [1440, 1024] as const) {
+  test(`SET-01 SET-09 SET-10 SET-11 DOC-02 MENU-03 at ${String(width)} px: E × C × B is built from Add table in One column per set and from Fill column with formula… in One column; a note typed beside a tuple stays on its row`, async ({
+    page,
+    checkA11y,
+    snapshot,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    const sheetId = createSheet(seeded);
+    seedSet(seeded, sheetId, 'E', 1, ['a', 'b', 'c']);
+    seedSet(seeded, sheetId, 'C', 4, ['b', 'c', 'x']);
+    seedSet(seeded, sheetId, 'B', 7, ['x', 'y']);
+    await asDesktop(page, width, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'B' })).toBeVisible();
+
+    // ── Add table asks the kind (SET-01, DOC-02): Plain table preselected and focused.
+    await page.getByRole('button', { name: 'Add table' }).click();
+    const kindDialog = page.getByRole('dialog', { name: 'What kind of table is this?' });
+    await expect(kindDialog).toBeVisible();
+    await expect(kindDialog.getByRole('radio', { name: /^Plain table/ })).toBeFocused();
+    await expect(kindDialog.getByRole('radio', { name: /^Plain table/ })).toBeChecked();
+    await settled(page);
+    await checkA11y(`add table kind ${String(width)}`);
+    await snapshot(`add-table-kind-${String(width)}`);
+    await kindDialog.getByRole('radio', { name: /^Cartesian product/ }).click();
+    await kindDialog.getByRole('button', { name: 'Pick sets' }).click();
+
+    // ── Pick sets (SET-09): E, C, then B added; One column per set.
+    const pickDialog = page.getByRole('dialog', { name: 'Add a computed table' });
+    await expect(pickDialog.getByTestId('set-picker-formula')).toHaveText('= Cross(E, C)');
+    await pickDialog.getByRole('button', { name: 'Add another set' }).click();
+    await pickSet(page, 3, 'B');
+    await expect(pickDialog.getByTestId('set-picker-formula')).toHaveText('= Cross(E, C, B)');
+    await expect(pickDialog.getByRole('radio', { name: /^One column per set/ })).toBeChecked();
+    await settled(page);
+    await checkA11y(`pick sets ${String(width)}`);
+    await snapshot(`pick-sets-${String(width)}`);
+    await pickDialog.getByRole('button', { name: 'Add table' }).click();
+    await expect(pickDialog).toHaveCount(0);
+
+    const product = page.getByRole('grid', { name: 'E × C × B' });
+    await expect(product).toBeVisible();
+    for (const label of ['x1 ∈ E', 'x2 ∈ C', 'x3 ∈ B', 'note']) {
+      await expect(
+        product.getByRole('columnheader', { name: new RegExp(`^${label}`) }),
+      ).toBeVisible();
+    }
+    await expect.poll(() => tableTitled(room, 'E × C × B')?.rows.length).toBe(18);
+    const spread = tableTitled(room, 'E × C × B')!;
+    expect(spread.kind).toBe('product');
+    const firstTuple = computedRowId(spread.id, '(a, b, x)');
+    expect(spread.rows[0]).toBe(firstTuple);
+    await expect(product.getByRole('row').nth(1).getByRole('gridcell').nth(2)).toHaveText(/x/);
+
+    // ── A note beside the tuple (a, b, x) lives on that tuple's row (SET-11).
+    await typeInto(page, 'E × C × B', 0, 3, 'first tuple');
+    await expect
+      .poll(() => {
+        const t = tableTitled(room, 'E × C × B')!;
+        const map = openDocument(room.doc).tables.get(t.id)!;
+        const note = t.columns[3]!.id;
+        const cells = map.get('cells') as { has: (key: string) => boolean };
+        return cells.has(`${firstTuple}:${note}`);
+      })
+      .toBe(true);
+
+    // ── Fill column with formula… on a plain table's empty column (SET-10, MENU-03).
+    await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter');
+    const plain = page.getByRole('grid', { name: 'Table 5' });
+    await expect(plain).toBeVisible();
+    await plain.getByRole('columnheader', { name: /^Column 1/ }).click({ button: 'right' });
+    const menu = page.getByRole('menu', { name: 'Column menu' });
+    await menu.getByRole('menuitem', { name: /Fill column with formula…/ }).click();
+    const fillDialog = page.getByRole('dialog', { name: 'Fill Column 1 with a formula' });
+    await expect(fillDialog).toBeVisible();
+    await fillDialog.getByRole('button', { name: 'Add another set' }).click();
+    await pickSet(page, 3, 'B');
+    await fillDialog.getByRole('radio', { name: /^One column\b(?! per)/ }).click();
+    await expect(fillDialog.getByTestId('set-picker-formula')).toHaveText('= Cross(E, C, B)');
+    await settled(page);
+    await checkA11y(`fill column ${String(width)}`);
+    await snapshot(`fill-column-${String(width)}`);
+    await fillDialog.getByRole('button', { name: 'Fill column' }).click();
+    await expect(fillDialog).toHaveCount(0);
+
+    // Eighteen computed rows; the plain table's five rows stay, typed by no one (SPEC §2.3).
+    await expect.poll(() => tableTitled(room, 'Table 5')?.rows.length).toBe(18 + 5);
+    const filled = tableTitled(room, 'Table 5')!;
+    expect(filled.columns[0]!.computed).toEqual(expect.objectContaining({ shape: 'column' }));
+    const tuple = computedRowId(filled.id, '(a, b, x)');
+    const row = filled.rows.indexOf(tuple);
+    expect(row).toBeGreaterThanOrEqual(0);
+    await expect(
+      plain
+        .getByRole('row')
+        .nth(row + 1)
+        .getByRole('gridcell')
+        .nth(0),
+    ).toHaveText('(a, b, x)');
+    await typeInto(page, 'Table 5', row, 1, 'beside (a, b, x)');
+    await expect
+      .poll(() => {
+        const map = openDocument(room.doc).tables.get(filled.id)!;
+        const cells = map.get('cells') as { has: (key: string) => boolean };
+        return cells.has(`${tuple}:${filled.columns[1]!.id}`);
+      })
+      .toBe(true);
+    // Fill is now unavailable on the filled column, with the reason (MENU-02).
+    await plain.getByRole('columnheader', { name: /^Column 1/ }).click({ button: 'right' });
+    await expect(menu.getByRole('menuitem', { name: /Fill column with formula…/ })).toHaveAttribute(
+      'title',
+      'the column is computed',
+    );
+    await page.keyboard.press('Escape');
+    await checkA11y(`computed tables ${String(width)}`);
+    await snapshot(`computed-tables-${String(width)}`);
+  });
+}
+
+/** The two steps of Add table, with E and C on the sheet, then Escape: nothing is added. */
+async function walkAddTable(
+  page: Page,
+  room: FakeRoom,
+  screen: string,
+  checkA11y: (s: string) => Promise<unknown>,
+  snapshot: (s: string) => Promise<void>,
+) {
+  await page.getByRole('button', { name: 'Add table' }).click();
+  const kindDialog = page.getByRole('dialog', { name: 'What kind of table is this?' });
+  await expect(kindDialog.getByRole('radio', { name: /^Plain table/ })).toBeFocused();
+  // Keyboard only: the arrows move the kind, Enter takes the computed kind to Pick sets.
+  // Radix checks the card that gains focus while the arrow is still down, as a finger holds it.
+  await page.keyboard.down('ArrowUp');
+  await expect(kindDialog.getByRole('radio', { name: /^Cartesian product/ })).toBeChecked();
+  await page.keyboard.up('ArrowUp');
+  await expect(kindDialog.getByRole('button', { name: 'Pick sets' })).toBeVisible();
+  await settled(page);
+  await checkA11y(`add table kind ${screen}`);
+  await snapshot(`add-table-kind-${screen}`);
+  await page.keyboard.press('Enter');
+  const pickDialog = page.getByRole('dialog', { name: 'Add a computed table' });
+  await expect(pickDialog.getByTestId('set-picker-formula')).toHaveText('= Cross(E, C)');
+  await settled(page);
+  await checkA11y(`pick sets ${screen}`);
+  await snapshot(`pick-sets-${screen}`);
+  await page.keyboard.press('Escape');
+  await expect(pickDialog).toHaveCount(0);
+  expect(openDocument(room.doc).tables.size).toBe(2);
+}
+
+function seedTwo(room: FakeRoom): void {
+  const seeded = openDocument(room.doc);
+  const sheetId = createSheet(seeded);
+  seedSet(seeded, sheetId, 'E', 1, ['a', 'b']);
+  seedSet(seeded, sheetId, 'C', 4, ['x']);
+}
+
+test('SET-01 A11Y-01 at 768 px the kind and the sets are picked by keyboard alone; Escape adds nothing', async ({
+  page,
+  checkA11y,
+  snapshot,
+}) => {
+  const room = await installFakes(page);
+  seedTwo(room);
+  await asDesktop(page, 768, 900);
+  await signInTo(page, `/d/${DOC_ID}`);
+  await expect(page.getByRole('grid', { name: 'C' })).toBeVisible();
+  await walkAddTable(page, room, '768', checkA11y, snapshot);
+});
+
+test.describe('200 % zoom', () => {
+  test.use(zoomed200(1024));
+  test('SET-01 A11Y-06 at 200 % zoom both steps of Add table read and fit', async ({
+    page,
+    checkA11y,
+    snapshot,
+  }) => {
+    const room = await installFakes(page);
+    seedTwo(room);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('tab', { name: /Sheet 1/ })).toBeVisible();
+    await walkAddTable(page, room, '1024 200%', checkA11y, snapshot);
+  });
+});
