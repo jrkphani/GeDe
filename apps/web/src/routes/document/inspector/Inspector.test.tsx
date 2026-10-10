@@ -298,6 +298,34 @@ describe('Inspector', () => {
     expect(screen.getByTestId('inspector-selected')).toHaveTextContent('Nothing selected');
   });
 
+  it('SET-01 the Table tab changes the kind while no cell holds a typed value, and says why it cannot once one does', async () => {
+    const undo = createUndoManager(gd);
+    await mount({ undo });
+    await userEvent.click(tab('Table'));
+    const kind = () => within(section('kind')).getByRole('combobox', { name: 'Table kind' });
+    // The table holds “Base camp”: the kind stays as it is, and the control says why.
+    expect(kind()).toBeDisabled();
+    expect(kind()).toHaveAttribute('title', 'the table holds typed values');
+    const record = tableById(gd, tableId)!;
+    act(() => {
+      setCellText(gd, tableId, record.rows[0]!, record.columns[0]!.id, '');
+    });
+    expect(kind()).toBeEnabled();
+    await userEvent.click(kind());
+    // A computed kind names a table that fills from a formula: offered, disabled, with why.
+    expect(await screen.findByRole('option', { name: /^Cartesian product/ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await userEvent.click(screen.getByRole('option', { name: /^Simple set/ }));
+    expect(tableById(gd, tableId)?.kind).toBe('simple');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('is now a Simple set');
+    act(() => {
+      undo.undo();
+    });
+    expect(tableById(gd, tableId)?.kind).toBe('plain');
+  });
+
   it('INSP-04 INSP-12 KEYS-03 the Table tab: style, title and caption, header row, footer, frozen columns, row and column counts, outline, gridlines, alternating colour, width, wrap and fit write through at once; typing a caption is one undo step', async () => {
     const undo = createUndoManager(gd);
     await mount({ undo });

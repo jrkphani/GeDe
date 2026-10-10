@@ -8,6 +8,7 @@ import { Button, Dialog, RadioCards, type RadioCardOption } from '@gede/ui';
 import type { GedeDoc, Id, TableKind } from '@gede/core';
 import { useState } from 'react';
 
+import { useYVersion } from '../../../doc/use-y.js';
 import { useMessages, type MessageKey } from '../../../i18n/index.js';
 import { defaultPick, SetPicker } from './SetPicker.js';
 import {
@@ -54,6 +55,9 @@ function AddTableSteps({ gd, sheetId, open, onOpenChange, onAdd }: AddTableDialo
   const t = useMessages();
   const [kind, setKind] = useState<TableKind>('plain');
   const [step, setStep] = useState<'kind' | 'sets'>('kind');
+  // The sets are read from the document on every change to it: a set a peer renames or
+  // deletes while the dialog is open shows as it is.
+  useYVersion(gd.tables);
   const sets = setsOnSheet(gd, sheetId);
   const [pick, setPick] = useState<SetPick>(() => defaultPick('Union', sets));
   const ready = pickReady(gd, pick);
@@ -142,6 +146,7 @@ function AddTableSteps({ gd, sheetId, open, onOpenChange, onAdd }: AddTableDialo
         value={pick}
         onChange={setPick}
         onEnter={confirmSets}
+        autoFocus
       />
     </Dialog>
   );

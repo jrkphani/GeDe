@@ -5,6 +5,8 @@
 import { beforeEach, describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addColumn,
+  addDerivedColumn,
   addRow,
   cellText,
   computedItemsOf,
@@ -26,11 +28,14 @@ import {
 
 import {
   addTableOfKind,
+  changeTableKind,
   fillColumnReason,
   fillColumnWith,
   pickDisplay,
   pickName,
+  kindChoices,
   setsOnSheet,
+  tableKindReason,
   type SetPick,
 } from './set-tables.js';
 
@@ -172,5 +177,131 @@ describe('SET-10 Fill column with formula…', () => {
     expect(after.columns.map((col) => col.label)).toEqual([first!.label, note!.label]);
     expect(after.columns.map((col) => col.source)).toEqual(['entered', 'entered']);
     expect(after.rows).toEqual([]);
+  });
+});
+
+/** A column's shown values, row by row. */
+function colText(tableId: Id, index = 0): string[] {
+  const record = tableById(gd, tableId)!;
+  const table = tableMap(gd, tableId)!;
+  const colId = record.columns[index]!.id;
+  return record.rows.map((rowId) => cellText(table, rowId, colId));
+}
+
+describe('Phase 3 red-team regressions: Fill column', () => {
+  test('SET-10 the empty note column of a computed table offers no second formula, so E ∪ C keeps showing E ∪ C', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 4, ['b', 'c']);
+    const u = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 1, row: 10 },
+      kind: 'computed',
+      pick: { op: 'Union', sets: [e, c], shape: 'column' },
+    })!;
+    fillRows();
+    expect(colText(u)).toEqual(['a', 'b', 'c']);
+    const note = tableById(gd, u)!.columns[1]!.id;
+    expect(fillColumnReason(gd, u, note)).toBe('the table already has a formula');
+    expect(fillColumnWith(gd, u, note, { op: 'Inter', sets: [e, c], shape: 'column' })).toBe(false);
+    fillRows();
+    expect(tableById(gd, u)!.title).toBe('E ∪ C');
+    expect(colText(u)).toEqual(['a', 'b', 'c']);
+  });
+
+  test('SET-10 a plain table filled once offers no second Fill on another empty column', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 4, ['b', 'c']);
+    const plain = createTable(gd, { sheetId, at: { col: 1, row: 10 }, columns: 2, rows: 0 });
+    const [a, b] = tableById(gd, plain)!.columns;
+    expect(fillColumnWith(gd, plain, a!.id, { op: 'Union', sets: [e, c], shape: 'column' })).toBe(
+      true,
+    );
+    fillRows();
+    expect(fillColumnReason(gd, plain, b!.id)).toBe('the table already has a formula');
+    expect(fillColumnWith(gd, plain, b!.id, { op: 'Diff', sets: [e, c], shape: 'column' })).toBe(
+      false,
+    );
+    fillRows();
+    expect(colText(plain)).toEqual(['a', 'b', 'c']);
+  });
+
+  test('SET-09 SET-10 the note and any added column of a One-column-per-set product offer no Fill, so no member column goes blank', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 4, ['x', 'y']);
+    const p = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 1, row: 10 },
+      kind: 'product',
+      pick: { op: 'Cross', sets: [e, c], shape: 'spread' },
+    })!;
+    fillRows();
+    const note = tableById(gd, p)!.columns[2]!.id;
+    const extra = addColumn(gd, p, { label: 'extra' });
+    for (const colId of [note, extra]) {
+      expect(fillColumnReason(gd, p, colId)).toBe('the table already has a formula');
+      expect(fillColumnWith(gd, p, colId, { op: 'Union', sets: [e, c], shape: 'column' })).toBe(
+        false,
+      );
+    }
+    fillRows();
+    const rec = tableById(gd, p)!;
+    expect(rec.computedFormula).toMatch(/^=Cross\(/);
+    expect(colText(p, 0)).toEqual(['a', 'a', 'b', 'b']);
+    expect(colText(p, 1)).toEqual(['x', 'y', 'x', 'y']);
+  });
+
+  test('SET-10 MENU-03 a derived column is not empty: Fill is disabled with the reason and its derivation stays', () => {
+    const e = set('E', 1, ['a']);
+    const plain = createTable(gd, { sheetId, at: { col: 1, row: 10 }, columns: 1, rows: 1 });
+    const source = tableById(gd, plain)!.columns[0]!;
+    setCellText(gd, plain, tableById(gd, plain)!.rows[0]!, source.id, 'word');
+    const derived = addDerivedColumn(gd, plain, {
+      sourceColId: source.id,
+      method: 'Concat',
+      args: [' ✓'],
+    })!;
+    expect(fillColumnReason(gd, plain, derived)).toBe('the column is derived');
+    expect(fillColumnWith(gd, plain, derived, { op: 'Power', sets: [e], shape: 'column' })).toBe(
+      false,
+    );
+    const column = tableById(gd, plain)!.columns.find((x) => x.id === derived)!;
+    expect(column.source).toBe('derived');
+    expect(column.derive).not.toBeNull();
+  });
+
+  test('SET-10 SET-02 a set’s own range column cannot be filled from itself', () => {
+    const f = addTableOfKind(gd, { sheetId, at: { col: 1, row: 1 }, kind: 'simple' })!;
+    setTableTitle(gd, f, 'F');
+    const e = set('E', 4, ['a', 'b']);
+    const range = tableById(gd, f)!.columns[0]!.id;
+    expect(fillColumnReason(gd, f, range)).toBeUndefined();
+    expect(fillColumnWith(gd, f, range, { op: 'Union', sets: [f, e], shape: 'column' })).toBe(
+      false,
+    );
+    expect(tableById(gd, f)!.columns[0]!.source).toBe('entered');
+    // From the other sets it fills.
+    expect(fillColumnWith(gd, f, range, { op: 'Power', sets: [e], shape: 'column' })).toBe(true);
+  });
+});
+
+describe('Phase 3 red-team regressions: SET-01 the kind changes', () => {
+  test('SET-01 a table with no typed value changes kind; a typed value stops it with the reason', () => {
+    const id = addTableOfKind(gd, { sheetId, at: { col: 1, row: 1 }, kind: 'plain' })!;
+    expect(tableKindReason(gd, id)).toBeUndefined();
+    expect(kindChoices(gd, id)).toEqual([
+      { kind: 'plain', reason: undefined },
+      { kind: 'simple', reason: undefined },
+      { kind: 'family', reason: undefined },
+      { kind: 'computed', reason: 'Fill a column with a formula first' },
+      { kind: 'product', reason: 'Fill a column with a formula first' },
+    ]);
+    expect(changeTableKind(gd, id, 'simple')).toBe(true);
+    expect(tableById(gd, id)!.kind).toBe('simple');
+    expect(setsOnSheet(gd, sheetId).map((s) => s.tableId)).toEqual([id]);
+    const record = tableById(gd, id)!;
+    setCellText(gd, id, record.rows[0]!, record.columns[0]!.id, 'a');
+    expect(tableKindReason(gd, id)).toBe('the table holds typed values');
+    expect(changeTableKind(gd, id, 'plain')).toBe(false);
+    expect(tableById(gd, id)!.kind).toBe('simple');
   });
 });

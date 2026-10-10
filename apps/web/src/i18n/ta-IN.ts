@@ -131,6 +131,8 @@ export const messages: Messages = {
   'cell.readOnly.announceUnaddressed': 'இந்தக் கலம் படிக்க மட்டும்: {reason}',
   'column.readOnly.announce': 'நெடுவரிசை {column} படிக்க மட்டும்: {reason}',
   'set.fillRefused': 'நெடுவரிசை {column} நிரப்பப்படவில்லை: நெடுவரிசை காலியாக இல்லை',
+  'set.fillSuperseded':
+    'நெடுவரிசை {column} நிரப்பப்படவில்லை: அட்டவணை வேறொரு சூத்திரத்தைப் பின்பற்றுகிறது',
   'readOnly.derived': 'வருவிக்கப்பட்ட நெடுவரிசை',
   'readOnly.linked': 'இணைக்கப்பட்ட நெடுவரிசை',
   'readOnly.pulled': 'வேறு அட்டவணையிலிருந்து இழுக்கப்பட்டது',
@@ -177,7 +179,8 @@ export const messages: Messages = {
     'வரிசை முக்கியம்: ஒவ்வொரு வரிசையும் ஒரு வரிசைப்பட்ட இணை. E × E போல ஒரு கணம் இருமுறை வரலாம்.',
   'pick.shape': 'ஒவ்வொரு இணையும் எங்கே',
   'pick.shape.column': 'ஒரு நெடுவரிசை',
-  'pick.shape.column.hint': 'ஒவ்வொரு கலமும் ஓர் இணையைக் கொண்டிருக்கும், (a, b, x).',
+  'pick.shape.column.hint':
+    'ஒவ்வொரு கலமும் ஓர் இணையைக் கொண்டிருக்கும், (a, b, x). பெரிய அட்டவணையின் ஒரு நெடுவரிசையாக இதைப் பயன்படுத்துங்கள்.',
   'pick.shape.spread': 'ஒவ்வொரு கணத்துக்கும் ஒரு நெடுவரிசை',
   'pick.shape.spread.hint':
     'x1, x2, x3 வரிசையின் அடுத்தடுத்த கலங்களில் இருக்கும். அவற்றின் அருகே உங்கள் நெடுவரிசைகளைச் சேர்க்கலாம்.',
@@ -190,6 +193,13 @@ export const messages: Messages = {
   'fill.confirm': 'நெடுவரிசையை நிரப்பு',
   'fill.notEmpty': 'நெடுவரிசை காலியாக இல்லை',
   'fill.filled': '{column} {formula} கொண்டு நிரப்பப்பட்டது',
+  'fill.hasFormula': 'அட்டவணையில் ஏற்கெனவே ஒரு சூத்திரம் உள்ளது',
+  'fill.derived': 'இந்த நெடுவரிசை வருவிக்கப்பட்டது',
+  'fill.pulled': 'இந்த நெடுவரிசை வேறு அட்டவணையிலிருந்து இழுக்கப்பட்டது',
+  'fill.linked': 'இந்த நெடுவரிசை ஓர் இணைப்பு நெடுவரிசை',
+  'kind.typed': 'அட்டவணையில் தட்டச்சு செய்த மதிப்புகள் உள்ளன',
+  'kind.needsFormula': 'முதலில் ஒரு நெடுவரிசையைச் சூத்திரத்தால் நிரப்புங்கள்',
+  'kind.changed': '{table} இப்போது {kind}',
   'set.column.range': 'வரம்பு',
   'set.column.description': 'விளக்கம்',
   'set.column.note': 'குறிப்பு',

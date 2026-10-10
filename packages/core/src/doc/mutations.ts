@@ -268,6 +268,49 @@ export function setTableTitle(gd: GedeDoc, tableId: Id, title: string): boolean 
   });
 }
 
+/**
+ * SET-01: whether any cell of the table holds something a person typed or picked: an
+ * entered value (text or a formula) or a mapping pick. Derived, pulled and computed
+ * columns hold nothing typed.
+ */
+export function tableHoldsTyped(gd: GedeDoc, tableId: Id): boolean {
+  const table = tableMap(gd, tableId);
+  if (table === null) return false;
+  const record = tableRecord(table);
+  const cells = cellsMap(table);
+  const typedColumns = record.columns.filter(
+    (c) => c.source === 'entered' || c.source === 'linked',
+  );
+  return record.rows.some((rowId) =>
+    typedColumns.some((c) => {
+      const value = cells.get(cellKey(rowId, c.id));
+      if (value === undefined) return false;
+      return (isFormula(value) ? value : fragmentText(value)) !== '';
+    }),
+  );
+}
+
+/**
+ * SET-01: change a table's kind while it holds no typed value, as one undo step. Kind
+ * is what the table is read as (a plain table, a set, a family); it moves no row, column
+ * or address. The computed kinds name a table that already fills from a formula (Add
+ * table or Fill column made it so), so a table with no computed column cannot take one.
+ * False, writing nothing, when refused.
+ */
+export function setTableKind(gd: GedeDoc, tableId: Id, kind: TableKind): boolean {
+  const table = tableMap(gd, tableId);
+  if (table === null || tableHoldsTyped(gd, tableId)) return false;
+  const record = tableRecord(table);
+  const computed = record.columns.some((c) => c.source === 'computed');
+  if ((kind === 'computed' || kind === 'product') && !computed) return false;
+  if (record.kind === kind) return true;
+  transact(gd, () => {
+    if (kind === 'plain') table.delete('kind');
+    else table.set('kind', kind);
+  });
+  return true;
+}
+
 /** Move a table; pixels snap to the lattice, units clamp at A1 (GRID-01, DOC-04). */
 export function setTablePosition(gd: GedeDoc, tableId: Id, at: LatticeUnits | Pixels): void {
   const origin = isPixels(at) ? snapPoint(at) : snapUnits(at);

@@ -316,6 +316,12 @@ function OpenDocument({
   // SET-01: Add table asks the kind first; SET-10: Fill column with formula… on one column.
   const [addTableOpen, setAddTableOpen] = useState(false);
   const [fillTarget, setFillTarget] = useState<{ tableId: Id; colId: Id } | null>(null);
+  // RESP-02, non-negotiable 5: a dialog that edits goes when editing does — the window
+  // narrows to a phone, access drops to view-only, or sync turns read-only.
+  if (!editable && (addTableOpen || fillTarget !== null)) {
+    setAddTableOpen(false);
+    setFillTarget(null);
+  }
   const [renameError, setRenameError] = useState<string | null>(null);
   const [activeLocale] = useLocale();
   const locale = toFormatLocale(activeLocale);
@@ -647,6 +653,10 @@ function OpenDocument({
     (pick: SetPick) => {
       if (fillTarget === null) return;
       const { tableId, colId } = fillTarget;
+      if (!editable) {
+        setFillTarget(null);
+        return;
+      }
       const label = tableById(gd, tableId)?.columns.find((c) => c.id === colId)?.label ?? '';
       setFillTarget(null);
       if (!fillColumnWith(gd, tableId, colId, pick)) return;
@@ -657,7 +667,7 @@ function OpenDocument({
         }),
       );
     },
-    [gd, fillTarget, activeLocale],
+    [gd, fillTarget, editable, activeLocale],
   );
   const addRowToSelected = useCallback(() => {
     if (selection === null) return;
@@ -1410,7 +1420,7 @@ function OpenDocument({
                             addTable();
                           }}
                         >
-                          Place first table
+                          Add first table
                         </Button>
                         {/* PRD §19: the empty-sheet menu is Table / Shaped table / Graph. */}
                         <Button
@@ -1542,7 +1552,7 @@ function OpenDocument({
         }
       />
       <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-      {activeSheetId !== null && (
+      {editable && activeSheetId !== null && (
         <AddTableDialog
           gd={gd}
           sheetId={activeSheetId}
@@ -1554,10 +1564,11 @@ function OpenDocument({
           }}
         />
       )}
-      {fillTarget !== null && activeSheetId !== null && (
+      {editable && fillTarget !== null && activeSheetId !== null && (
         <FillColumnDialog
           gd={gd}
           sheetId={activeSheetId}
+          tableId={fillTarget.tableId}
           column={
             tableById(gd, fillTarget.tableId)?.columns.find((c) => c.id === fillTarget.colId)
               ?.label ?? ''

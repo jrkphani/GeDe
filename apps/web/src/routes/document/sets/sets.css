@@ -26,6 +26,12 @@
   font-weight: 600;
 }
 
+/* A heading that names a radio group (aria-labelledby) rather than a fieldset's legend:
+   the flex gap spaces it. */
+p.gd-set-picker__legend {
+  margin: 0;
+}
+
 .gd-set-picker__sets {
   display: flex;
   flex-direction: column;

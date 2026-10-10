@@ -13,10 +13,12 @@ import {
   type GedeDoc,
   type Id,
   type OutlineWeight,
+  type TableKind,
   type TableMap,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { useMessages, type MessageKey } from '../../../i18n/index.js';
 import { frozenOptions } from '../grid/TableMenu.js';
 import { columnDisplayName } from '../grid/column-name.js';
 import {
@@ -27,6 +29,7 @@ import {
   type GridCommands,
 } from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
+import { changeTableKind, kindChoices, tableKindReason } from '../sets/set-tables.js';
 import { selectedBand, type Selection } from '../selection.js';
 import { fitColumnsToContent, fitRowsToContent, useFitter } from '../style/index.js';
 import { NameField, ReasonedButton, Section, SizeField, Stepper } from './controls.js';
@@ -38,6 +41,14 @@ export interface TableTabProps {
   editable: boolean;
   commands: GridCommands;
 }
+
+const KIND_LABEL: Readonly<Record<TableKind, MessageKey>> = {
+  plain: 'addTable.kind.plain',
+  simple: 'addTable.kind.simple',
+  family: 'addTable.kind.family',
+  computed: 'addTable.kind.computed',
+  product: 'addTable.kind.product',
+};
 
 /** The "Outline column" select's value for "no designation: the first visible column" (ADR-052). */
 const OUTLINE_DEFAULT = 'first';
@@ -58,6 +69,7 @@ const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
  * is a strip at the foot, fit snaps to whole units (GRID-01).
  */
 export function TableTab({ gd, table, selection, editable, commands }: TableTabProps) {
+  const t = useMessages();
   const record = tableRecord(table);
   const viewOnly = editable ? undefined : 'you have view-only access';
   const rows = record.rows.length;
@@ -208,6 +220,25 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             />
           )}
         </div>
+      </Section>
+      <Section label="kind" hint="Changes while no cell holds a typed value.">
+        {/* SET-01: the kind chosen at Add table changes here while no cell holds a typed
+          value. It is what the table is read as; no row, column or address moves. */}
+        <Select<TableKind>
+          label={t('addTable.kinds')}
+          value={record.kind}
+          disabledReason={viewOnly ?? tableKindReason(gd, record.id)}
+          onValueChange={(kind) => {
+            if (!changeTableKind(gd, record.id, kind)) return;
+            announce(t('kind.changed', { table: record.title, kind: t(KIND_LABEL[kind]) }));
+          }}
+          options={kindChoices(gd, record.id).map(({ kind, reason }) => ({
+            value: kind,
+            label: t(KIND_LABEL[kind]),
+            description: reason,
+            disabled: reason !== undefined,
+          }))}
+        />
       </Section>
       {/* INSP-04 / GRID-11: header row, header column and footer row *counts* — 0 or 1 for the
           rows (the lattice has one header strip and one footer strip), any count short of every

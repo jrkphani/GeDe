@@ -56,6 +56,7 @@ export {
   computedItemsOf,
   computedOperandsLabel,
   computedRowId,
+  fillColumns,
   observeRefusedFills,
   reconcileComputed,
   setComputedColumn,
@@ -63,6 +64,7 @@ export {
   setTableFormula,
   spreadMemberLabel,
   type ComputedItems,
+  type FillRefusal,
 } from './computed.js';
 export {
   reconcileSplitChildren,

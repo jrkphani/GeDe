@@ -58,10 +58,12 @@ function install(doc: Y.Doc): () => void {
     host.result(workbookCellId(tableId, key))?.value;
   const stopPulls = observePulls(gd, { cellValue });
   // SET-10 after a merge: a Fill column refused here or on another replica is said, not silent.
-  const stopRefusals = observeRefusedFills(gd, (tableId, colId) => {
+  // `formula`: another person's Fill of the same table won the merge (ADR-056 ruling a).
+  const stopRefusals = observeRefusedFills(gd, (tableId, colId, reason) => {
     const column = tableById(gd, tableId)?.columns.find((c) => c.id === colId);
     if (column === undefined) return;
-    announce(translate(activeLocale(), 'set.fillRefused', { column: column.label }));
+    const key = reason === 'formula' ? 'set.fillSuperseded' : 'set.fillRefused';
+    announce(translate(activeLocale(), key, { column: column.label }));
   });
   let stopped = false;
   /** Tables whose fill waits for a change to them to be answered. */

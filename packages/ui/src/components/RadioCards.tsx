@@ -13,8 +13,13 @@ export interface RadioCardOption<V extends string> {
 }
 
 export interface RadioCardsProps<V extends string> {
-  /** Accessible name for the group. */
-  label: string;
+  /** Accessible name for the group, when no visible label names it (`labelledBy`). */
+  label?: string | undefined;
+  /**
+   * The id of a visible label that names the group. A group under its own heading takes
+   * this rather than `label`, so the name is read once, not twice.
+   */
+  labelledBy?: string | undefined;
   options: readonly RadioCardOption<V>[];
   value: V;
   onChange: (value: V) => void;
@@ -36,6 +41,7 @@ export interface RadioCardsProps<V extends string> {
  */
 export function RadioCards<V extends string>({
   label,
+  labelledBy,
   options,
   value,
   onChange,
@@ -44,7 +50,10 @@ export function RadioCards<V extends string>({
   className,
 }: RadioCardsProps<V>) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (onEnter === undefined || event.nativeEvent.isComposing) return;
+    // I18N-01: an IME commits a composition with Enter; some engines (Safari) send it as
+    // keyCode 229 with `isComposing` already false. Neither confirms the dialog.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- keyCode 229 is the legacy IME signal
+    if (onEnter === undefined || event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.code !== 'Enter' && event.code !== 'NumpadEnter') return;
     event.preventDefault();
     onEnter();
@@ -52,7 +61,8 @@ export function RadioCards<V extends string>({
   return (
     <RadioGroup.Root
       className={clsx('gd-radio-cards', `gd-radio-cards--${layout}`, className)}
-      aria-label={label}
+      aria-label={labelledBy === undefined ? label : undefined}
+      aria-labelledby={labelledBy}
       value={value}
       onValueChange={(next) => {
         onChange(next as V);
