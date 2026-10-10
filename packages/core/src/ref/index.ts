@@ -58,6 +58,7 @@ export {
   computedRowId,
   fillColumns,
   observeRefusedFills,
+  readsTable,
   reconcileComputed,
   setComputedColumn,
   setComputedColumns,
@@ -65,6 +66,7 @@ export {
   spreadMemberLabel,
   type ComputedItems,
   type FillRefusal,
+  type FillTarget,
 } from './computed.js';
 export {
   reconcileSplitChildren,

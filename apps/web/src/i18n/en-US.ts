@@ -235,6 +235,11 @@ export const messages = {
   'kind.typed': 'the table holds typed values',
   'kind.needsFormula': 'Fill a column with a formula first',
   'kind.changed': '{table} is now a {kind}',
+  'kind.needsCross': 'the formula is not a Cross',
+  'kind.isCross': 'the formula is a Cross',
+  'kind.computedColumns': 'its columns fill from a formula',
+  'kind.section': 'kind',
+  'kind.section.hint': 'Changes while no cell holds a typed value.',
   // SET-01: the headings a set table starts with.
   'set.column.range': 'range',
   'set.column.description': 'description',

@@ -12,6 +12,7 @@ import {
   createTable,
   encodeBound,
   fillColumns,
+  readsTable,
   renameColumn,
   rowsArray,
   setTableKind,
@@ -19,6 +20,7 @@ import {
   spreadMemberLabel,
   tableById,
   tableHoldsTyped,
+  tableKindRefusal,
   tableMap,
   tablesOnSheet,
   type ComputedSpec,
@@ -27,10 +29,11 @@ import {
   type LatticeUnits,
   type Pixels,
   type TableKind,
+  type TableKindRefusal,
   type TableRecord,
 } from '@gede/core';
 
-import { translate } from '../../../i18n/index.js';
+import { translate, type MessageKey } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 
 /** SET-01: the kinds in the order the picker lists them; Plain table is preselected. */
@@ -83,10 +86,14 @@ const PREVIEW = 6;
 /**
  * SET-02: a set table's range column — the first column of a simple set or a family, the
  * first one-column computed column of a computed table. A product spread across columns
- * has no single range column and is not offered.
+ * has no single range column and is not offered, whatever its kind: a spread Filled into a
+ * set's first column is a tuple's first member, not the set.
  */
 function rangeColumn(record: TableRecord): Id | null {
-  if (record.kind === 'simple' || record.kind === 'family') return record.columns[0]?.id ?? null;
+  if (record.kind === 'simple' || record.kind === 'family') {
+    const first = record.columns[0];
+    return first === undefined || first.computed?.shape === 'spread' ? null : first.id;
+  }
   const computed = record.columns.filter((c) => c.computed !== null);
   if (computed.length === 0) return record.columns[0]?.id ?? null;
   return computed.find((c) => c.computed?.shape === 'column')?.id ?? null;
@@ -255,31 +262,33 @@ export function fillColumnReason(gd: GedeDoc, tableId: Id, colId: Id): string | 
     : undefined;
 }
 
-/** The sets Fill column offers for a column of `tableId`: every set on the sheet but its own. */
+/**
+ * The sets Fill column offers for a column of `tableId`: every set on the sheet but its own
+ * and those that read it, directly or through other tables (`U = P ∪ C` reads P): a Fill of
+ * P from U would depend on its own rows (FX-06).
+ */
 export function fillOperands(gd: GedeDoc, sheetId: Id, tableId: Id): SheetSet[] {
-  return setsOnSheet(gd, sheetId).filter((s) => s.tableId !== tableId);
+  return setsOnSheet(gd, sheetId).filter((s) => !readsTable(gd, [s.tableId], tableId));
 }
 
 /**
  * SET-10: Fill column with formula…, as one undo step. In One column per set the column is
  * the first member, headed `x1 ∈ E`; the re-fit adds the others beside it, each headed by
  * its set. False — nothing written — when Fill is unavailable on the column
- * (`fillColumnReason`) or the pick reads the table being filled (a cycle).
+ * (`fillColumnReason`) or the pick reads the table being filled, directly or through
+ * another table (a cycle, FX-06). The `x1 ∈ E` heading is given in the Fill step itself, so
+ * a Fill refused after a merge gives the column its own heading back.
  */
 export function fillColumnWith(gd: GedeDoc, tableId: Id, colId: Id, pick: SetPick): boolean {
   if (fillColumnReason(gd, tableId, colId) !== undefined || !pickReady(gd, pick)) return false;
-  if (pick.sets.includes(tableId)) return false;
+  if (readsTable(gd, pick.sets, tableId)) return false;
   const formula = pickFormula(gd, pick);
   if (formula === null) return false;
-  let ok = false;
-  gd.doc.transact(() => {
-    if (spreads(pick)) renameColumn(gd, tableId, colId, spreadMemberLabel(gd, formula, 0));
-    const spec: ComputedSpec = spreads(pick)
-      ? { shape: 'spread', spreadIndex: 0 }
-      : { shape: 'column' };
-    ok = fillColumns(gd, tableId, [{ colId, spec }], formula);
-  }, gd.origin);
-  return ok;
+  const spec: ComputedSpec = spreads(pick)
+    ? { shape: 'spread', spreadIndex: 0 }
+    : { shape: 'column' };
+  const label = spreads(pick) ? spreadMemberLabel(gd, formula, 0) : undefined;
+  return fillColumns(gd, tableId, [{ colId, spec, label }], formula);
 }
 
 /**
@@ -290,19 +299,32 @@ export function tableKindReason(gd: GedeDoc, tableId: Id): string | undefined {
   return tableHoldsTyped(gd, tableId) ? t('kind.typed') : undefined;
 }
 
+const KIND_REFUSAL: Readonly<Record<Exclude<TableKindRefusal, 'typed'>, MessageKey>> = {
+  needsFormula: 'kind.needsFormula',
+  needsCross: 'kind.needsCross',
+  isCross: 'kind.isCross',
+  computedColumns: 'kind.computedColumns',
+};
+
 /**
- * SET-01: the kinds a table can change to, each with the reason it cannot, if any. The
- * computed kinds name a table that fills from a formula (Add table or Fill column).
+ * SET-01: the kinds a table can change to, each with the reason it cannot, if any
+ * (`tableKindRefusal`). The computed kinds name a table that fills from a formula (Add
+ * table or Fill column), a Cartesian product one whose formula is a Cross; a table filled
+ * from a formula stays a computed kind. A table holding typed values is refused as a whole
+ * (`tableKindReason`).
  */
 export function kindChoices(
   gd: GedeDoc,
   tableId: Id,
 ): { readonly kind: TableKind; readonly reason: string | undefined }[] {
-  const computed = tableById(gd, tableId)?.columns.some((c) => c.source === 'computed') === true;
-  return TABLE_KINDS.map((kind) => ({
-    kind,
-    reason: isComputedKind(kind) && !computed ? t('kind.needsFormula') : undefined,
-  }));
+  const typed = tableHoldsTyped(gd, tableId);
+  return TABLE_KINDS.map((kind) => {
+    const refusal = typed ? null : tableKindRefusal(gd, tableId, kind);
+    return {
+      kind,
+      reason: refusal === null || refusal === 'typed' ? undefined : t(KIND_REFUSAL[refusal]),
+    };
+  });
 }
 
 /** SET-01: change the table's kind, as one undo step; false when refused. */

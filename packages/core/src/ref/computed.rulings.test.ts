@@ -19,6 +19,7 @@ import {
   setCellText,
   setTableKind,
   tableById,
+  tableKindRefusal,
   tableMap,
   type GedeDoc,
 } from '../doc/index.js';
@@ -31,11 +32,13 @@ import {
   computedRowId,
   fillColumns,
   observeRefusedFills,
+  readsTable,
   reconcileComputed,
   setComputedColumn,
   setComputedColumns,
   setTableFormula,
 } from './computed.js';
+import { renameColumn } from './derive.js';
 
 function replica(clientID: number) {
   const doc = new Y.Doc();
@@ -632,5 +635,146 @@ describe('SET-01 the kind changes while the table has no typed values', () => {
     expect(tableById(r.gd, id)!.kind).toBe('product');
     setCellText(r.gd, id, rowsOf(r.gd, id)[0]!, note!.id, 'typed note');
     expect(setTableKind(r.gd, id, 'computed')).toBe(false);
+  });
+});
+
+describe('Phase 3 fix round: headings, kinds and cycles', () => {
+  for (const [ca, cb] of [
+    [1, 2],
+    [2, 1],
+  ] as const) {
+    test(`SET-10 SET-09 a spread Fill refused after a merge gives its column its own heading back (clients ${String(ca)},${String(cb)})`, () => {
+      const a = replica(ca);
+      const b = replica(cb);
+      const sheetId = createSheet(a.gd);
+      const plain = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
+      send(a.doc, b.doc);
+      const [c1, c2] = tableById(a.gd, plain)!.columns;
+      fillColumns(a.gd, plain, [{ colId: c1!.id, spec: { shape: 'column' } }], '=Union("a", "x")');
+      fillColumns(
+        b.gd,
+        plain,
+        [{ colId: c2!.id, spec: { shape: 'spread', spreadIndex: 0 }, label: 'x1 ∈ E' }],
+        '=Cross("a, b", "x")',
+      );
+      expect(tableById(b.gd, plain)!.columns[1]!.label).toBe('x1 ∈ E');
+      settle(a, b);
+      expect(Y.encodeStateAsUpdate(a.doc)).toEqual(Y.encodeStateAsUpdate(b.doc));
+      const rec = tableById(a.gd, plain)!;
+      const second = rec.columns.find((c) => c.id === c2!.id)!;
+      if (rec.computedFormula?.startsWith('=Union') === true) {
+        expect(second.source).toBe('entered');
+        expect(second.label).toBe(c2!.label);
+      } else {
+        expect(second.source).toBe('computed');
+        expect(second.label).toBe('x1 ∈ E');
+      }
+    });
+  }
+
+  for (const [ca, cb] of [
+    [1, 2],
+    [2, 1],
+  ] as const) {
+    test(`SET-10 a Fill refused for a concurrent typed value never leaves x1 ∈ E; a concurrent rename stays (clients ${String(ca)},${String(cb)})`, () => {
+      const a = replica(ca);
+      const b = replica(cb);
+      const sheetId = createSheet(a.gd);
+      const id = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 1 });
+      send(a.doc, b.doc);
+      const [c1] = tableById(a.gd, id)!.columns;
+      const row = rowsOf(a.gd, id)[0]!;
+      fillColumns(
+        a.gd,
+        id,
+        [{ colId: c1!.id, spec: { shape: 'spread', spreadIndex: 0 }, label: 'x1 ∈ E' }],
+        '=Cross("a", "x")',
+      );
+      // B, unaware, renames the column and types into it.
+      renameColumn(b.gd, id, c1!.id, 'members');
+      setCellText(b.gd, id, row, c1!.id, 'typed');
+      settle(a, b);
+      expect(Y.encodeStateAsUpdate(a.doc)).toEqual(Y.encodeStateAsUpdate(b.doc));
+      const column = tableById(a.gd, id)!.columns[0]!;
+      expect(column.source).toBe('entered');
+      expect(column.label).not.toBe('x1 ∈ E');
+      expect([c1!.label, 'members']).toContain(column.label);
+    });
+  }
+
+  test('SET-01 SET-08 a Union table cannot be relabelled a Cartesian product, nor a Cross table Computed by formula', () => {
+    const r = replica(1);
+    const sheetId = createSheet(r.gd);
+    const union = createTable(r.gd, {
+      sheetId,
+      at: { col: 1, row: 1 },
+      columns: 2,
+      rows: 0,
+      kind: 'computed',
+    });
+    const cross = createTable(r.gd, {
+      sheetId,
+      at: { col: 5, row: 1 },
+      columns: 2,
+      rows: 0,
+      kind: 'product',
+    });
+    fillColumns(
+      r.gd,
+      union,
+      [{ colId: tableById(r.gd, union)!.columns[0]!.id, spec: { shape: 'column' } }],
+      '=Union("a", "b")',
+    );
+    fillColumns(
+      r.gd,
+      cross,
+      [
+        {
+          colId: tableById(r.gd, cross)!.columns[0]!.id,
+          spec: { shape: 'spread', spreadIndex: 0 },
+        },
+      ],
+      '=Cross("a", "b")',
+    );
+    handOff(r);
+    expect(tableKindRefusal(r.gd, union, 'product')).toBe('needsCross');
+    expect(setTableKind(r.gd, union, 'product')).toBe(false);
+    expect(tableKindRefusal(r.gd, cross, 'computed')).toBe('isCross');
+    expect(setTableKind(r.gd, cross, 'computed')).toBe(false);
+    // A table that fills from a formula stays a computed kind: as a set its first column
+    // would be read as its range.
+    expect(tableKindRefusal(r.gd, cross, 'simple')).toBe('computedColumns');
+    expect(setTableKind(r.gd, cross, 'simple')).toBe(false);
+    expect(tableById(r.gd, union)!.kind).toBe('computed');
+    expect(tableById(r.gd, cross)!.kind).toBe('product');
+  });
+
+  test('SET-10 FX-06 readsTable follows computed formulas, formula cells and pulls through any depth', () => {
+    const r = replica(1);
+    const sheetId = createSheet(r.gd);
+    const p = createTable(r.gd, { sheetId, at: { col: 1, row: 1 }, columns: 1, rows: 1 });
+    const u = createTable(r.gd, { sheetId, at: { col: 3, row: 1 }, columns: 1, rows: 0 });
+    const v = createTable(r.gd, { sheetId, at: { col: 5, row: 1 }, columns: 1, rows: 1 });
+    const w = createTable(r.gd, { sheetId, at: { col: 7, row: 1 }, columns: 1, rows: 1 });
+    const pCol = tableById(r.gd, p)!.columns[0]!.id;
+    const uCol = tableById(r.gd, u)!.columns[0]!.id;
+    fillColumns(
+      r.gd,
+      u,
+      [{ colId: uCol, spec: { shape: 'column' } }],
+      `=Union({k:${p}:${pCol}}, "x")`,
+    );
+    // V reads U through a formula cell.
+    setCellText(
+      r.gd,
+      v,
+      rowsOf(r.gd, v)[0]!,
+      tableById(r.gd, v)!.columns[0]!.id,
+      `=Union({k:${u}:${uCol}}, "y")`,
+    );
+    expect(readsTable(r.gd, [u], p)).toBe(true);
+    expect(readsTable(r.gd, [v], p)).toBe(true);
+    expect(readsTable(r.gd, [w], p)).toBe(false);
+    expect(readsTable(r.gd, [p], p)).toBe(true);
   });
 });

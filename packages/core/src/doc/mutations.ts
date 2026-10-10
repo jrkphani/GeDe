@@ -5,6 +5,7 @@
  */
 import * as Y from 'yjs';
 
+import { parse } from '../formula/parser.js';
 import { effectiveDepths, hasDescendants } from '../hier/outline.js';
 import { rowHidden } from './geometry.js';
 import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
@@ -291,19 +292,57 @@ export function tableHoldsTyped(gd: GedeDoc, tableId: Id): boolean {
 }
 
 /**
- * SET-01: change a table's kind while it holds no typed value, as one undo step. Kind
- * is what the table is read as (a plain table, a set, a family); it moves no row, column
- * or address. The computed kinds name a table that already fills from a formula (Add
- * table or Fill column made it so), so a table with no computed column cannot take one.
- * False, writing nothing, when refused.
+ * Why a table cannot take `kind` (SET-01), or null when it can:
+ * - `typed`: a cell holds a typed value; the kind is fixed once the table holds data.
+ * - `needsFormula`: a computed kind names a table that fills from a formula (Add table or
+ *   Fill column), and this one has no computed column.
+ * - `needsCross`: a Cartesian product is a table whose formula is a `Cross`.
+ * - `isCross`: a table whose formula is a `Cross` is a Cartesian product, not Computed by formula.
+ * - `computedColumns`: a table whose columns fill from a formula stays a computed kind. Read
+ *   as a set or a family, its first column would be taken for its range: a One column per
+ *   set product's `x1 ∈ E` column alone, a wrong set for every formula that picks it.
+ * The table's current kind is never refused for its formula: it is what it already is.
+ */
+export type TableKindRefusal =
+  'typed' | 'needsFormula' | 'needsCross' | 'isCross' | 'computedColumns';
+
+/** SET-01: why `tableId` cannot take `kind`, or null (see `TableKindRefusal`). */
+export function tableKindRefusal(
+  gd: GedeDoc,
+  tableId: Id,
+  kind: TableKind,
+): TableKindRefusal | null {
+  const table = tableMap(gd, tableId);
+  if (table === null) return null;
+  if (tableHoldsTyped(gd, tableId)) return 'typed';
+  const record = tableRecord(table);
+  if (record.kind === kind) return null;
+  const computed = record.columns.some((c) => c.source === 'computed');
+  const computedKind = kind === 'computed' || kind === 'product';
+  if (!computed) return computedKind ? 'needsFormula' : null;
+  if (!computedKind) return 'computedColumns';
+  const cross = topLevelCall(record.computedFormula) === 'Cross';
+  if (kind === 'product' && !cross) return 'needsCross';
+  if (kind === 'computed' && cross) return 'isCross';
+  return null;
+}
+
+/** The name of a formula's top-level call, or null. */
+function topLevelCall(formula: string | null): string | null {
+  if (formula === null) return null;
+  const parsed = parse(formula);
+  return parsed.ok && parsed.value.kind === 'call' ? parsed.value.name : null;
+}
+
+/**
+ * SET-01: change a table's kind, as one undo step. Kind is what the table is read as (a
+ * plain table, a set, a family); it moves no row, column or address. False, writing
+ * nothing, when refused (`tableKindRefusal`).
  */
 export function setTableKind(gd: GedeDoc, tableId: Id, kind: TableKind): boolean {
   const table = tableMap(gd, tableId);
-  if (table === null || tableHoldsTyped(gd, tableId)) return false;
-  const record = tableRecord(table);
-  const computed = record.columns.some((c) => c.source === 'computed');
-  if ((kind === 'computed' || kind === 'product') && !computed) return false;
-  if (record.kind === kind) return true;
+  if (table === null || tableKindRefusal(gd, tableId, kind) !== null) return false;
+  if (tableRecord(table).kind === kind) return true;
   transact(gd, () => {
     if (kind === 'plain') table.delete('kind');
     else table.set('kind', kind);

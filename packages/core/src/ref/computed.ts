@@ -53,10 +53,11 @@ import {
 } from '../doc/schema.js';
 import { computedFormulaKey, workbookCellId, type WorkbookCellId } from '../engine/types.js';
 import type { CellValue } from '../formula/evaluate.js';
-import { isSetFunctionName } from '../formula/ast.js';
+import { isSetFunctionName, references } from '../formula/ast.js';
 import { parse } from '../formula/parser.js';
 import { dedupe } from '../formula/sets.js';
 import { cellKey, newId, type Id } from '../ids.js';
+import { renameColumn } from './derive.js';
 import { RowEditor } from './rows.js';
 import { deterministicId } from './split.js';
 
@@ -93,6 +94,21 @@ const REFUSED = 'fillRefused';
  * after the merge (ADR-056 ruling a), never left following a formula they were not filled with.
  */
 const FORMULA_FILL = 'computedFill';
+
+/**
+ * Column key: the heading a Fill column step gave the column (`FillTarget.label`, a spread
+ * member's `x1 ∈ E`) with the one it had before, `{ before, after }`, so a Fill refused
+ * after a merge gives the column its own heading back (SET-10).
+ */
+const FILL_LABEL = 'fillLabel';
+
+/** One column of a Fill column step, in `spec`'s role, optionally renamed in the same step. */
+export interface FillTarget {
+  readonly colId: Id;
+  readonly spec: ComputedSpec;
+  /** The heading the Fill gives the column (`x1 ∈ E`); restored if the Fill is refused. */
+  readonly label?: string | undefined;
+}
 
 /** Why a Fill column was refused after a merge. */
 export type FillRefusal = 'typed' | 'formula';
@@ -326,7 +342,7 @@ export function setComputedColumns(
 export function fillColumns(
   gd: GedeDoc,
   tableId: Id,
-  columns: readonly { readonly colId: Id; readonly spec: ComputedSpec }[],
+  columns: readonly FillTarget[],
   formula: string,
 ): boolean {
   const table = gd.tables.get(tableId);
@@ -342,16 +358,13 @@ export function fillColumns(
 }
 
 /** `setComputedColumns`, returning the step's id, or null when refused (nothing written). */
-function markComputed(
-  gd: GedeDoc,
-  tableId: Id,
-  columns: readonly { readonly colId: Id; readonly spec: ComputedSpec }[],
-): string | null {
+function markComputed(gd: GedeDoc, tableId: Id, columns: readonly FillTarget[]): string | null {
   const table = gd.tables.get(tableId);
   if (table === undefined || columns.length === 0) return null;
   const maps = columnsArray(table).toArray();
-  const targets = columns.map(({ colId, spec }) => ({
+  const targets = columns.map(({ colId, spec, label }) => ({
     spec,
+    label,
     map: maps.find((c) => readString(c, 'id') === colId),
   }));
   const rows = rowsArray(table).toArray();
@@ -370,8 +383,15 @@ function markComputed(
       ? spreadFill
       : newId();
   gd.doc.transact(() => {
-    for (const { map, spec } of targets) {
+    for (const { map, spec, label } of targets) {
       if (map === undefined) continue;
+      const id = readString(map, 'id');
+      const before = readString(map, 'label');
+      map.delete(FILL_LABEL);
+      // Renamed while still entered (Rename's own rules), and remembered for a refusal.
+      if (label !== undefined && label !== before && renameColumn(gd, tableId, id, label)) {
+        map.set(FILL_LABEL, { before, after: label });
+      }
       map.set('source', 'computed');
       map.set('computed', { ...spec, fill });
       map.delete(REFUSED);
@@ -381,6 +401,56 @@ function markComputed(
     }
   }, gd.origin);
   return fill;
+}
+
+/** The tables a formula reads through its id-bound operands. */
+function boundTables(formula: string, out: Set<Id>): void {
+  const parsed = parse(formula);
+  if (!parsed.ok) return;
+  for (const ref of references(parsed.value)) {
+    if (ref.kind !== 'bound') continue;
+    const bound = ref.ref;
+    if (bound.kind === 'column') for (const c of bound.columns) out.add(c.tableId);
+    else out.add(bound.tableId);
+  }
+}
+
+/** The tables `tableId` reads: its computed formula's, its formula cells', its pulls' and mappings'. */
+function tablesReadBy(gd: GedeDoc, tableId: Id): Set<Id> {
+  const out = new Set<Id>();
+  const table = gd.tables.get(tableId);
+  if (table === undefined) return out;
+  const record = tableRecord(table);
+  if (record.computedFormula !== null) boundTables(record.computedFormula, out);
+  for (const value of cellsMap(table).values()) {
+    if (isFormula(value)) boundTables(value, out);
+  }
+  for (const c of record.columns) {
+    if (c.pull !== null) out.add(c.pull.tableId);
+    if (c.link !== null) out.add(c.link.tableId);
+  }
+  return out;
+}
+
+/**
+ * SET-10, FX-06: whether any of `operands` reads `target`, directly or through the tables
+ * they read in turn (a computed table `U = P ∪ C` reads P). A Fill of `target` from such
+ * operands would make its formula depend on its own rows: the engine reports it
+ * `circular` and the rows could never settle, so Fill refuses it before writing. Follows
+ * id-bound operands (what the operand picker writes), pulls and mappings; an operand that
+ * follows an address rather than a cell is left to the engine, whose `circular` the
+ * table's header then shows.
+ */
+export function readsTable(gd: GedeDoc, operands: readonly Id[], target: Id): boolean {
+  const seen = new Set<Id>();
+  const stack = [...operands];
+  for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
+    if (id === target) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...tablesReadBy(gd, id));
+  }
+  return false;
 }
 
 /** What the engine hands the main thread for one computed table (SPEC §2.4). */
@@ -524,6 +594,7 @@ export function reconcileComputed(
         if (!all.has(id)) continue;
         map.set('source', 'entered');
         map.delete('computed');
+        restoreLabel(gd, tableId, map);
         // The flag names the column that held the typed value: that is the one announced.
         if (refused.has(id)) map.set(REFUSED, true);
         writes += 1;
@@ -549,6 +620,7 @@ export function reconcileComputed(
         if (!reverted.has(readString(map, 'id')) || map.get('source') !== 'computed') continue;
         map.set('source', 'entered');
         map.delete('computed');
+        restoreLabel(gd, tableId, map);
         map.set(REFUSED, 'formula');
         writes += 1;
       }
@@ -687,6 +759,20 @@ export function reconcileComputed(
     });
   }, origin);
   return writes;
+}
+
+/**
+ * A refused Fill gives its column back the heading it had (SET-10): a typed column must not
+ * go on claiming `x1 ∈ E`. Only while the heading is still the one the Fill gave it; a
+ * rename since is a person's and stays.
+ */
+function restoreLabel(gd: GedeDoc, tableId: Id, column: Y.Map<unknown>): void {
+  const given: unknown = column.get(FILL_LABEL);
+  column.delete(FILL_LABEL);
+  if (typeof given !== 'object' || given === null) return;
+  const { before, after } = given as { before?: unknown; after?: unknown };
+  if (typeof before !== 'string' || readString(column, 'label') !== after) return;
+  renameColumn(gd, tableId, readString(column, 'id'), before);
 }
 
 const OPERATORS: Readonly<Record<string, string>> = {
