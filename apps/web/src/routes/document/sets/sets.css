@@ -79,3 +79,25 @@ p.gd-set-picker__legend {
 .gd-set-picker__formula-label {
   color: var(--ink-muted);
 }
+
+/* SET-09, SPEC §2.4: a computed table's formula in error, beside its first computed heading. */
+.gd-set-error {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex-shrink: 1;
+  color: var(--danger);
+  font-weight: 500;
+}
+.gd-set-error__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-table__title .gd-set-error {
+  margin-left: auto;
+}
+.gd-set-error--compact {
+  flex-shrink: 0;
+}

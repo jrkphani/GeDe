@@ -444,4 +444,60 @@ test.describe('Phase 3 red-team regressions', () => {
     const added = tableTitled(room, 'Table 4');
     expect(added?.kind).toBe('simple');
   });
+
+  test('SET-09 FX-09 a product past the cap is refused with ⚠ too many tuples in its header, the message naming the count and the limit', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    const sheetId = createSheet(seeded);
+    seedSet(
+      seeded,
+      sheetId,
+      'E',
+      1,
+      Array.from({ length: 101 }, (_, i) => `e${String(i)}`),
+    );
+    seedSet(
+      seeded,
+      sheetId,
+      'C',
+      4,
+      Array.from({ length: 100 }, (_, i) => `c${String(i)}`),
+    );
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'C' })).toBeVisible();
+    await page.getByRole('button', { name: 'Add table' }).click();
+    const kindDialog = page.getByRole('dialog', { name: 'What kind of table is this?' });
+    await kindDialog.getByRole('radio', { name: /^Cartesian product/ }).click();
+    await kindDialog.getByRole('button', { name: 'Pick sets' }).click();
+    const pickDialog = page.getByRole('dialog', { name: 'Add a computed table' });
+    await pickDialog.getByRole('radio', { name: /^One column\b(?! per)/ }).click();
+    await pickDialog.getByRole('button', { name: 'Add table' }).click();
+    await expect.poll(() => tableTitled(room, 'E × C')?.kind).toBe('product');
+    // The product sits below the 101-row E; scroll the canvas down to it.
+    const product = page.getByRole('grid', { name: 'E × C' });
+    const plane = page.getByTestId('plane');
+    await plane.hover();
+    await expect(async () => {
+      await page.mouse.wheel(0, 600);
+      await expect(product).toBeVisible({ timeout: 300 });
+    }).toPass({ timeout: 15_000 });
+    const message = 'Cross would make 10,100 tuples, past the limit of 10,000; narrow the sets';
+    // In words in the title bar, the message beside them for assistive technology and hover.
+    const error = page.getByRole('region', { name: 'E × C' }).getByTestId('computed-error');
+    await expect(error).toContainText('too many tuples');
+    await expect(error).toContainText(message);
+    await expect(error).toHaveAttribute('title', message);
+    // And as ⚠ on the computed column's heading, named by the same words.
+    await expect(
+      product
+        .getByRole('columnheader', { name: /^range/ })
+        .getByRole('img', { name: `too many tuples: ${message}` }),
+    ).toBeVisible();
+    expect(tableTitled(room, 'E × C')?.rows.length).toBe(0);
+    await checkA11y('product past the cap 1440');
+  });
 });

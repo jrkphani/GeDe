@@ -221,7 +221,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           )}
         </div>
       </Section>
-      <Section label="kind" hint="Changes while no cell holds a typed value.">
+      <Section label={t('kind.section')} hint={t('kind.section.hint')}>
         {/* SET-01: the kind chosen at Add table changes here while no cell holds a typed
           value. It is what the table is read as; no row, column or address moves. */}
         <Select<TableKind>

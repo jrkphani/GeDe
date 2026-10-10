@@ -8,11 +8,15 @@ import {
   addColumn,
   addDerivedColumn,
   addRow,
+  cellErrorLabel,
+  cellErrorMessage,
   cellText,
+  computedFormulaKey,
   computedItemsOf,
   createSheet,
   createTable,
   createUndoManager,
+  deleteTable,
   FormulaEngine,
   observeWorkbook,
   openDocument,
@@ -21,6 +25,7 @@ import {
   setTableTitle,
   tableById,
   tableMap,
+  workbookCellId,
   type CellResult,
   type GedeDoc,
   type Id,
@@ -31,6 +36,7 @@ import {
   changeTableKind,
   fillColumnReason,
   fillColumnWith,
+  fillOperands,
   pickDisplay,
   pickName,
   kindChoices,
@@ -38,6 +44,7 @@ import {
   tableKindReason,
   type SetPick,
 } from './set-tables.js';
+import { computedFormulaError } from './ComputedFormulaError.js';
 
 let gd: GedeDoc;
 let sheetId: Id;
@@ -303,5 +310,154 @@ describe('Phase 3 red-team regressions: SET-01 the kind changes', () => {
     expect(tableKindReason(gd, id)).toBe('the table holds typed values');
     expect(changeTableKind(gd, id, 'plain')).toBe(false);
     expect(tableById(gd, id)!.kind).toBe('simple');
+  });
+});
+
+/** The error a computed table's formula evaluated to, as its header reads it (SPEC §2.4). */
+function formulaErrorOf(tableId: Id) {
+  const record = tableById(gd, tableId)!;
+  const driver = record.columns.find((c) => c.computed !== null)!;
+  return computedFormulaError(
+    results.get(workbookCellId(tableId, computedFormulaKey(driver.id))),
+    record.computedFormula!,
+  );
+}
+
+describe('Phase 3 fix round: a Fill that reads itself, a formula in error, kinds that misdescribe', () => {
+  test('SET-10 FX-06 Fill refuses a pick that reads the filled table through another computed table, and does not offer that set', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 7, ['c']);
+    const p = addTableOfKind(gd, { sheetId, at: { col: 4, row: 1 }, kind: 'simple' })!;
+    setTableTitle(gd, p, 'P');
+    const u = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 1, row: 10 },
+      kind: 'computed',
+      pick: { op: 'Union', sets: [p, c], shape: 'column' },
+    })!;
+    // V reads P through U: two computed tables deep.
+    const v = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 4, row: 10 },
+      kind: 'computed',
+      pick: { op: 'Union', sets: [u, e], shape: 'column' },
+    })!;
+    fillRows();
+    expect(fillOperands(gd, sheetId, p).map((x) => x.tableId)).toEqual([e, c]);
+    const range = tableById(gd, p)!.columns[0]!.id;
+    for (const pick of [
+      { op: 'Diff', sets: [e, u], shape: 'column' },
+      { op: 'Union', sets: [u, e], shape: 'column' },
+      { op: 'Inter', sets: [e, v], shape: 'column' },
+    ] satisfies SetPick[]) {
+      expect(fillColumnWith(gd, p, range, pick)).toBe(false);
+    }
+    expect(tableById(gd, p)!.columns[0]!.source).toBe('entered');
+    expect(tableById(gd, p)!.computedFormula).toBeNull();
+    for (let i = 0; i < 4; i += 1) fillRows();
+    expect(colText(u)).toEqual(['c']);
+    expect(formulaErrorOf(u)).toBeNull();
+    // Sets that do not read P still fill it.
+    expect(fillColumnWith(gd, p, range, { op: 'Diff', sets: [e, c], shape: 'column' })).toBe(true);
+    for (let i = 0; i < 4; i += 1) fillRows();
+    // The Simple set's empty starting row is a person's row, not a computed one.
+    expect(colText(p).filter((x) => x !== '')).toEqual(['a', 'b']);
+    expect([...colText(u)].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  test('SET-09 FX-09 a product past the cap is refused with too many tuples, its message naming the count and the limit', () => {
+    const e = set(
+      'E',
+      1,
+      Array.from({ length: 101 }, (_, i) => `e${String(i)}`),
+    );
+    const c = set(
+      'C',
+      4,
+      Array.from({ length: 100 }, (_, i) => `c${String(i)}`),
+    );
+    const id = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 7, row: 1 },
+      kind: 'product',
+      pick: { op: 'Cross', sets: [e, c], shape: 'column' },
+    })!;
+    fillRows();
+    expect(tableById(gd, id)!.rows).toHaveLength(0);
+    const error = formulaErrorOf(id)!;
+    expect(cellErrorLabel(error)).toBe('⚠ too many tuples');
+    expect(cellErrorMessage(error, 'en-US')).toBe(
+      'Cross would make 10,100 tuples, past the limit of 10,000; narrow the sets',
+    );
+  });
+
+  test('SET-08 FX-06 a computed table whose operand set is deleted keeps its rows and says reference removed', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 4, ['c']);
+    const u = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 1, row: 10 },
+      kind: 'computed',
+      pick: { op: 'Union', sets: [e, c], shape: 'column' },
+    })!;
+    fillRows();
+    expect(formulaErrorOf(u)).toBeNull();
+    deleteTable(gd, e);
+    fillRows();
+    // SPEC §2.4: a refused result reconciles nothing; the header says why, so the rows
+    // are not read as current.
+    expect(colText(u)).toEqual(['a', 'b', 'c']);
+    expect(cellErrorLabel(formulaErrorOf(u)!)).toBe('⚠ reference removed');
+  });
+
+  test('SET-01 SET-02 a One-column-per-set product cannot be relabelled a Simple set, and is never offered as its x1 column', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 4, ['x', 'y']);
+    const p = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 1, row: 10 },
+      kind: 'product',
+      pick: { op: 'Cross', sets: [e, c], shape: 'spread' },
+    })!;
+    fillRows();
+    expect(setsOnSheet(gd, sheetId).map((s) => s.tableId)).not.toContain(p);
+    expect(kindChoices(gd, p)).toEqual([
+      { kind: 'plain', reason: 'its columns fill from a formula' },
+      { kind: 'simple', reason: 'its columns fill from a formula' },
+      { kind: 'family', reason: 'its columns fill from a formula' },
+      { kind: 'computed', reason: 'the formula is a Cross' },
+      { kind: 'product', reason: undefined },
+    ]);
+    expect(changeTableKind(gd, p, 'simple')).toBe(false);
+    expect(tableById(gd, p)!.kind).toBe('product');
+    expect(setsOnSheet(gd, sheetId).map((s) => s.tableId)).not.toContain(p);
+  });
+
+  test('SET-02 SET-09 a spread Fill into a Simple set’s first column takes the set out of the picker', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 4, ['x', 'y']);
+    const s = addTableOfKind(gd, { sheetId, at: { col: 7, row: 1 }, kind: 'simple' })!;
+    const range = tableById(gd, s)!.columns[0]!.id;
+    expect(fillColumnWith(gd, s, range, { op: 'Cross', sets: [e, c], shape: 'spread' })).toBe(true);
+    fillRows();
+    expect(tableById(gd, s)!.kind).toBe('simple');
+    expect(setsOnSheet(gd, sheetId).map((x) => x.tableId)).toEqual([e, c]);
+  });
+
+  test('SET-01 a Union table cannot be relabelled a Cartesian product', () => {
+    const e = set('E', 1, ['a', 'b']);
+    const c = set('C', 4, ['c']);
+    const u = addTableOfKind(gd, {
+      sheetId,
+      at: { col: 1, row: 10 },
+      kind: 'computed',
+      pick: { op: 'Union', sets: [e, c], shape: 'column' },
+    })!;
+    fillRows();
+    expect(kindChoices(gd, u).find((k) => k.kind === 'product')?.reason).toBe(
+      'the formula is not a Cross',
+    );
+    expect(changeTableKind(gd, u, 'product')).toBe(false);
+    expect(tableById(gd, u)!.kind).toBe('computed');
   });
 });

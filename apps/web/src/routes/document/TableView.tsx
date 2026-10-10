@@ -105,6 +105,7 @@ import {
 } from './ref/index.js'; // wave3/references
 import { useGraphLitRows } from './graph/store.js'; // wave4/graphs: GRAPH-09 lit rows
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
+import { ComputedFormulaError } from './sets/ComputedFormulaError.js';
 import { ColumnDivider, CornerHandle, RowDivider } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
 import {
@@ -261,6 +262,19 @@ export const TableView = memo(function TableView({
   // The column a lost row's words are drawn in: the first computed column on screen, so a
   // hidden first computed column does not hide them.
   const lostColumn = record.columns.find((c) => c.computed !== null && !c.hidden)?.id ?? null;
+  // SET-09, SPEC §2.4: the formula's error, in words in the title bar and as ⚠ on the first
+  // computed heading on screen.
+  const computedDriver = record.columns.find((c) => c.computed !== null)?.id ?? null;
+  const formulaError = (compact: boolean) =>
+    computedDriver === null || record.computedFormula === null || table.doc === null ? null : (
+      <ComputedFormulaError
+        doc={table.doc}
+        tableId={record.id}
+        driverColId={computedDriver}
+        formula={record.computedFormula}
+        compact={compact}
+      />
+    );
   // SORT-01..05: the rows to render, in view order; held still while a cell here is edited.
   const projection = useTableProjection(
     table,
@@ -692,6 +706,7 @@ export const TableView = memo(function TableView({
         {renaming?.kind === 'table'
           ? renameField(renaming, record.title)
           : record.look.titleShown && <span className="gd-table__title-text">{record.title}</span>}
+        {formulaError(false)}
         <span className="gd-mono gd-table__degree" aria-hidden="true">
           {columnLetter(record.gridCol)}
           {record.gridRow + 1}
@@ -822,6 +837,7 @@ export const TableView = memo(function TableView({
                       ) : (
                         <span className="gd-table__header-label">{col.label}</span>
                       )}
+                      {col.id === lostColumn && formulaError(true)}
                       {glyphs.map((g) => (
                         <span key={g.icon} className="gd-table__header-glyph" data-glyph={g.icon}>
                           <Icon name={g.icon} size={13} label={g.label} />
