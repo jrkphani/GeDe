@@ -24,6 +24,7 @@ import {
   type EngineRequest,
   type EngineResponse,
   type GedeDoc,
+  type Id,
   type WorkbookCellId,
   type WorkbookChange,
 } from '@gede/core';
@@ -78,6 +79,13 @@ export interface EngineHost {
    * (read inside a `subscribeAll` callback, the batch being delivered is already answered).
    */
   readonly busy: boolean;
+  /**
+   * A change to this table posted is still unanswered (a reset or a locale change counts for
+   * every table), so its cached results may predate the table as the document holds it.
+   */
+  busyFor(tableId: Id): boolean;
+  /** Resolves once `busyFor(tableId)` is false, or once the Worker gave up (`status.failed`). */
+  settledFor(tableId: Id): Promise<void>;
   /** Engine time of the last batch, for the §20 budget in devtools. */
   readonly lastElapsedMs: number;
   dispose(): void;
@@ -160,6 +168,25 @@ function defaultTransport(): EngineTransport {
   return typeof Worker === 'undefined' ? inlineTransport() : workerTransport();
 }
 
+/** The tables a change batch touches; a reset touches every one. */
+function tablesOf(changes: readonly WorkbookChange[]): ReadonlySet<Id> | 'all' {
+  const out = new Set<Id>();
+  for (const change of changes) {
+    switch (change.type) {
+      case 'reset':
+        return 'all';
+      case 'table':
+        out.add(change.table.id);
+        break;
+      case 'table-removed':
+      case 'cells':
+        out.add(change.tableId);
+        break;
+    }
+  }
+  return out;
+}
+
 export function createEngineHost(
   gd: GedeDoc,
   makeTransport: () => EngineTransport = defaultTransport,
@@ -170,7 +197,24 @@ export function createEngineHost(
   const allListeners = new Set<(touched: readonly WorkbookCellId[]) => void>();
   const statusListeners = new Set<() => void>();
   const pending = new Set<number>();
+  /** Per pending request, the tables its changes touch; `all` for a reset or a locale change. */
+  const pendingTables = new Map<number, ReadonlySet<Id> | 'all'>();
   const settleWaiters: (() => void)[] = [];
+  const tableWaiters: { readonly tableId: Id; readonly resolve: () => void }[] = [];
+  const busyFor = (tableId: Id): boolean => {
+    for (const tables of pendingTables.values()) {
+      if (tables === 'all' || tables.has(tableId)) return true;
+    }
+    return false;
+  };
+  const releaseTables = (all: boolean): void => {
+    for (let i = tableWaiters.length - 1; i >= 0; i -= 1) {
+      const waiter = tableWaiters[i];
+      if (waiter === undefined || (!all && busyFor(waiter.tableId))) continue;
+      tableWaiters.splice(i, 1);
+      waiter.resolve();
+    }
+  };
   let transport = makeTransport();
   let seq = 0;
   let version = 0;
@@ -206,6 +250,7 @@ export function createEngineHost(
     lastElapsedMs = response.elapsedMs;
     // Answered before listeners run, so `busy` there means a later request is outstanding.
     pending.delete(response.seq);
+    pendingTables.delete(response.seq);
     const touched: WorkbookCellId[] = [];
     const now = Date.now();
     for (const id of response.removed) {
@@ -223,6 +268,7 @@ export function createEngineHost(
       for (const cb of allListeners) cb(touched);
     }
     if (pending.size === 0) for (const resolve of settleWaiters.splice(0)) resolve();
+    releaseTables(false);
   };
 
   const post = (changes: readonly WorkbookChange[]) => {
@@ -230,6 +276,7 @@ export function createEngineHost(
     seq += 1;
     const request: EngineRequest = { type: 'apply', seq, changes };
     pending.add(seq);
+    pendingTables.set(seq, tablesOf(changes));
     transport.post(request);
   };
   // I18N: `Format` presets case through `Intl` for the active locale; the engine hears
@@ -238,6 +285,7 @@ export function createEngineHost(
     if (status.failed) return;
     seq += 1;
     pending.add(seq);
+    pendingTables.set(seq, 'all');
     transport.post({ type: 'locale', seq, locale: activeLocale() });
   };
   const stopLocale = subscribeLocale(postLocale);
@@ -272,10 +320,12 @@ export function createEngineHost(
     stopHeartbeat();
     transport.terminate();
     pending.clear();
+    pendingTables.clear();
     const message = error instanceof Error ? error.message : String(error);
     if (status.restarts >= MAX_WORKER_RESTARTS) {
       setStatus({ failed: true, lastError: message });
       for (const resolve of settleWaiters.splice(0)) resolve();
+      releaseTables(true);
       return;
     }
     setStatus({ restarts: status.restarts + 1, lastError: message });
@@ -345,6 +395,13 @@ export function createEngineHost(
     get busy() {
       return pending.size > 0;
     },
+    busyFor,
+    settledFor: (tableId) =>
+      status.failed || !busyFor(tableId)
+        ? Promise.resolve()
+        : new Promise((resolve) => {
+            tableWaiters.push({ tableId, resolve });
+          }),
     settled: () =>
       pending.size === 0
         ? Promise.resolve()
@@ -360,6 +417,7 @@ export function createEngineHost(
       allListeners.clear();
       statusListeners.clear();
       pending.clear();
+      pendingTables.clear();
     },
   };
 }

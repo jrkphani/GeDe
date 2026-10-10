@@ -30,6 +30,7 @@ import {
   computedRowId,
   reconcileComputed,
   setComputedColumn,
+  setComputedColumns,
   setTableFormula,
 } from './computed.js';
 
@@ -456,4 +457,67 @@ describe('SET-09 undo of a formula change raced by another', () => {
       expect(rowsOf(a.gd, tableId)).toEqual(rowsOf(b.gd, tableId));
     });
   }
+});
+
+describe('SET-09 undo of a spread Fill raced by a peer widening it', () => {
+  for (const [ca, cb] of ORDERS) {
+    const order = `(clients ${String(ca)},${String(cb)})`;
+    test(`SET-09 undoing a spread Fill after a peer widened the Cross reverts it whole ${order}`, () => {
+      const a = replica(ca);
+      const sheetId = createSheet(a.gd);
+      const tableId = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
+      const ids = tableById(a.gd, tableId)?.columns.map((c) => c.id) ?? [];
+      const [c0 = '', c1 = ''] = ids;
+      const undo = createUndoManager(a.gd, { captureTimeout: 0 });
+      a.gd.doc.transact(() => {
+        expect(
+          setComputedColumns(a.gd, tableId, [
+            { colId: c0, spec: { shape: 'spread', spreadIndex: 0 } },
+            { colId: c1, spec: { shape: 'spread', spreadIndex: 1 } },
+          ]),
+        ).toBe(true);
+        expect(setTableFormula(a.gd, tableId, '=Cross("x, y", "1")')).toBe(true);
+      }, a.gd.origin);
+      handOff(a);
+      const b = replica(cb);
+      send(a.doc, b.doc);
+      expect(setTableFormula(b.gd, tableId, '=Cross("x, y", "1", "p")')).toBe(true);
+      settle(a, b);
+      for (const r of [a, b]) expect(spreadIdx(r.gd, tableId)).toEqual([0, 1, 2]);
+
+      undo.undo();
+      settle(a, b);
+      for (const r of [a, b]) {
+        expect(tableById(r.gd, tableId)?.columns.map((c) => c.id)).toEqual(ids);
+        expect(sourcesOf(r.gd, tableId)).toEqual(['entered', 'entered', 'entered']);
+        expect(rowsOf(r.gd, tableId)).toEqual([]);
+        expect(handOff(r)).toBe(0);
+      }
+    });
+  }
+});
+
+describe('SET-09 a member column added by a re-fit is headed by its set', () => {
+  test('SET-09 widening a Cross over set tables adds x3 ∈ B; a literal operand leaves x4', () => {
+    const a = replica(1);
+    const sheetId = createSheet(a.gd);
+    const set = (title: string, col: number): string => {
+      const id = createTable(a.gd, { sheetId, at: { col, row: 1 }, columns: 1, rows: 1, title });
+      return `{k:${id}:${tableById(a.gd, id)?.columns[0]?.id ?? ''}}`;
+    };
+    const [e, c, b] = [set('E', 1), set('C', 3), set('B', 5)];
+    const tableId = createTable(a.gd, { sheetId, at: { col: 1, row: 8 }, columns: 2, rows: 0 });
+    const [c0 = '', c1 = ''] = tableById(a.gd, tableId)?.columns.map((col) => col.id) ?? [];
+    expect(setTableFormula(a.gd, tableId, `=Cross(${e}, ${c})`)).toBe(true);
+    setComputedColumns(a.gd, tableId, [
+      { colId: c0, spec: { shape: 'spread', spreadIndex: 0 } },
+      { colId: c1, spec: { shape: 'spread', spreadIndex: 1 } },
+    ]);
+    expect(setTableFormula(a.gd, tableId, `=Cross(${e}, ${c}, ${b}, "p")`)).toBe(true);
+    expect(
+      tableById(a.gd, tableId)
+        ?.columns.slice(2)
+        .map((col) => col.label),
+    ).toEqual(['x3 ∈ B', 'x4']);
+  });
 });

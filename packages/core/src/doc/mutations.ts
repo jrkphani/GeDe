@@ -33,6 +33,7 @@ import {
   type RowMetaMap,
   type SheetMap,
   type StripCount,
+  type TableKind,
   type TableMap,
 } from './schema.js';
 import { duplicateTableTitle, refreshLineageLabelsInTransaction } from './labels.js';
@@ -186,6 +187,8 @@ export interface CreateTableOptions {
   columns?: number;
   rows?: number;
   title?: string;
+  /** SET-01: the kind picked at Add table; `plain` (the default) writes nothing. */
+  kind?: TableKind;
 }
 
 function isPixels(at: LatticeUnits | Pixels): at is Pixels {
@@ -225,6 +228,7 @@ export function createTable(gd: GedeDoc, options: CreateTableOptions): Id {
     );
     map.set('gridCol', origin.col);
     map.set('gridRow', origin.row);
+    if (options.kind !== undefined && options.kind !== 'plain') map.set('kind', options.kind);
     const columns = new Y.Array<ColumnMap>();
     columns.push(
       Array.from({ length: columnCount }, (_, i) => newColumn(`Column ${String(i + 1)}`).map),
