@@ -782,6 +782,87 @@ describe('SET-08 computed columns', () => {
     }
   });
 
+  /** A labelled fake: the real inline engine, answering 40 ms late as a Worker may. */
+  const slowEngine = () => {
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        post: (request) => {
+          setTimeout(() => {
+            inner.post(request);
+          }, 40);
+        },
+      };
+    });
+  };
+
+  it('SET-08 a result batch answering an earlier request does not reconcile a remote formula change against the stale result', async () => {
+    slowEngine();
+    try {
+      const { sets } = await unionTable();
+      const other = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 20, row: 30 },
+        columns: 1,
+        rows: 1,
+        title: 'Other',
+      });
+      const o = tableById(gd, other)!;
+      const peer = openDocument(new Y.Doc());
+      Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+      setTableFormula(peer, sets, '=Union("a", "c")');
+      reconcileComputed(peer, sets, ['a', 'c']);
+      const peerRows = tableById(peer, sets)!.rows;
+      const seen: string[][] = [];
+      gd.doc.on('update', (_u: Uint8Array, origin: unknown) => {
+        if (origin === 'ref-computed') seen.push([...tableById(gd, sets)!.rows]);
+      });
+      // A formula cell edited here is in flight when the peer's formula change merges.
+      act(() => {
+        setCellText(gd, other, o.rows[0]!, o.columns[0]!.id, '=1+1');
+      });
+      await act(() => new Promise((r) => setTimeout(r, 2)));
+      act(() => {
+        Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+      });
+      await settled();
+      await act(() => new Promise((r) => setTimeout(r, 60)));
+      expect(tableById(gd, sets)!.rows).toEqual(peerRows);
+      expect(seen.filter((rows) => !rows.includes(peerRows[1]!))).toEqual([]);
+    } finally {
+      setEngineTransportForTests(null);
+    }
+  });
+
+  it('SET-08 an edit in a table with no computed column runs no computed reconcile', async () => {
+    slowEngine();
+    try {
+      await unionTable();
+      const other = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 20, row: 30 },
+        columns: 1,
+        rows: 1,
+        title: 'Other',
+      });
+      await settled();
+      await act(() => new Promise((r) => setTimeout(r, 60)));
+      const o = tableById(gd, other)!;
+      let passes = 0;
+      gd.doc.on('afterTransaction', (tr: Y.Transaction) => {
+        if (tr.origin === 'ref-computed') passes += 1;
+      });
+      act(() => {
+        setCellText(gd, other, o.rows[0]!, o.columns[0]!.id, 'plain');
+      });
+      await act(() => new Promise((r) => setTimeout(r, 5)));
+      expect(passes).toBe(0);
+    } finally {
+      setEngineTransportForTests(null);
+    }
+  });
+
   it('SET-12 a lost row is not dimmed without its words when the table has no formula', async () => {
     const { sets, range, note } = await unionTable();
     const [, b] = tableById(gd, sets)!.rows;

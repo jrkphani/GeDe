@@ -402,3 +402,58 @@ describe('SET-09 concurrent widen and narrow of a spread', () => {
     });
   }
 });
+
+describe('SET-09 a spread Fill made one column at a time', () => {
+  test('SET-09 a member the re-fit added gives way to the column the person fills for it', () => {
+    const a = replica(1);
+    const sheetId = createSheet(a.gd);
+    const tableId = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
+    const ids = tableById(a.gd, tableId)?.columns.map((c) => c.id) ?? [];
+    const soundness = (): void => {
+      for (const h of computedItemsOf(a.gd, () => undefined))
+        reconcileComputed(a.gd, h.tableId, null);
+    };
+    setTableFormula(a.gd, tableId, '=Cross("x", "1")');
+    expect(
+      setComputedColumn(a.gd, tableId, ids[0] ?? '', { shape: 'spread', spreadIndex: 0 }),
+    ).toBe(true);
+    soundness();
+    // The re-fit added member 1 after member 0 until the person fills one.
+    expect(spreadIdx(a.gd, tableId)).toEqual([0, 1]);
+    expect(
+      setComputedColumn(a.gd, tableId, ids[1] ?? '', { shape: 'spread', spreadIndex: 1 }),
+    ).toBe(true);
+    soundness();
+    handOff(a);
+    expect(tableById(a.gd, tableId)?.columns.map((c) => c.id)).toEqual(ids);
+    expect(spreadIdx(a.gd, tableId)).toEqual([0, 1]);
+  });
+});
+
+describe('SET-09 undo of a formula change raced by another', () => {
+  for (const [ca, cb] of ORDERS) {
+    const order = `(clients ${String(ca)},${String(cb)})`;
+    test(`SET-09 A widens and undoes while B narrows: both replicas converge and stay sound ${order}`, () => {
+      const a = replica(ca);
+      const { tableId } = spreadTable(a, '=Cross("x", "1", "p")', 3);
+      const b = replica(cb);
+      send(a.doc, b.doc);
+      const undo = createUndoManager(a.gd, { captureTimeout: 0 });
+      setTableFormula(a.gd, tableId, '=Cross("x", "1", "p", "q")');
+      setTableFormula(b.gd, tableId, '=Cross("x", "1")');
+      settle(a, b);
+      undo.undo();
+      settle(a, b);
+      // Known limit (setTableFormula): the formula may be gone; the replicas still agree.
+      const f = tableById(a.gd, tableId)?.computedFormula ?? null;
+      for (const r of [a, b]) {
+        expect(tableById(r.gd, tableId)?.computedFormula ?? null).toBe(f);
+        expect(handOff(r)).toBe(0);
+      }
+      expect(tableById(a.gd, tableId)?.columns.map((c) => c.id)).toEqual(
+        tableById(b.gd, tableId)?.columns.map((c) => c.id),
+      );
+      expect(rowsOf(a.gd, tableId)).toEqual(rowsOf(b.gd, tableId));
+    });
+  }
+});
