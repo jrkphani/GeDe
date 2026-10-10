@@ -297,6 +297,7 @@ describe('lock on received updates (SET-18)', () => {
   test('SET-18 the reconcilers still write a locked table: its rows and a pulled row’s cells', () => {
     const lane = section('Lane', 0, 5);
     const id = setTable('E', ['a'], 1);
+    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
     setSectionLocked(gd, sheetId, lane, true);
     // A row added by a machine (row membership is open) and its cell, on a row a source owns.
     const rowId = 'ROWPULLED';
@@ -531,9 +532,66 @@ describe('lock guard holes (SET-17, SET-18)', () => {
     expect(lockedTablesEdited(gd, removed)).toEqual([id]);
   });
 
+  const forgedRow = (r: GedeDoc, id: Id): Id => {
+    const row = addRow(r, id);
+    r.doc.transact(() => {
+      const meta = tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
+      meta?.get(row)?.set('pulledFrom', { tableId: 'x', rowId: 'y' });
+    });
+    return row;
+  };
+
+  test('SET-18 a client cannot add a row dressed as pulled (forged meta on a NEW row)', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    const sent = sentBy((r) => setCellText(r, id, forgedRow(r, id), rangeOf(id), 'HACKED'));
+    expect(applyGuardedUpdate(gd, sent, 'client')).toEqual([id]);
+    expect(tableById(gd, id)?.rows).toHaveLength(1);
+  });
+
+  test('SET-18 a client cannot overwrite computedRows of a locked table that is not computed', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => tableMap(r, id)?.set('computedRows', 'HACK')),
+      ),
+    ).toEqual([id]);
+  });
+
+  test('SET-18 a client cannot rename or resize a locked section', () => {
+    const lane = section('L', 0, 5);
+    setSectionLocked(gd, sheetId, lane, true);
+    const sent = sentBy((r) => {
+      const m = r.sheets.get(0).get(`section:${lane}`) as Y.Map<unknown>;
+      m.set('name', 'HACK');
+      m.set('lastColumn', 9);
+    });
+    expect(applyGuardedUpdate(gd, sent, 'client')).toEqual([sheetId]);
+    expect(listSections(gd, sheetId)[0]).toMatchObject({ name: 'L', lastColumn: 5, locked: true });
+  });
+
+  test('SET-18 deleting a sheet with a locked lane keeps its unlocked tables too', () => {
+    createSheet(gd, { label: 'Two' });
+    const lane = section('Lane', 0, 5);
+    setTable('E', ['a'], 1);
+    const free = setTable('F', ['b'], 20);
+    setSectionLocked(gd, sheetId, lane, true);
+    applyGuardedUpdate(
+      gd,
+      sentBy((r) => void deleteSheet(r, sheetId)),
+      'client',
+    );
+    expect(tableById(gd, free)?.sheetId).toBe(sheetId);
+  });
+
   test('SET-18 a reconciler row (computed, pulled) still lands in a locked table', () => {
     const lane = section('Lane', 0, 5);
     const id = setTable('E', ['a'], 1);
+    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
     setSectionLocked(gd, sheetId, lane, true);
     const sent = sentBy((r) => {
       const row = addRow(r, id);
