@@ -110,7 +110,7 @@ describe('message catalogue', () => {
       expect(m['tour.step3.result.action'], locale).toContain('Diff');
     }
     const en = CATALOGUE['en-US'];
-    expect(en['tour.step3.action']).toBe('Type = in a cell and choose Union');
+    expect(en['tour.step3.action']).toBe('Type = in a cell and pick Union');
     // "cells or ranges": the detector needs a bound operand, so literals alone never count.
     expect(en['tour.step3.result.action']).toBe(
       'Commit a Diff, Inter, Comp or Cross over two cells or ranges',
@@ -259,6 +259,14 @@ describe('message catalogue', () => {
     expect(labels.length).toBeGreaterThan(80);
     for (const key of labels) {
       expect(CATALOGUE['en-US'][key], key).not.toMatch(/\b(Create|Insert|New|Place|Choose)\b/);
+    }
+    // The ban is blanket: every value in every locale, not only menu.* in en-US.
+    for (const locale of LOCALES) {
+      for (const key of MESSAGE_KEYS) {
+        expect(CATALOGUE[locale][key], `${locale} ${key}`).not.toMatch(
+          /\b(Create|Insert|New|Place|Choose)\b/i,
+        );
+      }
     }
     expect(CATALOGUE['en-US']['menu.addRowAbove']).toBe('Add row above');
     expect(CATALOGUE['en-US']['menu.addColumnBefore']).toBe('Add column before');

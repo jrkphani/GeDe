@@ -319,7 +319,7 @@ export function Library() {
       .catch((error: unknown) => {
         setCreating(false);
         setFailure({
-          ...describeFailure('Could not create a workscape', error, 'It already exists'),
+          ...describeFailure('Could not add a workscape', error, 'It already exists'),
           retry: create,
         });
       });
@@ -790,11 +790,11 @@ export function Library() {
         {canManage && (
           <Button
             icon={<Icon name="plus" size={15} />}
-            aria-label="New workscape"
-            title="New workscape"
+            aria-label="Add workscape"
+            title="Add workscape"
             onClick={create}
             loading={creating}
-            loadingLabel="Creating…"
+            loadingLabel="Adding…"
           />
         )}
         {user && <AccountMenu user={user} onSignOut={signOut} />}
@@ -990,7 +990,7 @@ function LibraryEmpty({
   return (
     <EmptyState
       label={VIEW_META[view].label.toLowerCase()}
-      title="Create your first workscape"
+      title="Add your first workscape"
       description="Tables, formulas and context graphs on one shared sheet."
       action={
         <Button
@@ -998,9 +998,9 @@ function LibraryEmpty({
           size="lg"
           onClick={onCreate}
           loading={creating}
-          loadingLabel="Creating…"
+          loadingLabel="Adding…"
         >
-          Create workscape
+          Add first workscape
         </Button>
       }
     />

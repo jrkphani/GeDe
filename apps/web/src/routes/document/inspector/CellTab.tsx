@@ -320,7 +320,7 @@ export function CellTab({ gd, table, cell, editable, commands, readOnlyReason }:
             disabledReason={
               look.disabledReason ??
               (look.effective.border === undefined || look.effective.border.edges === 'none'
-                ? 'choose an edge first'
+                ? 'pick an edge first'
                 : undefined)
             }
             onValueChange={(weight) => {

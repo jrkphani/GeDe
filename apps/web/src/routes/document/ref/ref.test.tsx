@@ -321,7 +321,7 @@ describe('REF-04 derived columns', () => {
     expect(within(panel).getByTestId('derive-signature')).toHaveTextContent(
       '@"Column 1".Concat(" ✓")',
     );
-    await userEvent.click(within(panel).getByRole('button', { name: 'Create derived column' }));
+    await userEvent.click(within(panel).getByRole('button', { name: 'Derive column' }));
     const after = tableById(gd, notes)!;
     expect(after.columns[1]).toMatchObject({
       source: 'derived',

@@ -143,7 +143,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
       ? 'the rule needs its text or count'
       : hasOutput
         ? undefined
-        : 'choose a fill, text colour, mark or border');
+        : 'pick a fill, text colour, mark or border');
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
   };

@@ -266,7 +266,7 @@ describe('context menus', () => {
       expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     });
     expect(screen.getAllByRole('row')).toHaveLength(5); // header + 4
-    expect(screen.getByTestId('live-region')).toHaveTextContent('Inserted a row above');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Added a row above');
     // Escape closes and focus returns to the cell that had it (MENU-05).
     const cell = cells()[0]!;
     cell.focus();

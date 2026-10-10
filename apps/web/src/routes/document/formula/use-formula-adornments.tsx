@@ -105,10 +105,10 @@ const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
 const ENTITY_LIMIT = 8;
 
 /** The set operators (FX-09, FX-10, ADR-053): offered wherever Concat is — every argument is the strings in its cells. */
-const SET_FORMS: readonly FormOption[] = [
-  { id: 'union', label: 'Union(a, b, …)', hint: 'elements in any of the sets', insert: '=Union(' },
-  { id: 'inter', label: 'Inter(a, b, …)', hint: 'elements in every set', insert: '=Inter(' },
-  { id: 'diff', label: 'Diff(a, b, …)', hint: 'elements of a that are not in b', insert: '=Diff(' },
+const setForms = (t: Translate): FormOption[] => [
+  { id: 'union', label: 'Union(a, b, …)', hint: t('pick.op.Union'), insert: '=Union(' },
+  { id: 'inter', label: 'Inter(a, b, …)', hint: t('pick.op.Inter'), insert: '=Inter(' },
+  { id: 'diff', label: 'Diff(a, b, …)', hint: t('pick.op.Diff'), insert: '=Diff(' },
   {
     id: 'comp',
     label: 'Comp(a, u)',
@@ -118,7 +118,7 @@ const SET_FORMS: readonly FormOption[] = [
   {
     id: 'cross',
     label: 'Cross(a, b, …)',
-    hint: 'every ordered tuple (a, b, …)',
+    hint: t('pick.op.Cross'),
     insert: '=Cross(',
   },
 ];
@@ -133,7 +133,7 @@ function forms(summable: boolean, t: Translate): FormOption[] {
       insert: '=Sum(',
       disabledReason: summable ? undefined : SUM_DISABLED,
     },
-    ...SET_FORMS,
+    ...setForms(t),
     { id: 'power', label: 'Power(a)', hint: t('forms.power.hint'), insert: '=Power(' },
     {
       id: 'entity',

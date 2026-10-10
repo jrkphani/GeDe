@@ -319,7 +319,7 @@ export function ShareSheet({
       description={
         readOnly
           ? 'Who has access. Sharing changes need a larger screen.'
-          : 'Invite people by email, choose what they can do, or share a link.'
+          : 'Invite people by email, pick what they can do, or share a link.'
       }
       className="gd-share"
       actions={

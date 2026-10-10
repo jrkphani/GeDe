@@ -54,10 +54,10 @@ export const messages = {
 
   'tour.step3.title': 'Compute over the text in cells',
   'tour.step3.body':
-    'A cell’s commas make a set, and five forms compare sets. Double-click an empty cell in Deliverables, type = to open the forms menu and choose Union(a, b, …). Name two ranges inside the parentheses: =Union(C5:C12, I5:I8) is everyone named as an owner or on the team, once each — Priya, Marcus, Aditi, Sanjay.',
+    'A cell’s commas make a set, and five forms compare sets. Double-click an empty cell in Deliverables, type = to open the forms menu and pick Union(a, b, …). Name two ranges inside the parentheses: =Union(C5:C12, I5:I8) is everyone named as an owner or on the team, once each — Priya, Marcus, Aditi, Sanjay.',
   'tour.step3.note':
     'No Numbers equivalent — a cell’s commas make a set, and a set formula’s result is one cell that reads like its sources.',
-  'tour.step3.action': 'Type = in a cell and choose Union',
+  'tour.step3.action': 'Type = in a cell and pick Union',
 
   'tour.step3.result.title': 'Compare two sets',
   'tour.step3.result.body':
@@ -76,7 +76,7 @@ export const messages = {
   'tour.step4.point.offCanvas': 'A table sits off the canvas; the one on screen is enough.',
   'tour.step4.point.action': 'Click a table to bind the graph',
 
-  'tour.step4.dimensions.title': 'Choose the dimensions',
+  'tour.step4.dimensions.title': 'Pick the dimensions',
   'tour.step4.dimensions.body':
     'A dimension is a column whose values define a context, so every combination of values is a node. The graph starts with the first three entered columns; the Graph tab lists each column with its distinct values. Change the set — untick one of the three, or tick another — to see the graph redraw.',
   'tour.step4.dimensions.action': 'Untick or tick a dimension, keeping at least two',

@@ -690,7 +690,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const target =
         rec === null ? null : firstVisibleColumn(rec, colId ?? selectedIn(tableId)?.colId);
       if (target !== null) select({ tableId, rowId: id, colId: target });
-      announce(rowId === undefined ? 'Added a row' : 'Inserted a row below');
+      announce(rowId === undefined ? 'Added a row' : 'Added a row below');
       return id;
     },
     appendRowWith(tableId, values) {
@@ -715,7 +715,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const rec = record(tableId);
       const colId = rec === null ? null : firstVisibleColumn(rec, selectedIn(tableId)?.colId);
       if (colId !== null) select({ tableId, rowId: id, colId });
-      announce('Inserted a row above');
+      announce('Added a row above');
       return id;
     },
     deleteRow(tableId, rowId) {
@@ -732,7 +732,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const id = addColumn(gd, tableId, { afterColId: colId });
       const rowId = selectedIn(tableId)?.rowId ?? record(tableId)?.rows[0];
       if (rowId !== undefined) select({ tableId, rowId, colId: id });
-      announce(colId === undefined ? 'Added a column' : 'Inserted a column after');
+      announce(colId === undefined ? 'Added a column' : 'Added a column after');
       return id;
     },
     insertColumnBefore(tableId, colId) {
@@ -740,7 +740,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const id = addColumn(gd, tableId, { beforeColId: colId });
       const rowId = selectedIn(tableId)?.rowId ?? record(tableId)?.rows[0];
       if (rowId !== undefined) select({ tableId, rowId, colId: id });
-      announce('Inserted a column before');
+      announce('Added a column before');
       return id;
     },
     deleteColumn(tableId, colId) {

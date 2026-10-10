@@ -1043,7 +1043,7 @@ describe('Inspector', () => {
     // The weight waits on an edge being chosen: a live reason, not a release.
     const weight = within(section('fill and border')).getByRole('combobox', { name: 'Weight' });
     expect(weight).toBeDisabled();
-    expect(weight).toHaveAttribute('title', 'choose an edge first');
+    expect(weight).toHaveAttribute('title', 'pick an edge first');
     for (const tabName of ['Table', 'Cell', 'Text', 'Arrange'] as const) {
       await userEvent.click(tab(tabName));
       const panel = screen.getByRole('tabpanel');
