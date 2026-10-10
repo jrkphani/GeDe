@@ -103,6 +103,7 @@ describe('SET-08 ruling (c): a computed row cannot be deleted', () => {
     try {
       expect(rowDeleteReason(gd, sets, first!)).toBe('இந்த வரிசை கணக்கிடப்படுகிறது');
     } finally {
+      setLocale('en-US'); // the device key outlives reset
       resetLocaleForTests();
     }
   });
@@ -128,9 +129,9 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     expect(
       Array.from(menu.querySelectorAll('.gd-menu__label')).map((el) => el.textContent),
     ).toEqual([
-      'Insert row above',
+      'Add row above',
       'Delete row',
-      'Insert column before',
+      'Add column before',
       'Delete column',
       'Hide column',
       'Unhide columns',
@@ -191,7 +192,7 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     await userEvent.click(screen.getByRole('menuitem', { name: 'Unhide 1 column' }));
     expect(tableById(gd, tableId)?.columns[1]?.hidden).toBe(false);
     await open();
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Insert row above' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Add row above' }));
     expect(tableById(gd, tableId)?.rows).toHaveLength(3);
     await open();
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete column' }));

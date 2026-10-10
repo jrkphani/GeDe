@@ -253,4 +253,14 @@ describe('message catalogue', () => {
     expect(en['fill.menu']).toBe('Fill column with formula…');
     expect(en['fill.notEmpty']).toBe('the column is not empty');
   });
+
+  test('SET-19 no button or menu label in any locale catalogue uses Create, Insert, New, Place or Choose', () => {
+    const labels = MESSAGE_KEYS.filter((k) => k.startsWith('menu.'));
+    expect(labels.length).toBeGreaterThan(80);
+    for (const key of labels) {
+      expect(CATALOGUE['en-US'][key], key).not.toMatch(/\b(Create|Insert|New|Place|Choose)\b/);
+    }
+    expect(CATALOGUE['en-US']['menu.addRowAbove']).toBe('Add row above');
+    expect(CATALOGUE['en-US']['menu.addColumnBefore']).toBe('Add column before');
+  });
 });

@@ -38,7 +38,7 @@ import type { MenuEntry } from '@gede/ui';
 
 import { peekEngine } from '../../../doc/engine.js';
 import { LABELS } from '../../../doc/shortcuts.js';
-import { translate, type MessageKey } from '../../../i18n/index.js';
+import { translate, type MessageKey, type MessageParams } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GraphsActions } from '../graph/use-graphs.js';
@@ -60,6 +60,8 @@ import {
   fitColumnsToContent,
   fitRowsToContent,
 } from '../style/index.js';
+
+const tm = (key: MessageKey, params?: MessageParams) => translate(activeLocale(), key, params);
 
 export type MenuTarget =
   | { kind: 'cell'; tableId: Id; rowId: Id; colId: Id }
@@ -199,7 +201,7 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
     {
       kind: 'item',
       id: 'cut',
-      label: 'Cut',
+      label: tm('menu.cut'),
       shortcut: LABELS.cut,
       disabledReason: viewOnly ?? locked,
       onSelect: () => {
@@ -209,7 +211,7 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
     {
       kind: 'item',
       id: 'copy',
-      label: 'Copy',
+      label: tm('menu.copy'),
       shortcut: LABELS.copy,
       onSelect: () => {
         void ctx.clipboard.copy();
@@ -218,7 +220,7 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
     {
       kind: 'item',
       id: 'copy-snapshot',
-      label: 'Copy snapshot',
+      label: tm('menu.copySnapshot'),
       onSelect: () => {
         void ctx.clipboard.copySnapshot();
       },
@@ -226,7 +228,7 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
     {
       kind: 'item',
       id: 'paste',
-      label: 'Paste',
+      label: tm('menu.paste'),
       shortcut: LABELS.paste,
       disabledReason: viewOnly ?? locked,
       onSelect: () => {
@@ -236,7 +238,7 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
     {
       kind: 'item',
       id: 'paste-match',
-      label: 'Paste and match style',
+      label: tm('menu.pasteAndMatchStyle'),
       shortcut: LABELS.pasteMatchStyle,
       disabledReason: viewOnly ?? locked,
       onSelect: () => {
@@ -246,7 +248,7 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
     {
       kind: 'item',
       id: 'clear',
-      label: 'Clear all',
+      label: tm('menu.clearAll'),
       shortcut: LABELS.clear,
       disabledReason: viewOnly ?? locked,
       onSelect: () => {
@@ -275,7 +277,7 @@ function columnClipboardEntries(
     {
       kind: 'item',
       id: 'cut',
-      label: 'Cut column',
+      label: tm('menu.cutColumn'),
       disabledReason: cut,
       onSelect: () => {
         void column.cut(scope);
@@ -284,7 +286,7 @@ function columnClipboardEntries(
     {
       kind: 'item',
       id: 'copy',
-      label: 'Copy column',
+      label: tm('menu.copyColumn'),
       disabledReason: column.reason(scope, 'copy'),
       onSelect: () => {
         void column.copy(scope);
@@ -293,7 +295,7 @@ function columnClipboardEntries(
     {
       kind: 'item',
       id: 'copy-snapshot',
-      label: 'Copy column snapshot',
+      label: tm('menu.copyColumnSnapshot'),
       disabledReason: column.reason(scope, 'copy'),
       onSelect: () => {
         void column.copySnapshot(scope);
@@ -302,7 +304,7 @@ function columnClipboardEntries(
     {
       kind: 'item',
       id: 'paste',
-      label: 'Paste into column',
+      label: tm('menu.pasteIntoColumn'),
       disabledReason: paste,
       onSelect: () => {
         void column.paste(scope);
@@ -311,7 +313,7 @@ function columnClipboardEntries(
     {
       kind: 'item',
       id: 'paste-match',
-      label: 'Paste into column and match style',
+      label: tm('menu.pasteIntoColumnAndMatchStyle'),
       disabledReason: paste,
       onSelect: () => {
         void column.pasteMatchStyle(scope);
@@ -320,7 +322,7 @@ function columnClipboardEntries(
     {
       kind: 'item',
       id: 'clear',
-      label: 'Clear column',
+      label: tm('menu.clearColumn'),
       disabledReason: cut,
       onSelect: () => {
         column.clear(scope);
@@ -340,7 +342,7 @@ function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): Men
       {
         kind: 'item',
         id: 'sort-asc',
-        label: 'Sort ascending',
+        label: tm('menu.sortAscending'),
         disabledReason: viewOnly ?? soon,
         onSelect: () => {
           sort?.sortAscending(tableId, colId);
@@ -349,7 +351,7 @@ function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): Men
       {
         kind: 'item',
         id: 'sort-desc',
-        label: 'Sort descending',
+        label: tm('menu.sortDescending'),
         disabledReason: viewOnly ?? soon,
         onSelect: () => {
           sort?.sortDescending(tableId, colId);
@@ -361,7 +363,7 @@ function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): Men
     {
       kind: 'item',
       id: 'sort-options',
-      label: 'Show sort options',
+      label: tm('menu.showSortOptions'),
       disabledReason: soon,
       onSelect: () => {
         sort?.showSortOptions(tableId);
@@ -371,7 +373,7 @@ function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): Men
     {
       kind: 'item',
       id: 'quick-filter',
-      label: 'Quick filter…',
+      label: tm('menu.quickFilter'),
       disabledReason: soon ?? needsColumn,
       onSelect: () => {
         if (colId !== null) sort?.quickFilter(tableId, colId);
@@ -380,7 +382,7 @@ function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): Men
     {
       kind: 'item',
       id: 'filter-options',
-      label: 'Show filter options',
+      label: tm('menu.showFilterOptions'),
       disabledReason: soon,
       onSelect: () => {
         sort?.showFilterOptions(tableId);
@@ -401,7 +403,7 @@ function categoryEntries(ctx: MenuContext, tableId: Id, colId: Id | null, label:
       {
         kind: 'item',
         id: 'category-add',
-        label: `Add category for ${label}`,
+        label: tm('menu.addCategoryForLabel', { label }),
         disabledReason: viewOnly ?? soon ?? (isCategory ? 'already a category' : undefined),
         onSelect: () => {
           hier?.addCategory(tableId, colId);
@@ -410,7 +412,7 @@ function categoryEntries(ctx: MenuContext, tableId: Id, colId: Id | null, label:
       {
         kind: 'item',
         id: 'category-remove',
-        label: `Remove ${label} category`,
+        label: tm('menu.removeLabelCategory', { label }),
         disabledReason: viewOnly ?? soon ?? (isCategory ? undefined : 'not a category'),
         onSelect: () => {
           hier?.removeCategory(tableId, colId);
@@ -421,7 +423,7 @@ function categoryEntries(ctx: MenuContext, tableId: Id, colId: Id | null, label:
   out.push({
     kind: 'item',
     id: 'category-options',
-    label: 'Show category options',
+    label: tm('menu.showCategoryOptions'),
     disabledReason: soon,
     onSelect: () => {
       hier?.showCategoryOptions(tableId);
@@ -434,7 +436,7 @@ function graphEntry(ctx: MenuContext, tableId: Id): MenuEntry {
   return {
     kind: 'item',
     id: 'graph',
-    label: 'Graph this table',
+    label: tm('menu.graphThisTable'),
     disabledReason: ctx.slots?.graph === undefined ? GRAPH_SOON : undefined,
     onSelect: () => {
       ctx.slots?.graph?.graphTable(tableId);
@@ -450,12 +452,7 @@ function graphEntry(ctx: MenuContext, tableId: Id): MenuEntry {
  * column menu to open. Where no 2D canvas exists the item says so (MENU-02),
  * as the inspector's buttons do.
  */
-function fitColumnEntry(
-  ctx: MenuContext,
-  tableId: Id,
-  colId: Id,
-  label: 'Fit width to content' | 'Fit column width to content',
-): MenuEntry {
+function fitColumnEntry(ctx: MenuContext, tableId: Id, colId: Id, label: string): MenuEntry {
   const { gd, commands } = ctx;
   const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
   return {
@@ -511,7 +508,7 @@ export function cellMenuEntries(
     {
       kind: 'check',
       id: 'freeze-rows',
-      label: 'Freeze header row',
+      label: tm('menu.freezeHeaderRow'),
       checked: record.headerRows === 1,
       disabledReason: viewOnly,
       onCheckedChange: (on) => {
@@ -521,7 +518,7 @@ export function cellMenuEntries(
     {
       kind: 'check',
       id: 'freeze-columns',
-      label: `Freeze columns through ${column?.label ?? address}`,
+      label: tm('menu.freezeColumnsThroughLabel', { label: column?.label ?? address }),
       checked: frozenThrough,
       disabledReason:
         viewOnly ?? (canFreeze ? undefined : 'freezing every column would leave nothing to scroll'),
@@ -533,7 +530,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'row-above',
-      label: 'Add row above',
+      label: tm('menu.addRowAbove'),
       disabledReason: viewOnly,
       onSelect: () => {
         commands.insertRowAbove(tableId, rowId);
@@ -542,7 +539,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'row-below',
-      label: 'Add row below',
+      label: tm('menu.addRowBelow'),
       shortcut: LABELS.addRow,
       disabledReason: viewOnly,
       onSelect: () => {
@@ -552,7 +549,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'col-before',
-      label: 'Add column before',
+      label: tm('menu.addColumnBefore'),
       disabledReason: viewOnly,
       onSelect: () => {
         commands.insertColumnBefore(tableId, colId);
@@ -561,7 +558,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'col-after',
-      label: 'Add column after',
+      label: tm('menu.addColumnAfter'),
       shortcut: LABELS.addColumn,
       disabledReason: viewOnly,
       onSelect: () => {
@@ -573,7 +570,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'row-delete',
-      label: 'Delete row',
+      label: tm('menu.deleteRow'),
       danger: true,
       disabledReason:
         viewOnly ??
@@ -586,7 +583,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'col-delete',
-      label: 'Delete column',
+      label: tm('menu.deleteColumn'),
       danger: true,
       disabledReason:
         viewOnly ?? (record.columns.length <= 1 ? 'a table keeps at least one column' : undefined),
@@ -604,7 +601,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'merge-right',
-      label: 'Merge with cell to the right',
+      label: tm('menu.mergeWithCellToTheRight'),
       disabledReason:
         viewOnly ??
         (covered !== null
@@ -619,7 +616,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'merge-down',
-      label: 'Merge with cell below',
+      label: tm('menu.mergeWithCellBelow'),
       disabledReason:
         viewOnly ??
         (covered !== null
@@ -634,7 +631,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'unmerge',
-      label: 'Unmerge cells',
+      label: tm('menu.unmergeCells'),
       disabledReason:
         viewOnly ?? (span === null && covered === null ? 'the cell is not merged' : undefined),
       onSelect: () => {
@@ -648,7 +645,7 @@ export function cellMenuEntries(
       // no range selection (ADR-042).
       kind: 'item',
       id: 'select-all',
-      label: 'Select the table',
+      label: tm('menu.selectTheTable'),
       shortcut: LABELS.selectAll,
       disabledReason: ctx.selectTable === undefined ? 'select a cell first' : undefined,
       onSelect: () => {
@@ -662,7 +659,7 @@ export function cellMenuEntries(
       // MENU-04 / ADR-049 (Numbers N8): checked when this cell wraps (cell > row > column >
       // table). A change writes the cell's own override, so the item's state always answers
       // the click and no other cell moves; the Text tab says which scope decides it.
-      label: 'Wrap text',
+      label: tm('menu.wrapText'),
       checked: cellWraps,
       disabledReason: viewOnly,
       onCheckedChange: (on) => {
@@ -672,7 +669,7 @@ export function cellMenuEntries(
     {
       kind: 'item',
       id: 'row-fit',
-      label: 'Fit row height to content',
+      label: tm('menu.fitRowHeightToContent'),
       // #167 criterion 5: the row's fit, from the cell's menu (GeDe has no row menu). Where
       // no 2D canvas exists the item says so (MENU-02), as the inspector's buttons do.
       disabledReason:
@@ -692,7 +689,7 @@ export function cellMenuEntries(
         );
       },
     },
-    fitColumnEntry(ctx, tableId, colId, 'Fit column width to content'),
+    fitColumnEntry(ctx, tableId, colId, tm('menu.fitColumnWidthToContent')),
   ];
 }
 
@@ -719,7 +716,7 @@ export function columnMenuEntries(
     {
       kind: 'check',
       id: 'freeze-columns',
-      label: `Freeze columns through ${column.label}`,
+      label: tm('menu.freezeColumnsThroughLabel', { label: column.label }),
       checked: frozenThrough,
       disabledReason:
         viewOnly ?? (canFreeze ? undefined : 'freezing every column would leave nothing to scroll'),
@@ -732,7 +729,7 @@ export function columnMenuEntries(
       // column, so on the implicit first visible column there is nothing to uncheck.
       kind: 'check',
       id: 'outline-column',
-      label: 'Use as outline column',
+      label: tm('menu.useAsOutlineColumn'),
       checked: outlineColumnId(record) === colId,
       disabledReason:
         viewOnly ??
@@ -751,7 +748,7 @@ export function columnMenuEntries(
     {
       kind: 'item',
       id: 'col-before',
-      label: 'Add column before',
+      label: tm('menu.addColumnBefore'),
       disabledReason: viewOnly,
       onSelect: () => {
         commands.insertColumnBefore(tableId, colId);
@@ -760,7 +757,7 @@ export function columnMenuEntries(
     {
       kind: 'item',
       id: 'col-after',
-      label: 'Add column after',
+      label: tm('menu.addColumnAfter'),
       shortcut: LABELS.addColumn,
       disabledReason: viewOnly,
       onSelect: () => {
@@ -772,7 +769,7 @@ export function columnMenuEntries(
       // field is the home). A column whose label is its lineage says why (MENU-02).
       kind: 'item',
       id: 'col-rename',
-      label: 'Rename column…',
+      label: tm('menu.renameColumn'),
       shortcut: RENAME_KEYS.rename,
       disabledReason:
         viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY : columnRenameReason(column)),
@@ -796,7 +793,7 @@ export function columnMenuEntries(
     {
       kind: 'item',
       id: 'col-delete',
-      label: 'Delete column',
+      label: tm('menu.deleteColumn'),
       danger: true,
       disabledReason:
         viewOnly ?? (record.columns.length <= 1 ? 'a table keeps at least one column' : undefined),
@@ -807,13 +804,13 @@ export function columnMenuEntries(
     {
       kind: 'item',
       id: 'col-hide',
-      label: 'Hide column',
+      label: tm('menu.hideColumn'),
       disabledReason: viewOnly ?? (visibleCount <= 1 ? 'the last visible column stays' : undefined),
       onSelect: () => {
         commands.hideColumn(tableId, colId);
       },
     },
-    fitColumnEntry(ctx, tableId, colId, 'Fit width to content'),
+    fitColumnEntry(ctx, tableId, colId, tm('menu.fitWidthToContent')),
     sep('s-clipboard'),
     ...columnClipboardEntries(ctx, target),
     sep('s-wrap'),
@@ -822,7 +819,7 @@ export function columnMenuEntries(
       id: 'wrap',
       // ADR-049: the column's scope — checked when the column wraps by its own key or the
       // table's default; a change writes the column's key.
-      label: 'Wrap text',
+      label: tm('menu.wrapText'),
       checked: column.wrap ?? record.look.wrap,
       disabledReason: viewOnly,
       onCheckedChange: (on) => {
@@ -834,7 +831,7 @@ export function columnMenuEntries(
 
 /** ADR-047: what the delete items call a half. */
 function halfLabel(kind: GraphKind): string {
-  return kind === 'ring' ? 'Delete ring' : 'Delete coverage';
+  return tm(kind === 'ring' ? 'menu.deleteRing' : 'menu.deleteCoverage');
 }
 
 /**
@@ -855,7 +852,7 @@ export function graphMenuEntries(
     {
       kind: 'item',
       id: 'collapse',
-      label: graph.collapsed ? 'Expand' : 'Collapse',
+      label: tm(graph.collapsed ? 'menu.expand' : 'menu.collapse'),
       shortcut: graph.collapsed ? LABELS.expand : LABELS.collapse,
       disabledReason: viewOnly ?? soon,
       onSelect: () => {
@@ -877,7 +874,7 @@ export function graphMenuEntries(
     {
       kind: 'item',
       id: 'delete-pair',
-      label: 'Delete graph pair',
+      label: tm('menu.deleteGraphPair'),
       danger: true,
       disabledReason:
         viewOnly ?? soon ?? (other === undefined ? 'this is the only half left' : undefined),
@@ -889,14 +886,14 @@ export function graphMenuEntries(
     {
       kind: 'item',
       id: 'fit',
-      label: 'Fit to canvas',
+      label: tm('menu.fitToCanvas'),
       shortcut: LABELS.fit,
       onSelect: ctx.canvas.fit,
     },
     {
       kind: 'item',
       id: 'actual',
-      label: 'Actual size',
+      label: tm('menu.actualSize'),
       shortcut: LABELS.actualSize,
       onSelect: ctx.canvas.actualSize,
     },
@@ -917,7 +914,7 @@ export function tableMenuEntries(
     {
       kind: 'item',
       id: 'row-append',
-      label: 'Add row',
+      label: tm('menu.addRow'),
       shortcut: LABELS.addRow,
       disabledReason: viewOnly,
       onSelect: () => {
@@ -927,7 +924,7 @@ export function tableMenuEntries(
     {
       kind: 'item',
       id: 'col-append',
-      label: 'Add column',
+      label: tm('menu.addColumn'),
       shortcut: LABELS.addColumn,
       disabledReason: viewOnly,
       onSelect: () => {
@@ -939,7 +936,7 @@ export function tableMenuEntries(
       // ADR-051: the route to the title bar's inline field; the Table tab's Title text is the home.
       kind: 'item',
       id: 'table-rename',
-      label: 'Rename table…',
+      label: tm('menu.renameTable'),
       shortcut: RENAME_KEYS.rename,
       disabledReason: viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY : undefined),
       onSelect: () => {
@@ -951,7 +948,7 @@ export function tableMenuEntries(
       // ADR-047 / KEYS-08: ⌫'s pointer route; the Table menu in the toolbar is the home.
       kind: 'item',
       id: 'table-delete',
-      label: 'Delete table',
+      label: tm('menu.deleteTable'),
       shortcut: LABELS.clear,
       danger: true,
       disabledReason:
@@ -964,7 +961,7 @@ export function tableMenuEntries(
     {
       kind: 'item',
       id: 'fit',
-      label: 'Fit to canvas',
+      label: tm('menu.fitToCanvas'),
       shortcut: LABELS.fit,
       onSelect: ctx.canvas.fit,
     },
@@ -1042,14 +1039,14 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
     {
       kind: 'item',
       id: 'add-table',
-      label: 'Add table here',
+      label: tm('menu.addTableHere'),
       disabledReason: viewOnly,
       onSelect: ctx.canvas.addTable,
     },
     {
       kind: 'item',
       id: 'add-shaped-table',
-      label: 'Add shaped table here',
+      label: tm('menu.addShapedTableHere'),
       disabledReason:
         viewOnly ?? (ctx.canvas.addShapedTable === undefined ? GRAPH_SOON : undefined),
       onSelect: () => {
@@ -1059,7 +1056,7 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
     {
       kind: 'item',
       id: 'add-graph',
-      label: 'Add graph here',
+      label: tm('menu.addGraphHere'),
       disabledReason: viewOnly ?? (ctx.canvas.addGraph === undefined ? GRAPH_SOON : undefined),
       onSelect: () => {
         ctx.canvas.addGraph?.();
@@ -1070,14 +1067,14 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
     {
       kind: 'item',
       id: 'fit',
-      label: 'Fit to canvas',
+      label: tm('menu.fitToCanvas'),
       shortcut: LABELS.fit,
       onSelect: ctx.canvas.fit,
     },
     {
       kind: 'item',
       id: 'actual',
-      label: 'Actual size',
+      label: tm('menu.actualSize'),
       shortcut: LABELS.actualSize,
       onSelect: ctx.canvas.actualSize,
     },
@@ -1102,7 +1099,7 @@ export function sheetMenuEntries(
     {
       kind: 'item',
       id: 'sheet-add',
-      label: 'Add sheet',
+      label: tm('menu.addSheet'),
       disabledReason: viewOnly,
       onSelect: ctx.sheets.add,
     },
@@ -1110,7 +1107,7 @@ export function sheetMenuEntries(
     {
       kind: 'item',
       id: 'sheet-rename',
-      label: 'Rename sheet',
+      label: tm('menu.renameSheet'),
       shortcut: SHEET_KEYS.rename,
       disabledReason: viewOnly,
       onSelect: () => {
@@ -1138,7 +1135,7 @@ export function sheetMenuEntries(
     {
       kind: 'item',
       id: 'sheet-delete',
-      label: 'Delete sheet',
+      label: tm('menu.deleteSheet'),
       shortcut: SHEET_KEYS.remove,
       danger: true,
       disabledReason:

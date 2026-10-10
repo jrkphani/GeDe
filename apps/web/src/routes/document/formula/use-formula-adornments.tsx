@@ -115,7 +115,12 @@ const SET_FORMS: readonly FormOption[] = [
     hint: 'elements of the universe u not in a',
     insert: '=Comp(',
   },
-  { id: 'cross', label: 'Cross(a, b, …)', hint: 'every ordered pair (a, b)', insert: '=Cross(' },
+  {
+    id: 'cross',
+    label: 'Cross(a, b, …)',
+    hint: 'every ordered tuple (a, b, …)',
+    insert: '=Cross(',
+  },
 ];
 
 function forms(summable: boolean, t: Translate): FormOption[] {
