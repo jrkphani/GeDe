@@ -227,4 +227,15 @@ export const messages: Messages = {
   'set.rowKind.element': 'మూలకం',
   'set.rowKind.set': 'సమితి',
   'set.rowKind.family': 'కుటుంబం',
+  'set.split.single': 'ఈ గడిలో ఒకే మూలకం ఉంది',
+  'set.kind.header': 'రకం',
+  'set.kind.label': 'రకం: {kind}',
+  'set.definition.field': 'నిర్వచనం',
+  'set.definition.placeholder': '{ x | x ఒక అక్షరం }',
+  'set.definition.hint':
+    'శీర్షిక వరుసలో టైప్ చేసినట్లే చూపబడుతుంది. సమితి-నిర్మాణ సంకేతం, ∀, ∃ మెటా వరుసను నింపుతాయి.',
+  'set.id.field': 'సమితి ఐడి',
+  'set.meta.universalShort': '∀',
+  'set.meta.existentialShort': '∃',
+  'footer.rowsFiltered': '{total}లో {shown} వరుసలు',
 };

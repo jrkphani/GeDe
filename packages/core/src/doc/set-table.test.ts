@@ -5,11 +5,21 @@ import { nestRow } from '../hier/mutations.js';
 import type { Id } from '../ids.js';
 import { setTableLook } from '../style/table.js';
 import { tableAddresses, tableUnitBounds } from './geometry.js';
+import { commitCellText } from '../engine/commit.js';
+import { FormulaEngine } from '../engine/engine.js';
+import { observeWorkbook } from '../engine/snapshot.js';
+import type { CellResult } from '../engine/types.js';
+import { workbookCellId } from '../engine/types.js';
+import { splitSetElements, union } from '../formula/sets.js';
+import { cellKey } from '../ids.js';
+import { cellRich, setCellRich } from '../text/mutations.js';
+import { docNode, paragraphNode, textNode } from '../text/types.js';
 import { addRow, createTable, setCellText, setFooterRows } from './mutations.js';
 import {
   cellText,
   openDocument,
   rowMeta,
+  cellReadOnlyReason,
   rowMetaMap,
   tableById,
   tableMap,
@@ -22,6 +32,7 @@ import {
   SET_DEGREE,
   setRangeColumn,
   setTableFacts,
+  settleSetRows,
   specialStatus,
   splitIntoRows,
   splitOffer,
@@ -115,7 +126,9 @@ describe('set tables (ADR-056)', () => {
       quantifier: 'universal',
     });
     expect(readDefinition('there exists y with y in E').quantifier).toBe('existential');
-    expect(readDefinition('For all elements, ∃ a successor').quantifier).toBe('universal');
+    expect(readDefinition('for all x, ∃ y with y > x').quantifier).toBe('universal');
+    // “For all” followed by no variable is prose; the symbol is notation.
+    expect(readDefinition('For all elements, ∃ a successor').quantifier).toBe('existential');
     expect(readDefinition('∃ a successor for all of them').quantifier).toBe('existential');
     // A quantifier with no variable after it binds nothing GeDe can name.
     expect(readDefinition('for all of them').variable).toBeNull();
@@ -328,5 +341,201 @@ describe('Split into rows (SET-02)', () => {
     const id = setTable('simple', ['a']);
     expect(splitIntoRows(gd, id, rows(id)[0] ?? '', range(id))).toBeNull();
     expect(rows(id)).toHaveLength(1);
+  });
+});
+
+/** Both replicas' updates crosswise. */
+function sync(a: Y.Doc, b: Y.Doc): void {
+  Y.applyUpdate(b, Y.encodeStateAsUpdate(a, Y.encodeStateVector(b)));
+  Y.applyUpdate(a, Y.encodeStateAsUpdate(b, Y.encodeStateVector(a)));
+}
+
+function textsOf(doc: GedeDoc, tableId: Id): string[] {
+  const table = tableMap(doc, tableId);
+  const record = tableById(doc, tableId);
+  const col = record === null ? null : setRangeColumn(record);
+  if (table === null || record === null || col === null) throw new Error('no set');
+  return record.rows.map((r) => cellText(table, r, col));
+}
+
+describe('set tables after review (ADR-056)', () => {
+  test('SET-02 two replicas that both accept the same Split into rows offer converge on one row per element', () => {
+    const b = openDocument(new Y.Doc());
+    const id = setTable('simple', ['a, b, c']);
+    sync(gd.doc, b.doc);
+    const [row] = rows(id);
+    expect(splitIntoRows(gd, id, row ?? '', range(id))).toHaveLength(2);
+    expect(splitIntoRows(b, id, row ?? '', range(id))).toHaveLength(2);
+    sync(gd.doc, b.doc);
+    // A Yjs insert is a fresh item: the same ids arrive twice until the settle pass drops one.
+    settleSetRows(gd, id);
+    settleSetRows(b, id);
+    sync(gd.doc, b.doc);
+    expect(textsOf(gd, id)).toEqual(textsOf(b, id));
+    expect(textsOf(gd, id)).toEqual(['a', 'b', 'c']);
+    expect(facts(id).bag).toBe(3);
+    expect(facts(id).rows.get(rows(id)[2] ?? '')?.repeatOf).toBeNull();
+    // Settled replicas write nothing more.
+    expect(settleSetRows(gd, id)).toBe(0);
+    expect(settleSetRows(b, id)).toBe(0);
+  });
+
+  test('SET-02 a later split of the same row and text adds rows of its own', () => {
+    const id = setTable('simple', ['a, b']);
+    const [row] = rows(id);
+    const col = range(id);
+    const first = splitIntoRows(gd, id, row ?? '', col) ?? [];
+    setCellText(gd, id, row ?? '', col, 'a, b');
+    const second = splitIntoRows(gd, id, row ?? '', col) ?? [];
+    expect(second).toHaveLength(1);
+    expect(second[0]).not.toBe(first[0]);
+    expect(textsOf(gd, id)).toEqual(['a', 'b', 'b']);
+  });
+
+  test('SET-02 a split keeps the marks on each element', () => {
+    const id = setTable('simple', ['x']);
+    const [row] = rows(id);
+    const col = range(id);
+    setCellRich(
+      gd,
+      id,
+      row ?? '',
+      col,
+      docNode([
+        paragraphNode([
+          textNode('alpha, ', [{ type: 'bold' }]),
+          textNode('beta', [{ type: 'italic' }]),
+        ]),
+      ]),
+    );
+    expect(splitIntoRows(gd, id, row ?? '', col)).toHaveLength(1);
+    const table = tableMap(gd, id);
+    if (table === null) throw new Error('no table');
+    const marks = rows(id).map(
+      (r) => cellRich(table, r, col).content[0]?.content?.[0]?.marks?.map((m) => m.type) ?? [],
+    );
+    expect(marks).toEqual([['bold'], ['italic']]);
+    expect(textsOf(gd, id)).toEqual(['alpha', 'beta']);
+  });
+
+  test('SET-02 a read-only row pulled from another set (SET-06, REF-02) is not on offer and is not split', () => {
+    const id = setTable('family', ['a, b']);
+    const table = tableMap(gd, id);
+    const [row] = rows(id);
+    if (table === null || row === undefined) throw new Error('no row');
+    rowMetaMap(table).get(row)?.set('pulledFrom', { tableId: 'src', rowId: 'srcRow' });
+    expect(cellReadOnlyReason(table, row, range(id))).toBe('pulled');
+    expect(splitOffer(gd, id, row, range(id))).toBeNull();
+    expect(splitIntoRows(gd, id, row, range(id))).toBeNull();
+    expect(textsOf(gd, id)).toEqual(['a, b']);
+  });
+
+  test('SET-03 prose that merely contains “for all” or “there exists” is not a definition: no guess', () => {
+    for (const caption of [
+      'Snacks for all ages',
+      'Open for all',
+      'Prices valid for all regions',
+      'Rooms where there exists a window',
+      'Letters — there exists no order here',
+    ]) {
+      expect(readDefinition(caption), caption).toEqual({
+        finite: null,
+        variable: null,
+        quantifier: null,
+      });
+    }
+    expect(readDefinition('for all x, x is a vowel')).toEqual({
+      finite: 'finite',
+      variable: 'bound',
+      quantifier: 'universal',
+    });
+    expect(readDefinition('there exist n such that n > 3').quantifier).toBe('existential');
+  });
+
+  test('SET-03 set-builder with a domain or a tuple variable is recognised', () => {
+    expect(readDefinition('{x ∈ E | x is a vowel}')).toEqual({
+      finite: 'finite',
+      variable: 'bound',
+      quantifier: null,
+    });
+    expect(readDefinition('{ (x, y) | x ∈ A and y ∈ B }').variable).toBe('bound');
+    expect(readDefinition('{ x in E : x < 3 }').variable).toBe('bound');
+    // A list in braces is not a builder.
+    expect(readDefinition('{ a, b | c }').variable).toBeNull();
+  });
+
+  test('SET-02 FX-09 the range column is an operand: |E| agrees with Union over the same column when a cell still holds a comma value', () => {
+    const id = setTable('simple', ['a, b', 'c', 'b']);
+    const operand = union(textsOf(gd, id).map(splitSetElements));
+    expect(operand).toEqual(['a', 'b', 'c']);
+    const f = facts(id);
+    expect(f.cardinality).toBe(operand.length);
+    // Every entry, the unsplit ones included.
+    expect(f.bag).toBe(4);
+    expect(f.rows.get(rows(id)[0] ?? '')?.elements).toEqual(['a', 'b']);
+  });
+
+  test('SET-05 FX-09 a formula in the range column counts the elements its value holds', () => {
+    const engine = new FormulaEngine();
+    const results = new Map<string, CellResult>();
+    observeWorkbook(gd, (changes) => {
+      const out = engine.apply(changes);
+      for (const r of out.results) results.set(r.cellId, r);
+    });
+    const id = setTable('simple', ['a', 'b']);
+    const [first] = rows(id);
+    const col = range(id);
+    commitCellText(gd, id, first ?? '', col, '=Union("z, y", "b")');
+    const table = tableMap(gd, id);
+    if (table === null) throw new Error('no table');
+    const valueOf = (rowId: Id, colId: Id) =>
+      results.get(workbookCellId(id, cellKey(rowId, colId)))?.value;
+    const f = setTableFacts(table, undefined, valueOf);
+    // z, y, b from the formula and b typed: three distinct, four entries; Union would agree.
+    expect(f?.cardinality).toBe(3);
+    expect(f?.bag).toBe(4);
+    expect(f?.rows.get(rows(id)[1] ?? '')?.repeatOf).toBe('+1°');
+    // Not yet answered: the cell counts nothing rather than its source text.
+    expect(setTableFacts(table)?.cardinality).toBe(1);
+  });
+
+  test('SET-06 a nameless top-level set in a family is still a member', () => {
+    const id = setTable('family', ['', 'a', 'b', 'd']);
+    const [nameless, a, b] = rows(id);
+    nestRow(gd, id, a ?? '');
+    nestRow(gd, id, b ?? '');
+    const f = facts(id);
+    expect(f.rows.get(nameless ?? '')?.kind).toBe('set');
+    expect(f.cardinality).toBe(2);
+    expect(f.bag).toBe(3);
+  });
+
+  test('SET-06 rows pulled into a family follow their source, are read-only and count like typed ones', () => {
+    const id = setTable('family', ['A', 'x', 'y']);
+    const table = tableMap(gd, id);
+    const [, x, y] = rows(id);
+    if (table === null || x === undefined || y === undefined) throw new Error('no rows');
+    nestRow(gd, id, x);
+    nestRow(gd, id, y);
+    for (const row of [x, y])
+      rowMetaMap(table).get(row)?.set('pulledFrom', { tableId: 'A', rowId: row });
+    for (const row of [x, y]) expect(cellReadOnlyReason(table, row, range(id))).toBe('pulled');
+    const f = facts(id);
+    expect(f.rows.get(rows(id)[0] ?? '')?.kind).toBe('set');
+    expect(f.cardinality).toBe(1);
+    expect(f.bag).toBe(2);
+  });
+
+  test('SET-04 a set table’s definition is drawn in its title row: the caption takes no strip at the foot', () => {
+    const plain = createTable(gd, { sheetId, at: { col: 0, row: 0 }, columns: 2, rows: 1 });
+    const set = setTable('simple', ['a']);
+    const plainMap = tableMap(gd, plain);
+    const setMap = tableMap(gd, set);
+    if (plainMap === null || setMap === null) throw new Error('no table');
+    const before = [tableUnitBounds(plainMap).rows, tableUnitBounds(setMap).rows];
+    setTableLook(gd, plain, { caption: 'notes', captionShown: true });
+    setTableLook(gd, set, { caption: '{ x | x ∈ E }', captionShown: true });
+    expect(tableUnitBounds(plainMap).rows).toBe((before[0] ?? 0) + 1);
+    expect(tableUnitBounds(setMap).rows).toBe(before[1]);
   });
 });

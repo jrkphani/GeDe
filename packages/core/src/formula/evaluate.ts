@@ -253,6 +253,51 @@ function canonicalSpelling(
   }
 }
 
+/**
+ * The elements one value contributes (FX-09). Text splits as a cell does. A list's
+ * items are the elements — a Split boundary wins over a comma inside a piece. A
+ * number, amount or date is one element: its stored spelling when the cell is
+ * Automatic, otherwise a locale-independent spelling, so every replica computes the
+ * same set. A blank contributes nothing unless it is a cell its format excluded, whose
+ * stored text still counts (FMT-05). An error is `onError`'s: the evaluator fails with
+ * it; a reader that only counts (a set table's footer, SET-05) takes no elements.
+ */
+export function valueElements(
+  value: CellValue,
+  onError: (error: FormulaError) => string[],
+): string[] {
+  switch (value.kind) {
+    case 'blank':
+      return value.text === undefined ? [] : splitSetElements(value.text);
+    case 'list':
+      return dedupe(value.items.flatMap((item) => listElement(item, onError)));
+    case 'error':
+      return onError(value.error);
+    case 'text':
+      return splitSetElements(value.text);
+    default:
+      return value.text !== undefined && value.rendered === undefined
+        ? splitSetElements(value.text)
+        : [canonicalSpelling(value)];
+  }
+}
+
+/** One list item as an element: never re-split; a nested list flattens one level. */
+function listElement(item: CellValue, onError: (error: FormulaError) => string[]): string[] {
+  switch (item.kind) {
+    case 'blank':
+      return item.text === undefined ? [] : oneElement(item.text);
+    case 'list':
+      return item.items.flatMap((inner) => listElement(inner, onError));
+    case 'error':
+      return onError(item.error);
+    case 'text':
+      return oneElement(item.text);
+    default:
+      return [canonicalSpelling(item)];
+  }
+}
+
 class Evaluator {
   private readonly depth: number;
   private readonly format: (value: CellValue) => string;
@@ -414,47 +459,8 @@ class Evaluator {
     }
   }
 
-  /**
-   * The elements one value contributes. Text splits as a cell does. A list's
-   * items are the elements — a Split boundary wins over a comma inside a
-   * piece. A number, amount or date is one element: its stored spelling when
-   * the cell is Automatic, otherwise a locale-independent spelling, so every
-   * replica computes the same set. A blank contributes nothing unless it is a
-   * cell its format excluded, whose stored text still counts (FMT-05).
-   */
   private elementsOf(value: CellValue): string[] {
-    switch (value.kind) {
-      case 'blank':
-        return value.text === undefined ? [] : splitSetElements(value.text);
-      case 'list':
-        return dedupe(value.items.flatMap((item) => this.listElement(item)));
-      case 'error':
-        fail(value.error);
-        break;
-      case 'text':
-        return splitSetElements(value.text);
-      default:
-        return value.text !== undefined && value.rendered === undefined
-          ? splitSetElements(value.text)
-          : [canonicalSpelling(value)];
-    }
-  }
-
-  /** One list item as an element: never re-split; a nested list flattens one level. */
-  private listElement(item: CellValue): string[] {
-    switch (item.kind) {
-      case 'blank':
-        return item.text === undefined ? [] : oneElement(item.text);
-      case 'list':
-        return item.items.flatMap((inner) => this.listElement(inner));
-      case 'error':
-        fail(item.error);
-        break;
-      case 'text':
-        return oneElement(item.text);
-      default:
-        return [canonicalSpelling(item)];
-    }
+    return valueElements(value, fail);
   }
 
   /** Text of a Concat argument: literal, nested call, or the values a reference yields. */

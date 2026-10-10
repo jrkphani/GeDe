@@ -234,4 +234,15 @@ export const messages: Messages = {
   'set.rowKind.element': 'உறுப்பு',
   'set.rowKind.set': 'கணம்',
   'set.rowKind.family': 'குடும்பம்',
+  'set.split.single': 'இந்தக் கலத்தில் ஒரே உறுப்பு உள்ளது',
+  'set.kind.header': 'வகை',
+  'set.kind.label': 'வகை: {kind}',
+  'set.definition.field': 'வரையறை',
+  'set.definition.placeholder': '{ x | x ஓர் எழுத்து }',
+  'set.definition.hint':
+    'தலைப்பு வரிசையில் தட்டச்சு செய்தபடியே காட்டப்படும். கணம்-அமைப்புக் குறியீடு, ∀, ∃ ஆகியவை மெட்டா வரிசையை நிரப்புகின்றன.',
+  'set.id.field': 'கண அடையாளம்',
+  'set.meta.universalShort': '∀',
+  'set.meta.existentialShort': '∃',
+  'footer.rowsFiltered': '{total} இல் {shown} வரிசைகள்',
 };

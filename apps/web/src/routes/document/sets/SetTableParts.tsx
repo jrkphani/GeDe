@@ -1,8 +1,9 @@
 /**
  * A set table's presentation (SET-02..07; ADR-056, SPEC §5; designs SimpleSet and
  * FamilyOfSets): the meta row and title row drawn in the title bar's two lattice rows, the
- * degree rail outside the table's left edge, the count strip in GRID-11's footer, and the
- * words a range cell carries (a repeat, a family row's kind). None of it is a Yjs row and
+ * degree rail along the table's left edge and a family's kind column along its right edge
+ * (both inside the footprint, so they never draw over a neighbouring table), the count strip
+ * in GRID-11's footer, and a repeat's flag in its range cell. None of it is a Yjs row and
  * none of it takes a lattice unit, so no A1 address moves (SET-07). Every value is read
  * from `setTableFacts` in core; nothing here is typed or stored.
  */
@@ -42,52 +43,61 @@ const KIND_LABEL: Readonly<Record<TableKind, MessageKey>> = {
 
 interface MetaValue {
   readonly field: string;
-  /** Null renders “—”. */
-  readonly value: string | null;
-  /** What “—” means here, for assistive technology and the tooltip. */
-  readonly empty: string;
+  /** What the chip shows; null renders “—”. */
+  readonly shown: string | null;
+  /** What assistive technology and the tooltip say for it. */
+  readonly said: string;
   readonly id?: boolean;
 }
 
 function metaValues(record: TableRecord, facts: SetTableFacts, t: Translate): MetaValue[] {
   const { finite, variable, quantifier } = facts.definition;
   const undetermined = t('set.meta.undetermined');
+  const value = (shown: string | null, empty = undetermined) => ({
+    shown,
+    said: shown ?? empty,
+  });
   return [
-    { field: t('set.meta.id'), value: record.id, empty: undetermined, id: true },
+    { field: t('set.meta.id'), ...value(record.id), id: true },
     {
       field: t('set.meta.finiteness'),
-      value: finite === null ? null : t('set.meta.finite'),
-      empty: undetermined,
+      ...value(finite === null ? null : t('set.meta.finite')),
     },
     {
       field: t('set.meta.variable'),
-      value: variable === null ? null : t('set.meta.bound'),
-      empty: undetermined,
+      ...value(variable === null ? null : t('set.meta.bound')),
     },
+    // The chip shows the quantifier's symbol, which fits a two-column set (320 px); the words
+    // are its tooltip and what assistive technology hears.
     {
       field: t('set.meta.quantifier'),
-      value:
+      shown:
         quantifier === null
           ? null
+          : t(quantifier === 'universal' ? 'set.meta.universalShort' : 'set.meta.existentialShort'),
+      said:
+        quantifier === null
+          ? undetermined
           : t(quantifier === 'universal' ? 'set.meta.universal' : 'set.meta.existential'),
-      empty: undetermined,
     },
     {
       field: t('set.meta.status'),
-      value:
+      // SET-03: past one element the status is “—”: GeDe checked, and there is none.
+      ...value(
         facts.status === null
           ? null
           : t(facts.status === 'null' ? 'set.meta.null' : 'set.meta.singleton'),
-      // SET-03: past one element the status is “—”: GeDe checked, and there is none.
-      empty: t('set.meta.none'),
+        t('set.meta.none'),
+      ),
     },
   ];
 }
 
 /**
- * SET-03: the read-only row above the header — the kind, then the set id (the table's
- * ULID), finite or infinite, bound or free, the quantifier and the special status, each a
- * computed value or “—”. Each value names its field in words for assistive technology.
+ * SET-03: the read-only row above the header — the set id (the table's ULID), finite or
+ * infinite, bound or free, the quantifier and the special status, each a computed value or
+ * “—”. Each value names its field in words for assistive technology. The id chip gives way
+ * first when the row is narrow; its whole value is in the tooltip and in the Table tab.
  */
 export function SetMetaRow({
   record,
@@ -100,22 +110,19 @@ export function SetMetaRow({
   return (
     <div className="gd-set-meta" data-testid="set-meta">
       <SetDegree label={SET_DEGREE.meta} />
-      <span className="gd-mono gd-set-meta__kind">{t(KIND_LABEL[record.kind])}</span>
       <ul className="gd-set-meta__values" aria-label={t('set.meta.label')}>
-        {metaValues(record, facts, t).map((v) => {
-          const said = v.value ?? v.empty;
-          return (
-            <li
-              key={v.field}
-              className={clsx('gd-mono gd-set-meta__value', { 'gd-set-meta__value--id': v.id })}
-              title={`${v.field}: ${said}`}
-            >
-              <span className="gd-visually-hidden">{`${v.field}: `}</span>
-              <span aria-hidden={v.value === null ? true : undefined}>{v.value ?? '—'}</span>
-              {v.value === null && <span className="gd-visually-hidden">{said}</span>}
-            </li>
-          );
-        })}
+        {metaValues(record, facts, t).map((v) => (
+          <li
+            key={v.field}
+            className={clsx('gd-mono gd-set-meta__value', { 'gd-set-meta__value--id': v.id })}
+            title={`${v.field}: ${v.said}`}
+          >
+            <span className="gd-visually-hidden">{`${v.field}: ${v.said}`}</span>
+            <span className="gd-set-meta__shown" aria-hidden="true">
+              {v.shown ?? '—'}
+            </span>
+          </li>
+        ))}
       </ul>
     </div>
   );
@@ -123,14 +130,17 @@ export function SetMetaRow({
 
 /**
  * SET-04: the title row — the set's name (the table title, renamed where ADR-051 renames
- * it) and its definition (the caption), rendered as typed. `children` is the title bar's
- * own content: the name or its rename field, the formula's error, the origin address.
+ * it) and its definition (the caption, edited in the Table tab), rendered as typed, then the
+ * table's kind. `children` is the title bar's own content: the name or its rename field, the
+ * formula's error, the origin address.
  */
 export function SetTitleRow({
   caption,
+  kind,
   children,
 }: {
   readonly caption: string;
+  readonly kind: TableKind;
   readonly children: ReactNode;
 }) {
   const t = useMessages();
@@ -144,6 +154,9 @@ export function SetTitleRow({
           {caption}
         </span>
       )}
+      <span className="gd-mono gd-set-title__kind" data-testid="set-kind-badge">
+        {t(KIND_LABEL[kind])}
+      </span>
     </div>
   );
 }
@@ -184,20 +197,45 @@ const ROW_KIND: Readonly<Record<SetRowFacts['kind'], MessageKey>> = {
   family: 'set.rowKind.family',
 };
 
+/** SET-02: the words a range cell carries beside a repeated element — “repeat of +2°” — or null. */
+export function rangeCellNote(row: SetRowFacts | undefined, t: Translate): string | null {
+  return row?.repeatOf == null ? null : t('set.repeat', { degree: row.repeatOf });
+}
+
 /**
- * The words a range cell carries beside its element, or null: “repeat of +2°” on a repeated
- * element (SET-02) and, in a family, the row's kind (SET-06) — in words, never by
- * indentation or tint alone.
+ * SET-06: a family row's kind in words, for the range cell's description (assistive
+ * technology hears it after the cell's value, which it never changes).
  */
-export function rangeCellNote(
-  row: SetRowFacts | undefined,
-  family: boolean,
-  t: Translate,
-): string | null {
-  if (row === undefined) return null;
-  const words = [
-    family ? t(ROW_KIND[row.kind]) : null,
-    row.repeatOf === null ? null : t('set.repeat', { degree: row.repeatOf }),
-  ].filter((w): w is string => w !== null);
-  return words.length === 0 ? null : words.join(' · ');
+export function rowKindDescription(row: SetRowFacts | undefined, t: Translate): string | null {
+  return row === undefined ? null : t('set.kind.label', { kind: t(ROW_KIND[row.kind]) });
+}
+
+/**
+ * SET-06: one cell of a family's kind column — “element”, “set” or “family” in words, along
+ * the table's right edge inside its footprint (the last column yields the room, as the first
+ * yields the rail's). Presentation: the range cell's description says the same to assistive
+ * technology, so the grid's columns and their count are untouched.
+ */
+export function SetKindCell({ kind }: { readonly kind: SetRowFacts['kind'] | null }) {
+  const t = useMessages();
+  return (
+    <span
+      className={clsx('gd-set-kind', { 'gd-set-kind--header': kind === null })}
+      aria-hidden="true"
+      data-testid={kind === null ? 'set-kind-header' : 'set-kind'}
+    >
+      {kind === null ? (
+        t('set.kind.header')
+      ) : (
+        <span className="gd-mono gd-set-kind__tag">{t(ROW_KIND[kind])}</span>
+      )}
+    </span>
+  );
+}
+
+/** SET-07: the rail's width in characters — its longest label, so a deep family widens it. */
+export function railCharacters(facts: SetTableFacts): number {
+  let longest = Math.max(...Object.values(SET_DEGREE).map((label) => label.length));
+  for (const row of facts.rows.values()) longest = Math.max(longest, row.degree.length);
+  return longest;
 }

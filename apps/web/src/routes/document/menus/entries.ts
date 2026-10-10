@@ -17,7 +17,9 @@ import {
   mergeRoom,
   outlineColumnId,
   spanAt,
+  setRangeColumn,
   spanCovering,
+  splitOffer,
   tableById,
   tableMap,
   effectiveWrap,
@@ -29,7 +31,7 @@ import type { MenuEntry } from '@gede/ui';
 
 import { peekEngine } from '../../../doc/engine.js';
 import { LABELS } from '../../../doc/shortcuts.js';
-import { translate } from '../../../i18n/index.js';
+import { translate, type MessageKey } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GraphsActions } from '../graph/use-graphs.js';
@@ -123,6 +125,36 @@ const SORT_SOON = 'arrives with the sort and filter release';
 const CATEGORY_SOON = 'arrives with the hierarchy release';
 const GRAPH_SOON = TRACKED.graph;
 const VIEW_ONLY = 'you have view-only access';
+
+/**
+ * SET-02: Split into rows, for a simple set's or a family's range cell — the menu route to
+ * the offer a comma value raises, so the split stays reachable after the toast has gone.
+ * Disabled with its reason when the cell holds one element or cannot be written.
+ */
+function splitEntries(ctx: MenuContext, tableId: Id, rowId: Id, colId: Id): MenuEntry[] {
+  const record = tableById(ctx.gd, tableId);
+  if (record === null || (record.kind !== 'simple' && record.kind !== 'family')) return [];
+  if (setRangeColumn(record) !== colId) return [];
+  const t = (key: MessageKey) => translate(activeLocale(), key);
+  const readOnly = ctx.commands.readOnlyReason({ tableId, rowId, colId });
+  return [
+    {
+      kind: 'item',
+      id: 'split-rows',
+      label: t('set.split.action'),
+      disabledReason: !ctx.editable
+        ? VIEW_ONLY
+        : readOnly !== null
+          ? `${readOnly} cells are read-only`
+          : splitOffer(ctx.gd, tableId, rowId, colId) === null
+            ? t('set.split.single')
+            : undefined,
+      onSelect: () => {
+        ctx.commands.splitIntoRows({ tableId, rowId, colId });
+      },
+    },
+  ];
+}
 
 function sep(id: string): MenuEntry {
   return { kind: 'separator', id };
@@ -506,6 +538,7 @@ export function cellMenuEntries(
         commands.insertColumnAfter(tableId, colId);
       },
     },
+    ...splitEntries(ctx, tableId, rowId, colId),
     sep('s-delete'),
     {
       kind: 'item',

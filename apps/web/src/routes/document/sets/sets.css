@@ -104,7 +104,15 @@ p.gd-set-picker__legend {
 
 /* ---- set tables (SET-02..07; designs SimpleSet, FamilyOfSets) ----------------------------
    Presentation over the table's rows: nothing here takes a lattice unit, so no A1 address
-   moves (SET-07). */
+   moves (SET-07), and nothing draws outside the table's footprint, so a neighbouring table
+   (tables abut on the lattice) and the row ruler stay clear. The rail is the footprint's
+   left edge, as wide as its longest label; a family's kind column is its right edge. The
+   first and last columns yield that room as padding: their cells keep their lattice units. */
+.gd-table--set {
+  /* IBM Plex Mono advances 0.6 em; the rail's labels are 0.625 rem. */
+  --gd-set-rail: calc(var(--gd-set-rail-chars, 3) * 0.375rem + var(--space-2));
+  --gd-set-kind: 4.5rem;
+}
 
 /* SET-03 / SET-04: the title bar's two lattice rows hold the meta row and the title row. */
 .gd-table__title--set {
@@ -120,31 +128,27 @@ p.gd-set-picker__legend {
   display: flex;
   flex: none;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
   box-sizing: border-box;
   height: var(--lattice-row);
   min-width: 0;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-1) 0 calc(var(--gd-set-rail) + var(--space-1));
 }
 .gd-set-meta {
   background: var(--surface-sunken);
   border-bottom: 1px solid var(--border);
 }
-.gd-set-meta__kind {
-  flex: none;
-  padding: 0 var(--space-1);
-  border: 1px solid var(--ink);
-  border-radius: var(--radius-sm);
-  font-size: 0.5625rem;
-  line-height: 0.875rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
+/* Every value stays in view at a default two-column set (320 px). A grid sizes the four
+   short values to their content first and gives the id chip what is left (its track is the
+   one flexible track), so the id gives way first; in a narrower table, or a locale with long
+   words, the short values give way too, each to an ellipsis rather than past the edge. */
 .gd-set-meta__values {
-  display: flex;
+  display: grid;
   flex: 1;
+  grid-auto-flow: column;
+  grid-template-columns: minmax(2.5rem, 1fr) repeat(4, minmax(1.5rem, max-content));
   gap: var(--space-1);
+  align-items: center;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -152,30 +156,35 @@ p.gd-set-picker__legend {
   list-style: none;
 }
 .gd-set-meta__value {
-  flex: none;
-  padding: 0 var(--space-1);
+  display: flex;
+  min-width: 0;
+  padding: 0 0.1875rem;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: var(--surface);
-  font-size: 0.5625rem;
+  font-size: var(--text-mono-cell);
   line-height: 0.875rem;
   white-space: nowrap;
 }
-/* The ULID is 26 characters; the chip shows its head, the tooltip and the accessible name all of it. */
-.gd-set-meta__value--id {
-  flex-shrink: 1;
-  max-width: 6rem;
+.gd-set-meta__shown {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The ULID is 26 characters; the chip shows its head, the tooltip, the accessible name and
+   the Table tab all of it. */
+.gd-set-meta__value--id {
+  justify-self: start;
+  max-width: 100%;
+}
 .gd-set-title .gd-table__title-text {
   flex: none;
-  max-width: 50%;
-}
-.gd-set-title .gd-table__degree {
-  margin-left: auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .gd-set-title__definition {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   color: var(--ink-muted);
@@ -183,34 +192,101 @@ p.gd-set-picker__legend {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.gd-set-title__kind {
+  flex: 0 1 auto;
+  min-width: 1.5rem;
+  margin-left: auto;
+  padding: 0 var(--space-1);
+  overflow: hidden;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-mono-cell);
+  line-height: 0.875rem;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.gd-set-title .gd-table__degree {
+  flex: none;
+}
 
-/* SET-07: the degree rail, outside the table's left edge (and outside the row gutter while
-   the table is selected), so the cells keep every pixel of their lattice units. */
+/* SET-07: the degree rail, along the table's left edge inside its footprint. */
 .gd-set-degree {
   position: absolute;
   top: 0;
-  right: calc(100% + 1px + var(--gd-gutter, 0px));
+  bottom: 0;
+  left: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-end;
   box-sizing: border-box;
-  width: 2.75rem;
-  height: var(--lattice-row);
+  width: var(--gd-set-rail);
   padding-right: var(--space-1);
+  border-right: 1px solid var(--border);
   color: var(--ink-muted);
-  font-size: 0.5625rem;
+  font-size: var(--text-mono-cell);
+  line-height: var(--lattice-row);
   white-space: nowrap;
   pointer-events: none;
 }
+.gd-table--set .gd-set-degree + .gd-cell,
+.gd-table--set .gd-set-degree + .gd-table__header {
+  padding-left: calc(var(--gd-set-rail) + var(--space-2));
+}
+.gd-table--set .gd-set-degree + .gd-cell--outline {
+  padding-left: calc(
+    var(--gd-set-rail) + var(--space-2) + var(--gd-outline-depth, 0) * var(--outline-indent)
+  );
+}
 
-/* SET-02 / SET-06: a repeat's flag and a family row's kind, in words beside the element. */
+/* SET-06: a family's kind column, along the table's right edge inside its footprint. */
+.gd-set-kind {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  width: var(--gd-set-kind);
+  padding: 0 var(--space-1);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  pointer-events: none;
+}
+.gd-set-kind--header {
+  font-size: 0.71875rem;
+  font-weight: 500;
+}
+.gd-set-kind__tag {
+  max-width: 100%;
+  padding: 0 var(--space-1);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  font-size: var(--text-mono-cell);
+  line-height: 0.875rem;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.gd-table--set-kinds .gd-cell:has(+ .gd-set-kind),
+.gd-table--set-kinds .gd-table__header:has(+ .gd-set-kind) {
+  padding-right: calc(var(--gd-set-kind) + var(--space-1));
+}
+
+/* SET-02: a repeat's flag, in words beside the element. */
 .gd-cell__note {
   flex: none;
   margin-left: auto;
   padding-left: var(--space-1);
   color: var(--ink-muted);
   font-family: var(--font-mono);
-  font-size: 0.5625rem;
+  font-size: var(--text-mono-cell);
   white-space: nowrap;
 }
 

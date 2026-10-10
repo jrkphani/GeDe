@@ -307,6 +307,11 @@ function OpenDocument({
   const offerSplit = useCallback((cell: CellSelection, elements: number, address: string) => {
     setSplitOffer({ cell, elements, address });
   }, []);
+  // RESP-02: an offer left open when the document turns read-only (phone width, view-only)
+  // is withdrawn, not parked: widening the window again must not bring back a stale one.
+  useEffect(() => {
+    if (!editable) setSplitOffer(null);
+  }, [editable]);
   const grid = useGrid(gd, editable, { undo: session.undo, fit: fitter.fit, offerSplit });
   const t = useMessages();
   // SORT-01..06 (ADR-026): the viewer's own sort, filter and grouping per table, from the

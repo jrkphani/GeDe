@@ -10,13 +10,16 @@
 import type { Page } from '@playwright/test';
 import {
   addRow,
+  cellText,
   computedRowId,
   createSheet,
   createTable,
   listSheets,
+  nestRow,
   openDocument,
   renameColumn,
   setCellText,
+  setTableLook,
   tableRecord,
   tablesOnSheet,
   type GedeDoc,
@@ -98,7 +101,7 @@ async function signInTo(page: Page, path: string): Promise<void> {
 }
 
 /** A Simple set as Add table makes one (range, description), holding `elements`. */
-function seedSet(gd: GedeDoc, sheetId: Id, title: string, col: number, elements: string[]) {
+function seedSet(gd: GedeDoc, sheetId: Id, title: string, col: number, elements: string[]): Id {
   const id = createTable(gd, {
     sheetId,
     at: { col, row: 1 },
@@ -114,6 +117,7 @@ function seedSet(gd: GedeDoc, sheetId: Id, title: string, col: number, elements:
   tableRecord(gd.tables.get(id)!).rows.forEach((rowId, i) => {
     setCellText(gd, id, rowId, range!.id, elements[i] ?? '');
   });
+  return id;
 }
 
 const tableTitled = (room: FakeRoom, title: string) => {
@@ -523,12 +527,16 @@ for (const width of [1440, 1024] as const) {
     await expect(set).toBeVisible();
     const section = page.locator('section[aria-label="E"]');
 
-    // ── The meta row (SET-03): kind, id, and “—” where the definition says nothing.
+    // ── The meta row (SET-03): id, and “—” where the definition says nothing; the kind sits
+    // in the title row (SET-04).
     const meta = section.getByTestId('set-meta');
-    await expect(meta).toContainText('Simple set');
+    await expect(section.getByTestId('set-kind-badge')).toHaveText('Simple set');
     const facts = meta.getByRole('list', { name: 'Set facts' }).getByRole('listitem');
     await expect(facts).toHaveCount(5);
-    await expect(facts.nth(2)).toHaveText(/bound or free variable: —/);
+    // Spoken (visually hidden), then shown.
+    await expect(facts.nth(2)).toHaveText(
+      'bound or free variable: not determined from the definition—',
+    );
     // ── The rail (SET-07) and the count strip (SET-05): a repeat counts in the bag only.
     await expect(section.getByTestId('set-degree')).toHaveText([
       '−2°',
@@ -554,7 +562,7 @@ for (const width of [1440, 1024] as const) {
     await typeInto(page, 'E', 2, 0, 'c, d, e');
     const offer = page.getByRole('button', { name: 'Split into rows' });
     await expect(offer).toBeVisible();
-    await expect(page.getByText('C7 holds 3 elements')).toBeVisible();
+    await expect(page.getByText('C7 holds 3 elements', { exact: true })).toBeVisible();
     // The toast fades in; axe measures it once its entrance has finished.
     await page.evaluate(() =>
       Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))),
@@ -590,13 +598,16 @@ test('SET-06 SET-07 at 1440 px a family states each row as element, set or famil
     await section.getByRole('row').nth(row).getByRole('gridcell').first().click();
     await page.keyboard.press('Control+BracketRight');
   }
-  await expect(section.getByTestId('set-meta')).toContainText('Family of sets');
-  await expect(section.getByTestId('set-note')).toHaveText([
+  await expect(section.getByTestId('set-kind-badge')).toHaveText('Family of sets');
+  // A kind column (SET-06), headed “kind”, inside the table's right edge.
+  await expect(section.getByTestId('set-kind-header')).toHaveText('kind');
+  await expect(section.getByTestId('set-kind')).toHaveText([
     'element',
     'set',
     'element',
     'element',
   ]);
+  await expect(section.getByTestId('set-note')).toHaveCount(0);
   await expect(section.getByTestId('set-degree')).toHaveText([
     '−2°',
     '−1°',
@@ -609,4 +620,231 @@ test('SET-06 SET-07 at 1440 px a family states each row as element, set or famil
   await expect(section.getByTestId('set-counts')).toContainText('|T| = 2');
   await expect(section.getByTestId('set-counts')).toContainText('bag 3');
   await checkA11y('family of sets 1440');
+});
+
+/** The right edges of the meta-row values that pass the list's own right edge. */
+async function clippedFacts(page: Page, section: ReturnType<Page['locator']>): Promise<string[]> {
+  const list = section.getByTestId('set-meta').getByRole('list', { name: 'Set facts' });
+  const box = await list.boundingBox();
+  if (box === null) throw new Error('no meta row');
+  const out: string[] = [];
+  for (const item of await list.getByRole('listitem').all()) {
+    const b = await item.boundingBox();
+    if (b === null || b.x + b.width > box.x + box.width + 0.5 || b.width < 8) {
+      out.push((await item.getAttribute('title')) ?? '');
+    }
+  }
+  return out;
+}
+
+/** A family T = d, A = {a, b} at column C, seeded nested. */
+function seedFamily(room: FakeRoom): Id {
+  const seeded = openDocument(room.doc);
+  const sheetId = createSheet(seeded);
+  const id = seedSet(seeded, sheetId, 'T', 2, ['d', 'A', 'a', 'b']);
+  const table = seeded.tables.get(id)!;
+  table.set('kind', 'family');
+  const rows = tableRecord(table).rows;
+  for (const rowId of rows.slice(2)) nestRow(seeded, id, rowId);
+  setTableLook(seeded, id, { caption: '{ d, {a, b} }' });
+  return id;
+}
+
+test.describe('Phase 4 red-team regressions', () => {
+  test('SET-03 at 1440 px every meta-row value of a default two-column set is visible, not clipped', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    const sheetId = createSheet(seeded);
+    const id = seedSet(seeded, sheetId, 'E', 2, ['a']);
+    setTableLook(seeded, id, { caption: '∀x { x | x is a letter in abc }' });
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const section = page.locator('section[aria-label="E"]');
+    await expect(section.getByRole('grid', { name: 'E' })).toBeVisible();
+    const facts = section.getByTestId('set-meta').getByRole('listitem');
+    await expect(facts).toHaveCount(5);
+    await expect(facts.nth(4)).toHaveAttribute('title', 'special status: singleton');
+    await expect(facts.nth(4)).toHaveText(/singleton$/);
+    expect(await clippedFacts(page, section)).toEqual([]);
+    // The status, finiteness and binding read whole; only the id gives way to an ellipsis.
+    for (const n of [1, 2, 3, 4]) {
+      const shown = facts.nth(n).locator('.gd-set-meta__shown');
+      // Laid out at least as wide as its text: no ellipsis, not even a sub-pixel one.
+      expect(
+        await shown.evaluate((el) => {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          return range.getBoundingClientRect().width <= el.getBoundingClientRect().width + 0.01;
+        }),
+        (await facts.nth(n).getAttribute('title')) ?? '',
+      ).toBe(true);
+    }
+  });
+
+  test('SET-07 the degree rail stays inside its table: nothing draws over an abutting table, and a set at column A keeps its rail', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    const sheetId = createSheet(seeded);
+    seedSet(seeded, sheetId, 'A', 0, ['p', 'q']);
+    createTable(seeded, { sheetId, at: { col: 3, row: 1 }, columns: 2, rows: 2, title: 'Plain' });
+    seedSet(seeded, sheetId, 'E', 5, ['a', 'b']);
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const plain = page.locator('section[aria-label="Plain"]');
+    await expect(plain.getByRole('grid', { name: 'Plain' })).toBeVisible();
+    const plainBox = (await plain.boundingBox())!;
+    for (const title of ['A', 'E']) {
+      const section = page.locator(`section[aria-label="${title}"]`);
+      const box = (await section.boundingBox())!;
+      // Select the set, so the row gutter is drawn too.
+      await section.getByRole('gridcell').first().click();
+      for (const label of await section.getByTestId('set-degree').all()) {
+        const b = (await label.boundingBox())!;
+        expect(b.x, `${title} ${(await label.textContent()) ?? ''}`).toBeGreaterThanOrEqual(box.x);
+        expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width);
+        // Never over the plain table to the left of E.
+        // (The plain table's hairline border sits outside its footprint, over E's first pixel.)
+        expect(b.x >= plainBox.x + plainBox.width - 1.5 || b.x + b.width <= plainBox.x).toBe(true);
+      }
+      await expect(section.getByTestId('set-degree').filter({ hasText: '+1°' })).toBeVisible();
+    }
+    // The first element still sits at its lattice address: A5 for the set at column A.
+    await expect(
+      page.getByRole('grid', { name: 'A' }).getByRole('row').nth(1).getByRole('gridcell').first(),
+    ).toHaveAttribute('data-address', 'A5');
+    await checkA11y('rail beside an abutting table');
+  });
+
+  test('RESP-02 SET-02 a Split into rows offer left open does not come back after the window passes through phone width', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    seedSet(seeded, createSheet(seeded), 'E', 2, ['a', 'b']);
+    await asDesktop(page, 1024, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'E' })).toBeVisible();
+    await typeInto(page, 'E', 1, 0, 'b, c');
+    const offer = page.getByRole('button', { name: 'Split into rows' });
+    await expect(offer).toBeVisible();
+    await asPhone(page, 480, 900);
+    await expect(offer).toHaveCount(0);
+    await asDesktop(page, 1024, 900);
+    await expect(page.getByRole('grid', { name: 'E' })).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(offer).toHaveCount(0);
+    // Nothing was split: the value stays as typed (Enter on the last row added an empty one).
+    const e = tableTitled(room, 'E')!;
+    const table = openDocument(room.doc).tables.get(e.id)!;
+    expect(e.rows.map((r) => cellText(table, r, e.columns[0]!.id))).toEqual(['a', 'b, c', '']);
+  });
+
+  test('SET-02 SET-05 after the offer has gone, Split into rows is still in the cell menu, and the counts read the comma value as the formulas do', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    seedSet(seeded, createSheet(seeded), 'E', 2, ['a', 'b', 'z']);
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const section = page.locator('section[aria-label="E"]');
+    await expect(section.getByRole('grid', { name: 'E' })).toBeVisible();
+    await typeInto(page, 'E', 1, 0, 'c, d, e');
+    const offer = page.getByRole('button', { name: 'Split into rows' });
+    await expect(offer).toBeVisible();
+    await page.keyboard.press('F8');
+    await page.keyboard.press('Escape');
+    await expect(offer).toHaveCount(0);
+    // Unsplit, the cell is three elements to Union(E) and to the footer alike.
+    await expect(section.getByTestId('set-counts')).toContainText('|E| = 5');
+    await expect(section.getByTestId('set-counts')).toContainText('bag 5');
+    const cell = page
+      .getByRole('grid', { name: 'E' })
+      .getByRole('row')
+      .nth(2)
+      .getByRole('gridcell')
+      .first();
+    await cell.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Split into rows' }).click();
+    await expect.poll(() => tableTitled(room, 'E')?.rows.length).toBe(5);
+    await expect(section.getByTestId('set-counts')).toContainText('|E| = 5');
+  });
+
+  for (const width of [768, 1024] as const) {
+    test(`SET-06 SET-07 at ${String(width)} px a family’s kind column and rail sit inside the table`, async ({
+      page,
+      checkA11y,
+    }) => {
+      const room = await installFakes(page);
+      seedFamily(room);
+      await asDesktop(page, width, 900);
+      await signInTo(page, `/d/${DOC_ID}`);
+      const section = page.locator('section[aria-label="T"]');
+      await expect(section.getByRole('treegrid', { name: 'T' })).toBeVisible();
+      await expect(section.getByTestId('set-kind')).toHaveText([
+        'element',
+        'set',
+        'element',
+        'element',
+      ]);
+      const box = (await section.boundingBox())!;
+      for (const el of [
+        ...(await section.getByTestId('set-kind').all()),
+        ...(await section.getByTestId('set-degree').all()),
+      ]) {
+        const b = (await el.boundingBox())!;
+        expect(b.x).toBeGreaterThanOrEqual(box.x);
+        expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+      }
+      await checkA11y(`family ${String(width)}`);
+    });
+  }
+
+  test('RESP-02 SET-06 at 480 px a family reads, with its kinds and degrees, and offers nothing to edit or split', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    seedFamily(room);
+    await asPhone(page, 480, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const section = page.locator('section[aria-label="T"]');
+    await expect(section.getByTestId('set-kind').first()).toBeVisible();
+    await expect(section.getByTestId('set-kind')).toHaveText([
+      'element',
+      'set',
+      'element',
+      'element',
+    ]);
+    await expect(section.getByTestId('set-counts')).toContainText('|T| = 2');
+    await expect(page.getByRole('button', { name: 'Split into rows' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Add table' })).toHaveCount(0);
+    await checkA11y('family 480');
+  });
+});
+
+test.describe('Phase 4 at 200 % zoom', () => {
+  test.use(zoomed200(1440));
+  test('SET-03 SET-06 SET-07 A11Y-06 at 200 % zoom a family’s meta row, rail and kind column read and stay inside the table', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    seedFamily(room);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const section = page.locator('section[aria-label="T"]');
+    await expect(section.getByTestId('set-kind').first()).toBeVisible();
+    expect(await clippedFacts(page, section)).toEqual([]);
+    const box = (await section.boundingBox())!;
+    for (const el of await section.getByTestId('set-degree').all()) {
+      const b = (await el.boundingBox())!;
+      expect(b.x).toBeGreaterThanOrEqual(box.x);
+    }
+    await checkA11y('family 1440 200%');
+  });
 });

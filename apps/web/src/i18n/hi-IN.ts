@@ -228,4 +228,15 @@ export const messages: Messages = {
   'set.rowKind.element': 'अवयव',
   'set.rowKind.set': 'समुच्चय',
   'set.rowKind.family': 'कुल',
+  'set.split.single': 'इस सेल में एक ही अवयव है',
+  'set.kind.header': 'प्रकार',
+  'set.kind.label': 'प्रकार: {kind}',
+  'set.definition.field': 'परिभाषा',
+  'set.definition.placeholder': '{ x | x एक अक्षर है }',
+  'set.definition.hint':
+    'शीर्षक पंक्ति में जैसा लिखा वैसा दिखता है। समुच्चय-निर्माता संकेतन, ∀ और ∃ मेटा पंक्ति भरते हैं।',
+  'set.id.field': 'समुच्चय आईडी',
+  'set.meta.universalShort': '∀',
+  'set.meta.existentialShort': '∃',
+  'footer.rowsFiltered': '{total} में से {shown} पंक्तियाँ',
 };

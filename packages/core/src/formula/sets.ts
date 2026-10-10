@@ -41,7 +41,27 @@ export function splitSetElements(text: string): string[] {
  * flagged bag entry rather than vanishing.
  */
 export function splitSetPieces(text: string): string[] {
-  const pieces: string[] = [];
+  return splitSetSpans(text).map(({ start, end }) => normaliseElement(text.slice(start, end)));
+}
+
+/** Where one piece of a text sits: UTF-16 offsets, surrounding whitespace excluded. */
+export interface SetPieceSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * The pieces of `splitSetPieces` as offsets into `text`, trimmed and never empty, so a
+ * caller holding marked text can cut it at the same places (Split into rows keeps marks).
+ */
+export function splitSetSpans(text: string): SetPieceSpan[] {
+  const spans: SetPieceSpan[] = [];
+  const push = (from: number, to: number): void => {
+    const raw = text.slice(from, to);
+    const start = from + (raw.length - raw.trimStart().length);
+    const end = to - (raw.length - raw.trimEnd().length);
+    if (end > start) spans.push({ start, end });
+  };
   let depth = 0;
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
@@ -51,12 +71,12 @@ export function splitSetPieces(text: string): string[] {
     } else if (ch === ')' || ch === '}') {
       if (depth > 0) depth -= 1;
     } else if (depth === 0 && ch !== undefined && SEPARATORS.has(ch)) {
-      pieces.push(text.slice(start, i));
+      push(start, i);
       start = i + 1;
     }
   }
-  pieces.push(text.slice(start));
-  return pieces.map(normaliseElement).filter((p) => p !== '');
+  push(start, text.length);
+  return spans;
 }
 
 /** One element as the algebra compares it: trimmed, NFC. */
