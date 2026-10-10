@@ -9,6 +9,7 @@ import { nestRow } from '../hier/mutations.js';
 import { cellKey, type Id } from '../ids.js';
 import { tableAddresses } from './geometry.js';
 import { applyGuardedUpdate, lockedTablesEdited } from './lock-guard.js';
+import { computedRowId } from '../ref/computed.js';
 import { reconcilePull, setPull } from '../ref/pull.js';
 import { deleteSheet } from './sheets.js';
 import {
@@ -591,18 +592,63 @@ describe('lock guard holes (SET-17, SET-18)', () => {
     const id = setTable('E', ['a'], 1);
     tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
     setSectionLocked(gd, sheetId, lane, true);
-    const sent = sentBy((r) => {
-      const row = addRow(r, id);
-      r.doc.transact(() => {
-        const table = tableMap(r, id);
-        const meta = table?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
-        meta?.get(row)?.set('computedKey', 'k');
-        const ids = new Y.Map<unknown>();
-        ids.set(row, 'k');
-        table?.set('computedIds', ids);
-      });
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => computedRow(r, id, 'k')),
+      ),
+    ).toEqual([]);
+  });
+
+  /** A computed row as the reconciler writes it: its key's id, the key, the computedIds entry. */
+  function computedRow(
+    r: GedeDoc,
+    id: Id,
+    key: string,
+    voucher = key,
+    row = computedRowId(id, key),
+  ) {
+    r.doc.transact(() => {
+      const table = tableMap(r, id);
+      (table?.get('rows') as Y.Array<string>).push([row]);
+      const meta = new Y.Map<unknown>();
+      meta.set('computedKey', key);
+      (table?.get('rowMeta') as Y.Map<Y.Map<unknown>>).set(row, meta);
+      const ids = new Y.Map<unknown>();
+      ids.set(row, voucher);
+      table?.set('computedIds', ids);
     });
-    expect(lockedTablesEdited(gd, sent)).toEqual([]);
+    return row;
+  }
+
+  test('SET-18 a forged computed row that vouches for itself in computedIds, with text, is refused', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
+    setSectionLocked(gd, sheetId, lane, true);
+    const randomId = sentBy((r) => {
+      const row = computedRow(r, id, 'k', 'k', 'FORGEDROWID');
+      setCellText(r, id, row, rangeOf(id), 'HACKED');
+    });
+    expect(applyGuardedUpdate(gd, randomId, 'client')).toEqual([id]);
+    expect(tableById(gd, id)?.rows).toHaveLength(1);
+    const withText = sentBy((r) =>
+      setCellText(r, id, computedRow(r, id, 'k'), rangeOf(id), 'HACKED'),
+    );
+    expect(lockedTablesEdited(gd, withText)).toEqual([id]);
+  });
+
+  test('SET-18 a computed row whose computedIds entry differs from its key is refused', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
+    setSectionLocked(gd, sheetId, lane, true);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => void computedRow(r, id, 'k', 'other')),
+      ),
+    ).toEqual([id]);
   });
 
   test('SET-18 a formula cell does not make a locked table machine-driven: forged machine rows are refused', () => {
@@ -639,6 +685,30 @@ describe('lock guard holes (SET-17, SET-18)', () => {
       });
     });
     expect(lockedTablesEdited(gd, noId)).toEqual([id]);
+  });
+
+  test('SET-18 a forged pulledFrom row, and a client rewrite of a pulled row, are refused', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    const src = setTable('S', ['x'], 8);
+    setPull(gd, id, rangeOf(id), { tableId: src, colId: rangeOf(src), filter: '' });
+    reconcilePull(gd, id);
+    setSectionLocked(gd, sheetId, lane, true);
+    const srcRow = tableById(gd, src)?.rows[0] ?? '';
+    const forged = sentBy((r) => {
+      const row = addRow(r, id);
+      r.doc.transact(() => {
+        const meta = tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
+        meta?.get(row)?.set('pulledFrom', { tableId: src, rowId: srcRow });
+      });
+      setCellText(r, id, row, rangeOf(id), 'HACKED');
+    });
+    expect(applyGuardedUpdate(gd, forged, 'client')).toEqual([id]);
+    const pulledRow = tableById(gd, id)?.rows[1] ?? '';
+    const stored = cellText(tableMap(gd, id)!, pulledRow, rangeOf(id));
+    const rewrite = sentBy((r) => setCellText(r, id, pulledRow, rangeOf(id), 'HACKED'));
+    expect(applyGuardedUpdate(gd, rewrite, 'client')).toEqual([id]);
+    expect(cellText(tableMap(gd, id)!, pulledRow, rangeOf(id))).toBe(stored);
   });
 
   test('SET-18 a client cannot move an unlocked table into a locked section', () => {
