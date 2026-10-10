@@ -9,8 +9,10 @@ import { nestRow } from '../hier/mutations.js';
 import { cellKey, type Id } from '../ids.js';
 import { tableAddresses } from './geometry.js';
 import { applyGuardedUpdate, lockedTablesEdited } from './lock-guard.js';
+import { deleteSheet } from './sheets.js';
 import {
   addRow,
+  createSheet,
   createTable,
   ensureFirstSheet,
   setCellText,
@@ -481,5 +483,139 @@ describe('universal set, super set and summaries (SET-13..16)', () => {
     expect(layout?.universe).toEqual({ col: 0, row: 18, cols: 15, rows: 2 + 1 + 1 });
     expect(layout?.superSet).toEqual({ col: 0, row: 23, cols: 15, rows: 2 + 1 });
     expect(layout?.end).toBe(26);
+  });
+});
+
+describe('lock guard holes (SET-17, SET-18)', () => {
+  const rowOf = (d: GedeDoc, id: Id) => tableById(d, id)?.rows[0] ?? '';
+  /** What a second replica sends after `edit` ran on it. */
+  function sentBy(edit: (replica: GedeDoc) => void): Uint8Array {
+    const replica = openDocument(new Y.Doc());
+    Y.applyUpdate(replica.doc, Y.encodeStateAsUpdate(gd.doc));
+    const before = Y.encodeStateVector(replica.doc);
+    edit(replica);
+    return Y.encodeStateAsUpdate(replica.doc, before);
+  }
+
+  test('SET-18 a client cannot forge pulledFrom meta to write cells in a locked table', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    const sent = sentBy((r) => {
+      const row = rowOf(r, id);
+      r.doc.transact(() => {
+        const meta = tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
+        meta?.get(row)?.set('pulledFrom', { tableId: 'x', rowId: 'y' });
+      });
+      setCellText(r, id, row, rangeOf(id), 'HACKED');
+    });
+    expect(applyGuardedUpdate(gd, sent, 'client')).toEqual([id]);
+    expect(cellText(tableMap(gd, id)!, rowOf(gd, id), rangeOf(id))).toBe('a');
+  });
+
+  test('SET-18 a client cannot add or remove a row of a locked table', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => void addRow(r, id)),
+      ),
+    ).toEqual([id]);
+    const removed = sentBy((r) => {
+      r.doc.transact(() => {
+        (tableMap(r, id)?.get('rows') as Y.Array<string>).delete(0, 1);
+      });
+    });
+    expect(lockedTablesEdited(gd, removed)).toEqual([id]);
+  });
+
+  test('SET-18 a reconciler row (computed, pulled) still lands in a locked table', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    const sent = sentBy((r) => {
+      const row = addRow(r, id);
+      r.doc.transact(() => {
+        const meta = tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
+        meta?.get(row)?.set('computedKey', 'k');
+      });
+    });
+    expect(lockedTablesEdited(gd, sent)).toEqual([]);
+  });
+
+  test('SET-18 a client cannot move an unlocked table into a locked section', () => {
+    const lane = section('Lane', 0, 5);
+    const out = setTable('C', ['b'], 20);
+    setSectionLocked(gd, sheetId, lane, true);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => r.tables.get(out)?.set('gridCol', 2)),
+      ),
+    ).toEqual([out]);
+  });
+
+  test('SET-18 deleting a locked sheet from a client puts the sheet back with its tables', () => {
+    const second = createSheet(gd, { label: 'Two' });
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    const sent = sentBy((r) => void deleteSheet(r, sheetId));
+    expect(applyGuardedUpdate(gd, sent, 'client')).toContain(sheetId);
+    expect(gd.sheets.length).toBe(2);
+    expect(listSections(gd, sheetId)[0]?.locked).toBe(true);
+    expect(tableById(gd, id)?.sheetId).toBe(sheetId);
+    expect(second).not.toBe(sheetId);
+  });
+
+  test('SET-17 a section reaching past the lattice is refused', () => {
+    expect(addSection(gd, sheetId, { name: 'x', firstColumn: 0, lastColumn: 2 ** 40 })).toBeNull();
+  });
+
+  test('SET-17 sections added over the same columns apart read the same on both replicas, and a lock covers both', () => {
+    const other = openDocument(new Y.Doc());
+    Y.applyUpdate(other.doc, Y.encodeStateAsUpdate(gd.doc));
+    const a = addSection(gd, sheetId, { name: 'A', firstColumn: 0, lastColumn: 5 }) ?? '';
+    const b = addSection(other, sheetId, { name: 'B', firstColumn: 3, lastColumn: 8 }) ?? '';
+    Y.applyUpdate(other.doc, Y.encodeStateAsUpdate(gd.doc));
+    Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(other.doc));
+    expect(listSections(gd, sheetId)).toEqual(listSections(other, sheetId));
+    setSectionLocked(gd, sheetId, b, true);
+    expect(lockReasonAt(gd, sheetId, 7)).toBe('section');
+    expect(lockReasonAt(gd, sheetId, 4)).toBe('section');
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('@U order (SET-13)', () => {
+  test('SET-13 =@U lists the same elements in the same order as the drawn U, wherever the sets sit', () => {
+    const engine = new FormulaEngine();
+    const results = new Map<string, CellResult>();
+    observeWorkbook(gd, (changes) => {
+      for (const r of engine.apply(changes).results) results.set(r.cellId, r);
+    });
+    setTable('E', ['c', 'a'], 40);
+    setTable('C', ['b', 'a'], 0);
+    const probe = createTable(gd, { sheetId, at: { col: 20, row: 2 }, columns: 1, rows: 1 });
+    const row = tableById(gd, probe)?.rows[0] ?? '';
+    const col = tableById(gd, probe)?.columns[0]?.id ?? '';
+    commitCellText(gd, probe, row, col, '=@U');
+    const v = results.get(workbookCellId(probe, cellKey(row, col)))?.value;
+    expect(v).toEqual({ kind: 'text', text: universalSet(summarySets(gd, sheetId)).join(', ') });
+  });
+});
+
+describe('moving a table across a lock (SET-18)', () => {
+  test('SET-18 setTablePosition refuses a move into a locked section and out of one', () => {
+    const lane = section('Lane', 0, 5);
+    const out = setTable('C', ['b'], 20);
+    const inside = setTable('E', ['a'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    setTablePosition(gd, out, { col: 2, row: 2 });
+    expect(tableById(gd, out)?.gridCol).toBe(20);
+    setTablePosition(gd, inside, { col: 30, row: 2 });
+    expect(tableById(gd, inside)?.gridCol).toBe(1);
   });
 });
