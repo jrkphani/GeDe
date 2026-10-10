@@ -55,6 +55,7 @@ const clipboard: CellClipboard = {
 };
 const canvas = { addTable: vi.fn(), fit: vi.fn(), actualSize: vi.fn() };
 const sheets = { add: vi.fn(), rename: vi.fn(), remove: vi.fn() };
+const fillColumn = vi.fn();
 
 function Harness({ editable = true, phone = false }: { editable?: boolean; phone?: boolean }) {
   const g = useGrid(gd, editable);
@@ -90,6 +91,7 @@ function Harness({ editable = true, phone = false }: { editable?: boolean; phone
     canvas,
     sheets,
     rename: editable ? setRenaming : undefined,
+    fillColumn: editable ? fillColumn : undefined,
     slots: undefined,
   };
   return (
@@ -301,6 +303,7 @@ describe('context menus', () => {
       'Add column before',
       'Add column after',
       'Rename column…',
+      'Fill column with formula…',
       'Delete column',
       'Hide column',
       'Fit width to content',
@@ -345,6 +348,30 @@ describe('context menus', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('columnheader')).toHaveLength(2);
     });
+  });
+
+  it('MENU-03 SET-10 Fill column with formula… sits between Rename column… and Delete column; on a column holding a typed value it is disabled with “the column is not empty”; on an empty one it opens Fill for that column', async () => {
+    render(<Harness />);
+    const [first, second] = screen.getAllByRole('columnheader');
+    fireEvent.contextMenu(first!, { clientX: 200, clientY: 5 });
+    let menu = await screen.findByRole('menu', { name: 'Column menu' });
+    const all = labels(menu);
+    expect(all.indexOf('Fill column with formula…')).toBe(all.indexOf('Rename column…') + 1);
+    expect(all.indexOf('Delete column')).toBe(all.indexOf('Fill column with formula…') + 1);
+    const typed = within(menu).getByRole('menuitem', { name: /Fill column with formula…/ });
+    expect(typed).toHaveAttribute('aria-disabled', 'true');
+    expect(typed).toHaveAttribute('title', 'the column is not empty');
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    fireEvent.contextMenu(second!, { clientX: 300, clientY: 5 });
+    menu = await screen.findByRole('menu', { name: 'Column menu' });
+    const empty = within(menu).getByRole('menuitem', { name: /Fill column with formula…/ });
+    expect(empty).not.toHaveAttribute('aria-disabled');
+    await userEvent.click(empty);
+    const record = tableById(gd, tableId)!;
+    expect(fillColumn).toHaveBeenCalledWith(tableId, record.columns[1]!.id);
   });
 
   it("MENU-03 the column menu's clipboard commands act on the right-clicked column, not the selected cell (#123)", async () => {

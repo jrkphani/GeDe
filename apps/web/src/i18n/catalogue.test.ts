@@ -240,4 +240,17 @@ describe('message catalogue', () => {
     const key: MessageKey = 'tour.skip';
     expect(translate('hi-IN', key)).toBe('छोड़ें');
   });
+
+  test('SET-19 SET-01 SET-10 the set copy uses one verb per action: no Create, Insert, New, Place or Choose, and every Add table confirm reads Add table', () => {
+    const en = CATALOGUE['en-US'];
+    const setKeys = MESSAGE_KEYS.filter((k) => /^(addTable|pick|fill|set)\./.test(k));
+    expect(setKeys.length).toBeGreaterThan(40);
+    for (const key of setKeys) {
+      expect(en[key], key).not.toMatch(/\b(Create|Insert|New|Place|Choose)\b/);
+    }
+    expect(en['addTable.add']).toBe('Add table');
+    expect(en['addTable.pickSets']).toBe('Pick sets');
+    expect(en['fill.menu']).toBe('Fill column with formula…');
+    expect(en['fill.notEmpty']).toBe('the column is not empty');
+  });
 });

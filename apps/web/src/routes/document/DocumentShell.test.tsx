@@ -98,6 +98,8 @@ function layerTransform(): string {
 
 async function addTable() {
   await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
+  // SET-01: Plain table is preselected; Enter adds it.
+  await userEvent.keyboard('{Enter}');
   await waitFor(() => {
     expect(screen.getAllByRole('grid').length).toBeGreaterThan(0);
   });

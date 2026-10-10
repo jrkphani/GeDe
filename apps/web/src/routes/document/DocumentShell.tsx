@@ -6,7 +6,6 @@ import {
   cellAddress,
   cellRich,
   createSheet,
-  createTable,
   deleteSheet,
   graphById,
   graphsOnSheet,
@@ -25,6 +24,7 @@ import {
   unitBoundsToPx,
   type GedeDoc,
   type Id,
+  type TableKind,
   type PresenceState,
   type SheetRecord,
   type ToggleMark,
@@ -111,6 +111,9 @@ import {
 import { setTourDocument } from '../tour/store.js';
 import { useTourGraphSubstep } from '../tour/use-tour.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
+import { AddTableDialog } from './sets/AddTableDialog.js';
+import { FillColumnDialog } from './sets/FillColumnDialog.js';
+import { addTableOfKind, fillColumnWith, pickDisplay, type SetPick } from './sets/set-tables.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
 import type { MenuContext } from './menus/entries.js';
 import { SheetTabs, type SheetEditing } from './SheetTabs.js';
@@ -310,6 +313,9 @@ function OpenDocument({
   const [inspectorOpen, setInspectorOpen] = useState(() => wide);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // SET-01: Add table asks the kind first; SET-10: Fill column with formula… on one column.
+  const [addTableOpen, setAddTableOpen] = useState(false);
+  const [fillTarget, setFillTarget] = useState<{ tableId: Id; colId: Id } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [activeLocale] = useLocale();
   const locale = toFormatLocale(activeLocale);
@@ -620,7 +626,7 @@ function OpenDocument({
 
   // -- structure --------------------------------------------------------------
   const addTable = useCallback(
-    (at?: { x: number; y: number }) => {
+    (at?: { x: number; y: number }, kind: TableKind = 'plain', pick?: SetPick) => {
       if (activeSheetId === null || !editable) return;
       const bounds = sheetBounds(gd, activeSheetId);
       const origin =
@@ -628,13 +634,30 @@ function OpenDocument({
         (bounds === null
           ? { col: 1, row: 1 }
           : { col: bounds.col, row: bounds.row + bounds.rows + 1 });
-      const id = createTable(gd, { sheetId: activeSheetId, at: origin, columns: 3, rows: 5 });
+      const id = addTableOfKind(gd, { sheetId: activeSheetId, at: origin, kind, pick });
+      if (id === null) return;
       const record = tableById(gd, id);
       if (record !== null) reveal(record.gridCol, record.gridRow);
       selectTable(id);
-      announce(`Added ${record?.title ?? 'a table'}`);
+      announce(translate(activeLocale, 'addTable.added', { table: record?.title ?? '' }));
     },
-    [gd, activeSheetId, editable, reveal, selectTable],
+    [gd, activeSheetId, editable, reveal, selectTable, activeLocale],
+  );
+  const fillColumn = useCallback(
+    (pick: SetPick) => {
+      if (fillTarget === null) return;
+      const { tableId, colId } = fillTarget;
+      const label = tableById(gd, tableId)?.columns.find((c) => c.id === colId)?.label ?? '';
+      setFillTarget(null);
+      if (!fillColumnWith(gd, tableId, colId, pick)) return;
+      announce(
+        translate(activeLocale, 'fill.filled', {
+          column: label,
+          formula: pickDisplay(gd, pick),
+        }),
+      );
+    },
+    [gd, fillTarget, activeLocale],
   );
   const addRowToSelected = useCallback(() => {
     if (selection === null) return;
@@ -852,7 +875,7 @@ function OpenDocument({
           window.print();
         },
       },
-      layerOpen: shortcutsOpen || menuOpen,
+      layerOpen: shortcutsOpen || menuOpen || addTableOpen || fillTarget !== null,
       view: {
         zoomIn: () => {
           zoomStep(ZOOM_STEP);
@@ -930,9 +953,14 @@ function OpenDocument({
     commands: grid.commands,
     clipboard,
     selectedCell: cell,
+    fillColumn: editable
+      ? (tableId, colId) => {
+          setFillTarget({ tableId, colId });
+        }
+      : undefined,
     canvas: {
       addTable: () => {
-        addTable();
+        setAddTableOpen(true);
       },
       addGraph: graphs.actions.startPointing,
       addShapedTable: () => {
@@ -1049,7 +1077,7 @@ function OpenDocument({
           editable={editable}
           inspector={inspectorOpen ? inspectorMode : null}
           onAddTable={() => {
-            addTable();
+            setAddTableOpen(true);
           }}
           onAddGraph={graphs.actions.startPointing}
           onAddRow={addRowToSelected}
@@ -1514,6 +1542,33 @@ function OpenDocument({
         }
       />
       <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {activeSheetId !== null && (
+        <AddTableDialog
+          gd={gd}
+          sheetId={activeSheetId}
+          open={addTableOpen}
+          onOpenChange={setAddTableOpen}
+          onAdd={(kind, pick) => {
+            setAddTableOpen(false);
+            addTable(undefined, kind, pick);
+          }}
+        />
+      )}
+      {fillTarget !== null && activeSheetId !== null && (
+        <FillColumnDialog
+          gd={gd}
+          sheetId={activeSheetId}
+          column={
+            tableById(gd, fillTarget.tableId)?.columns.find((c) => c.id === fillTarget.colId)
+              ?.label ?? ''
+          }
+          open
+          onOpenChange={(open) => {
+            if (!open) setFillTarget(null);
+          }}
+          onFill={fillColumn}
+        />
+      )}
       {selectedTable !== null && (
         <span className="gd-visually-hidden" data-testid="selected-table">
           {selectedTable.title}
