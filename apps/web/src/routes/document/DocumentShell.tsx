@@ -312,7 +312,23 @@ function OpenDocument({
   useEffect(() => {
     if (!editable) setSplitOffer(null);
   }, [editable]);
-  const grid = useGrid(gd, editable, { undo: session.undo, fit: fitter.fit, offerSplit });
+  // SET-02: a split made from any route withdraws an offer still open for that cell.
+  const withdrawSplit = useCallback((cell: CellSelection) => {
+    setSplitOffer((open) =>
+      open !== null &&
+      open.cell.tableId === cell.tableId &&
+      open.cell.rowId === cell.rowId &&
+      open.cell.colId === cell.colId
+        ? null
+        : open,
+    );
+  }, []);
+  const grid = useGrid(gd, editable, {
+    undo: session.undo,
+    fit: fitter.fit,
+    offerSplit,
+    withdrawSplit,
+  });
   const t = useMessages();
   // SORT-01..06 (ADR-026): the viewer's own sort, filter and grouping per table, from the
   // store the shell mounted above; never document state.
@@ -1575,7 +1591,10 @@ function OpenDocument({
         title={
           splitOffer === null
             ? ''
-            : t('set.split.offer', { cell: splitOffer.address, count: splitOffer.elements })
+            : t('set.split.offer', {
+                cell: splitOffer.address,
+                count: formatNumber(activeLocale, splitOffer.elements),
+              })
         }
         undo={
           splitOffer === null

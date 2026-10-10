@@ -106,6 +106,7 @@ import {
 import type { CellSelection, GridEvent, GridState } from '../../../doc/selection.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
 import { translate } from '../../../i18n/index.js';
+import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import { columnDisplayName } from './column-name.js';
 import { isFormulaInput } from '../formula/input.js';
@@ -345,6 +346,11 @@ export interface GridCommandDeps {
    * elements, so the shell can offer Split into rows; `address` is the cell's A1 address.
    */
   offerSplit?: ((cell: CellSelection, elements: number, address: string) => void) | undefined;
+  /**
+   * SET-02: called after a cell is split, from whichever route (the offer, the cell menu), so
+   * the shell withdraws an offer still open for it rather than offering a split already made.
+   */
+  withdrawSplit?: ((cell: CellSelection) => void) | undefined;
 }
 
 /**
@@ -1028,9 +1034,14 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       if (!editable()) return false;
       const address = addressOf(cell);
       const added = splitIntoRowsMutation(gd, cell.tableId, cell.rowId, cell.colId);
+      deps.withdrawSplit?.(cell);
       if (added === null) return false;
+      const locale = activeLocale();
       announce(
-        translate(activeLocale(), 'set.split.done', { cell: address, count: added.length + 1 }),
+        translate(locale, 'set.split.done', {
+          cell: address,
+          count: formatNumber(locale, added.length + 1),
+        }),
       );
       return true;
     },

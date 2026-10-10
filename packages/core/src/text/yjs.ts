@@ -115,3 +115,61 @@ export function writeRich(fragment: Y.XmlFragment, d: RichDoc): void {
   if (fragment.length > 0) fragment.delete(0, fragment.length);
   fragment.insert(0, normalise(d).content.map(xmlParagraph));
 }
+
+/** A paragraph node's text pieces: its `Y.XmlText` children, or itself when it is one. */
+function textsOfParagraph(node: Y.XmlElement | Y.XmlText | Y.XmlHook): Y.XmlText[] {
+  if (node instanceof Y.XmlText) return [node];
+  if (node instanceof Y.XmlElement) {
+    return node.toArray().filter((child): child is Y.XmlText => child instanceof Y.XmlText);
+  }
+  return [];
+}
+
+/**
+ * Keep only the plain-text span `[start, end)` of an integrated fragment — paragraphs
+ * joined by `\n`, as `plainText(fragmentToRich(…))` reads them — by deleting everything
+ * else in place: other paragraphs whole, and the text around the span inside its own. The
+ * span must lie inside one paragraph. Nothing is inserted, so two replicas that keep the
+ * same span of the same fragment delete the same items and converge, an edit another
+ * replica makes elsewhere in the fragment survives, and the kept characters keep their
+ * marks (SET-02). Call inside a transaction. False, with nothing written, when the span
+ * does not lie inside one paragraph.
+ */
+export function keepTextSpan(fragment: Y.XmlFragment, start: number, end: number): boolean {
+  const paragraphs = fragment.toArray();
+  let offset = 0;
+  let keep = -1;
+  paragraphs.forEach((node, i) => {
+    const length = textsOfParagraph(node).reduce((n, t) => n + t.length, 0);
+    if (keep < 0 && start >= offset && end <= offset + length) keep = i;
+    offset += length + 1;
+  });
+  if (keep < 0) return false;
+  let from = 0;
+  for (let i = 0; i < keep; i += 1) {
+    const node = paragraphs[i];
+    if (node !== undefined) from += textsOfParagraph(node).reduce((n, t) => n + t.length, 0) + 1;
+  }
+  const kept = paragraphs[keep];
+  if (kept === undefined) return false;
+  // Inside the kept paragraph: cut each text piece to its share of the span, last first.
+  const pieces = textsOfParagraph(kept);
+  const bounds: { text: Y.XmlText; at: number }[] = [];
+  let at = from;
+  for (const text of pieces) {
+    bounds.push({ text, at });
+    at += text.length;
+  }
+  for (let k = bounds.length - 1; k >= 0; k -= 1) {
+    const { text, at: base } = bounds[k] ?? { text: null, at: 0 };
+    if (text === null) continue;
+    const localStart = Math.max(0, Math.min(text.length, start - base));
+    const localEnd = Math.max(0, Math.min(text.length, end - base));
+    if (localEnd < text.length) text.delete(localEnd, text.length - localEnd);
+    if (localStart > 0) text.delete(0, localStart);
+  }
+  // Other paragraphs go whole, last first so indices hold.
+  if (keep + 1 < paragraphs.length) fragment.delete(keep + 1, paragraphs.length - keep - 1);
+  if (keep > 0) fragment.delete(0, keep);
+  return true;
+}

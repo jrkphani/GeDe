@@ -30,6 +30,7 @@ import {
   rowReadOnlyReason,
   setRangeColumn,
   isSetKind,
+  SET_KIND_COLUMN_UNITS,
   SET_DEGREE,
   spanIndex,
   TABLE_TITLE_ROWS,
@@ -320,11 +321,14 @@ export const TableView = memo(function TableView({
   const widthUnitsOf = (colId: Id, i: number): number =>
     columnPreview?.get(colId) ?? previewWidths[i] ?? 1;
   const columnUnits = visible.map((c, i) => widthUnitsOf(c.id, i));
+  // SET-06: a family's kind column is a lattice unit of its own beyond the last column.
   const widthPx =
-    Math.max(
+    (Math.max(
       1,
       columnUnits.reduce((a, b) => a + b, 0),
-    ) * LATTICE.col;
+    ) +
+      (record.kind === 'family' ? SET_KIND_COLUMN_UNITS : 0)) *
+    LATTICE.col;
   // Heights in document row order (GRID-09, ADR-049): the stored whole units, or a drag's
   // preview — one row's, a band's, or the corner's proportional share of every row's.
   const storedHeights = effectiveRowHeights(table, record);
@@ -1614,19 +1618,21 @@ const ROW_META_KEYS = {
   splitChild: true,
   pulledFrom: true,
   splitOf: true,
+  setRefOf: true,
   computedKey: true,
   lostFrom: true,
   outlineColumn: true,
 } as const satisfies Record<keyof RowMeta, true>;
 
 function rowMetaEqual(a: RowMeta, b: RowMeta): boolean {
-  const { pulledFrom: _pa, splitOf: _sa, ...restA } = a;
-  const { pulledFrom: _pb, splitOf: _sb, ...restB } = b;
-  const { pulledFrom: _k1, splitOf: _k2, ...restKeys } = ROW_META_KEYS;
+  const { pulledFrom: _pa, splitOf: _sa, setRefOf: _ra, ...restA } = a;
+  const { pulledFrom: _pb, splitOf: _sb, setRefOf: _rb, ...restB } = b;
+  const { pulledFrom: _k1, splitOf: _k2, setRefOf: _k3, ...restKeys } = ROW_META_KEYS;
   return (
     fieldsEqual(restKeys, restA, restB) &&
     specsEqual(a.pulledFrom, b.pulledFrom) &&
-    specsEqual(a.splitOf, b.splitOf)
+    specsEqual(a.splitOf, b.splitOf) &&
+    specsEqual(a.setRefOf, b.setRefOf)
   );
 }
 

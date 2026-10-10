@@ -61,6 +61,51 @@ const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
   accent: 'Accent',
 };
 
+interface CaptionFieldProps {
+  readonly gd: GedeDoc;
+  readonly tableId: Id;
+  readonly caption: string;
+  readonly editable: boolean;
+  readonly label: string;
+  readonly placeholder: string;
+  readonly hint?: string | undefined;
+  /** What the live region says when the field is left (SET-04: “definition cleared”). */
+  readonly announcement: (caption: string) => string;
+}
+
+/**
+ * The caption field, or a set's definition field (SET-04, INSP-04). As the title field does
+ * (TitleBar): the document is the state, and the keystrokes merge into one undo step through
+ * the manager's capture window — a `GridCommands` call would settle (and announce) every
+ * character. Leaving the field says what it now holds.
+ */
+function CaptionField({
+  gd,
+  tableId,
+  caption,
+  editable,
+  label,
+  placeholder,
+  hint,
+  announcement,
+}: CaptionFieldProps) {
+  return (
+    <TextField
+      label={label}
+      value={caption}
+      disabled={!editable}
+      placeholder={placeholder}
+      {...(hint === undefined ? {} : { hint })}
+      onChange={(e) => {
+        if (editable) setTableLook(gd, tableId, { caption: e.currentTarget.value });
+      }}
+      onBlur={() => {
+        announce(announcement(caption));
+      }}
+    />
+  );
+}
+
 /**
  * INSP-04: the Table tab. Table style, title and caption, header row, footer,
  * header (frozen) columns, row and column counts that insert or delete
@@ -194,22 +239,19 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           {isSetKind(record.kind) ? (
             // SET-04: a set's caption is its definition, shown in the title row whatever the
             // Caption switch says; it is edited here, always (no strip at the foot to turn on).
-            <TextField
+            <CaptionField
+              gd={gd}
               label={t('set.definition.field')}
-              value={look.caption}
-              disabled={!editable}
               placeholder={t('set.definition.placeholder')}
               hint={t('set.definition.hint')}
-              onChange={(e) => {
-                if (editable) setTableLook(gd, record.id, { caption: e.currentTarget.value });
-              }}
-              onBlur={() => {
-                announce(
-                  look.caption === ''
-                    ? `${record.title}: ${t('set.definition.field')} —`
-                    : `${record.title}: ${t('set.definition.field')} “${look.caption}”`,
-                );
-              }}
+              tableId={record.id}
+              caption={look.caption}
+              editable={editable}
+              announcement={(caption) =>
+                caption === ''
+                  ? t('set.definition.cleared', { set: record.title })
+                  : t('set.definition.changed', { set: record.title, definition: caption })
+              }
             />
           ) : (
             <>
@@ -222,24 +264,18 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
                 }}
               />
               {look.captionShown && (
-                <TextField
+                <CaptionField
+                  gd={gd}
                   label="Caption text"
-                  value={look.caption}
-                  disabled={!editable}
                   placeholder="What this table holds"
-                  onChange={(e) => {
-                    // As the title field does (TitleBar): the document is the state, and the
-                    // keystrokes merge into one undo step through the manager's capture window
-                    // — a `GridCommands` call would settle (and announce) every character.
-                    if (editable) setTableLook(gd, record.id, { caption: e.currentTarget.value });
-                  }}
-                  onBlur={() => {
-                    announce(
-                      look.caption === ''
-                        ? `${record.title}: caption cleared`
-                        : `${record.title}: caption is “${look.caption}”`,
-                    );
-                  }}
+                  tableId={record.id}
+                  caption={look.caption}
+                  editable={editable}
+                  announcement={(caption) =>
+                    caption === ''
+                      ? t('caption.cleared', { table: record.title })
+                      : t('caption.changed', { table: record.title, caption })
+                  }
                 />
               )}
             </>

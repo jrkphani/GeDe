@@ -132,11 +132,26 @@ export function tableAddresses(table: TableMap): (string | null)[][] {
   );
 }
 
-/** Sum of the visible column widths in units; never below one so a table always has a footprint. */
+/**
+ * SET-06: a family of sets draws its kind column — “element”, “set”, “family” — as one
+ * lattice unit of its own beyond its last column (the FamilyOfSets design's separate
+ * column), so it never takes room from the person's columns: a one-column family keeps its
+ * whole range cell for its elements. Presentation, like the footer strip: it is footprint
+ * (another table cannot sit there), never a column, so no cell has an address in it and no
+ * address moves (SET-07, GRID-02).
+ */
+export const SET_KIND_COLUMN_UNITS = 1;
+
+/**
+ * Sum of the visible column widths in units, plus a family's kind column; never below one so
+ * a table always has a footprint.
+ */
 export function tableWidthUnits(record: TableRecord): number {
-  return Math.max(
-    1,
-    columnWidths(record).reduce((acc, w) => acc + w, 0),
+  return (
+    Math.max(
+      1,
+      columnWidths(record).reduce((acc, w) => acc + w, 0),
+    ) + (record.kind === 'family' ? SET_KIND_COLUMN_UNITS : 0)
   );
 }
 
