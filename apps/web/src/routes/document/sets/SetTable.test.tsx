@@ -92,19 +92,21 @@ beforeEach(() => {
 });
 
 describe('set tables on the canvas (ADR-056)', () => {
-  test('SET-03 the meta row states the kind, the set id and, where the definition cannot say, “—” in words', () => {
+  test('SET-03 the meta row states the set id and, where the definition cannot say, “—” in words; the kind is in the title row', () => {
     const id = setTable('simple', ['a', 'b', 'c']);
     mount(id);
     const meta = screen.getByTestId('set-meta');
-    expect(meta).toHaveTextContent('Simple set');
+    expect(screen.getByTestId('set-kind-badge')).toHaveTextContent('Simple set');
+    expect(screen.getByTestId('set-kind-badge').closest('.gd-set-title')).not.toBeNull();
     const values = within(meta).getByRole('list', { name: 'Set facts' });
     const items = within(values).getAllByRole('listitem');
+    // What is spoken (visually hidden), then what is shown.
     expect(items.map((li) => li.textContent)).toEqual([
-      `set id: ${id}`,
-      'finite or infinite: —not determined from the definition',
-      'bound or free variable: —not determined from the definition',
-      'quantifier: —not determined from the definition',
-      'special status: —none',
+      `set id: ${id}${id}`,
+      'finite or infinite: not determined from the definition—',
+      'bound or free variable: not determined from the definition—',
+      'quantifier: not determined from the definition—',
+      'special status: none—',
     ]);
     // The “—” itself is hidden from assistive technology; its meaning is read instead.
     expect(items[1]?.querySelector('[aria-hidden="true"]')).toHaveTextContent('—');
@@ -124,6 +126,10 @@ describe('set tables on the canvas (ADR-056)', () => {
       setTableLook(gd, id, { caption: '∃x x ∈ E' });
     });
     expect(screen.getByTestId('set-meta')).toHaveTextContent('existential ∃');
+    // The chip shows the symbol; its words are the tooltip.
+    const quantifier = within(screen.getByTestId('set-meta')).getAllByRole('listitem')[3];
+    expect(quantifier?.querySelector('[aria-hidden="true"]')).toHaveTextContent(/^∃$/);
+    expect(quantifier).toHaveAttribute('title', 'quantifier: existential ∃');
   });
 
   test('SET-03 an empty set is null', () => {
@@ -198,7 +204,9 @@ describe('set tables on the canvas (ADR-056)', () => {
     nestRow(gd, id, x ?? '');
     nestRow(gd, id, x ?? '');
     mount(id);
-    expect(screen.getAllByTestId('set-note').map((n) => n.textContent)).toEqual([
+    // A kind column with its own header, in words; the range cells keep their values.
+    expect(screen.getByTestId('set-kind-header')).toHaveTextContent('kind');
+    expect(screen.getAllByTestId('set-kind').map((n) => n.textContent)).toEqual([
       'element',
       'set',
       'element',
@@ -206,9 +214,49 @@ describe('set tables on the canvas (ADR-056)', () => {
       'set',
       'element',
     ]);
+    expect(screen.queryAllByTestId('set-note')).toHaveLength(0);
+    const ranges = screen
+      .getAllByRole('gridcell')
+      .filter((c) => c.getAttribute('data-col-id') === rangeOf(id));
+    expect(ranges.map((c) => c.getAttribute('aria-description'))).toEqual([
+      'kind: element',
+      'kind: set',
+      'kind: element',
+      'kind: family',
+      'kind: set',
+      'kind: element',
+    ]);
+    expect(ranges[1]).toHaveAttribute('aria-label', 'B6, A');
     expect(degrees().slice(3)).toEqual(['+1°', '+2°', '+2.1°', '+3°', '+3.1°', '+3.1.1°']);
     // |T| counts the top-level members; the bag every leaf.
     expect(screen.getByTestId('set-counts')).toHaveTextContent('T: cardinality 3, bag 3');
+  });
+
+  test('SET-06 a simple set has no kind column', () => {
+    mount(setTable('simple', ['a']));
+    expect(screen.queryByTestId('set-kind-header')).toBeNull();
+    expect(screen.queryAllByTestId('set-kind')).toHaveLength(0);
+  });
+
+  test('SET-04 a set table never draws its definition twice: no caption strip at the foot', () => {
+    const id = setTable('simple', ['a']);
+    setTableLook(gd, id, { caption: '{ x | x ∈ E }', captionShown: true });
+    mount(id);
+    expect(screen.getByTestId('set-definition')).toHaveTextContent('{ x | x ∈ E }');
+    expect(screen.queryByTestId('table-caption')).toBeNull();
+  });
+
+  test('SET-07 the rail is as wide as its longest label', () => {
+    const id = setTable('family', ['A', 'a', 'x']);
+    const [, a, x] = rowsOf(id);
+    nestRow(gd, id, a ?? '');
+    nestRow(gd, id, x ?? '');
+    nestRow(gd, id, x ?? '');
+    mount(id);
+    const section = document.querySelector<HTMLElement>('section.gd-table');
+    // “+1.1.1°” is seven characters.
+    expect(section?.style.getPropertyValue('--gd-set-rail-chars')).toBe('7');
+    expect(section).toHaveClass('gd-table--set', 'gd-table--set-kinds');
   });
 
   test('SET-02 a plain table has no meta row, rail or count strip', () => {

@@ -85,6 +85,7 @@ export {
   defaultFormatValue,
   errorLabel,
   evaluate,
+  valueElements,
   type BoundOperand,
   type CellValue,
   type EvaluateOptions,

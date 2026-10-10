@@ -609,4 +609,66 @@ describe('context menus', () => {
       disabledReason: 'freezing every column would leave nothing to scroll',
     });
   });
+
+  it('SET-02 the cell menu offers Split into rows on a set’s range cell, so the split outlives the toast', () => {
+    const setId = createTable(gd, {
+      sheetId: tableById(gd, tableId)!.sheetId,
+      at: { col: 8, row: 1 },
+      columns: 2,
+      rows: 2,
+      kind: 'simple',
+    });
+    const set = tableById(gd, setId)!;
+    const [first, second] = set.rows;
+    const [range, other] = set.columns;
+    setCellText(gd, setId, first!, range!.id, 'a, b, c');
+    setCellText(gd, setId, second!, range!.id, 'd');
+    render(<Harness />);
+    const ctx: MenuContext = {
+      gd,
+      editable: true,
+      commands: grid.current!.commands,
+      clipboard,
+      selectedCell: null,
+      canvas,
+      sheets,
+    };
+    const entry = (rowId: Id, colId: Id) =>
+      cellMenuEntries(ctx, { kind: 'cell', tableId: setId, rowId, colId }).find(
+        (e) => e.id === 'split-rows',
+      );
+    expect(entry(second!, range!.id)).toMatchObject({
+      label: 'Split into rows',
+      disabledReason: 'the cell holds one element',
+    });
+    // Not a range cell, and not a set: no entry at all.
+    expect(entry(first!, other!.id)).toBeUndefined();
+    const plainRow = tableById(gd, tableId)!.rows[0]!;
+    expect(
+      cellMenuEntries(ctx, {
+        kind: 'cell',
+        tableId,
+        rowId: plainRow,
+        colId: tableById(gd, tableId)!.columns[0]!.id,
+      }).some((e) => e.id === 'split-rows'),
+    ).toBe(false);
+    const split = entry(first!, range!.id);
+    expect(split).toMatchObject({ disabledReason: undefined });
+    act(() => {
+      if (split?.kind === 'item') split.onSelect();
+    });
+    expect(tableById(gd, setId)!.rows).toHaveLength(4);
+    // View-only: present and disabled with the reason.
+    expect(
+      cellMenuEntries(
+        { ...ctx, editable: false },
+        {
+          kind: 'cell',
+          tableId: setId,
+          rowId: second!,
+          colId: range!.id,
+        },
+      ).find((e) => e.id === 'split-rows'),
+    ).toMatchObject({ disabledReason: 'you have view-only access' });
+  });
 });

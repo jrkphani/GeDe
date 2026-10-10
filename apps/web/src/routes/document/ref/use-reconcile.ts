@@ -1,5 +1,6 @@
 /**
- * Keeps pulls (REF-02), `Split()` children (HIER-07) and computed rows (SET-08) reconciled while a
+ * Keeps pulls (REF-02), `Split()` children (HIER-07), computed rows (SET-08) and rows two
+ * replicas both split into (SET-02, `settleSetRows`) reconciled while a
  * document is open for editing. One installation per document, reference-
  * counted by the tables that mount it; a read-only session (phone, viewer)
  * installs nothing — the replica that can write reconciles for both, and
@@ -32,6 +33,7 @@ import {
   reconcileComputed,
   reconcileFilteredPulls,
   reconcileSplitChildren,
+  settleSetRows,
   splitPiecesOf,
   tableById,
   workbookCellId,
@@ -126,7 +128,10 @@ function install(doc: Y.Doc): () => void {
     queueMicrotask(() => {
       const tables = new Set(touched);
       touched.clear();
-      if (!stopped) keepComputedSound(tables);
+      if (stopped) return;
+      keepComputedSound(tables);
+      // SET-02: two replicas that both split the same value hold its new rows twice.
+      for (const tableId of tables) settleSetRows(gd, tableId);
     });
   };
   doc.on('afterTransaction', onTransaction);

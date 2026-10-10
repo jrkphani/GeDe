@@ -39,6 +39,7 @@ import {
 
 import { TooltipProvider } from '@gede/ui';
 
+import { changeTableKind } from '../sets/set-tables.js';
 import { LiveRegion } from '../../../announce.js';
 import { installMatchMedia } from '../../../test/match-media.js';
 import { useYVersion } from '../../../doc/use-y.js';
@@ -324,6 +325,27 @@ describe('Inspector', () => {
       undo.undo();
     });
     expect(tableById(gd, tableId)?.kind).toBe('plain');
+  });
+
+  it('SET-04 SET-03 a set’s definition is edited in the Table tab, always on offer, and its id reads in full there', async () => {
+    const record = tableById(gd, tableId)!;
+    act(() => {
+      for (const rowId of record.rows) setCellText(gd, tableId, rowId, record.columns[0]!.id, '');
+      changeTableKind(gd, tableId, 'simple');
+    });
+    await mount();
+    await userEvent.click(tab('Table'));
+    const titling = section('title and caption');
+    // No Caption switch: the definition has no strip at the foot to turn on.
+    expect(within(titling).queryByRole('switch', { name: 'Caption' })).toBeNull();
+    await userEvent.type(
+      within(titling).getByRole('textbox', { name: 'Definition' }),
+      '{{ x | x ∈ E }',
+    );
+    expect(tableById(gd, tableId)?.look.caption).toBe('{ x | x ∈ E }');
+    const id = within(section('kind')).getByRole('textbox', { name: 'Set id' });
+    expect(id).toHaveValue(tableId);
+    expect(id).toHaveAttribute('readonly');
   });
 
   it('INSP-04 INSP-12 KEYS-03 the Table tab: style, title and caption, header row, footer, frozen columns, row and column counts, outline, gridlines, alternating colour, width, wrap and fit write through at once; typing a caption is one undo step', async () => {

@@ -5,6 +5,7 @@ import {
   GRIDLINE_LABELS,
   LATTICE,
   OUTLINE_WEIGHTS,
+  isSetKind,
   rowMeta,
   setTableLook,
   TABLE_STYLE_LABELS,
@@ -190,34 +191,58 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }
             onCommit={(title) => commands.setTableTitle(record.id, title)}
           />
-          <Switch
-            label="Caption"
-            checked={look.captionShown}
-            disabled={!editable}
-            onCheckedChange={(on) => {
-              commands.setTableLook(record.id, { captionShown: on });
-            }}
-          />
-          {look.captionShown && (
+          {isSetKind(record.kind) ? (
+            // SET-04: a set's caption is its definition, shown in the title row whatever the
+            // Caption switch says; it is edited here, always (no strip at the foot to turn on).
             <TextField
-              label="Caption text"
+              label={t('set.definition.field')}
               value={look.caption}
               disabled={!editable}
-              placeholder="What this table holds"
+              placeholder={t('set.definition.placeholder')}
+              hint={t('set.definition.hint')}
               onChange={(e) => {
-                // As the title field does (TitleBar): the document is the state, and the
-                // keystrokes merge into one undo step through the manager's capture window
-                // — a `GridCommands` call would settle (and announce) every character.
                 if (editable) setTableLook(gd, record.id, { caption: e.currentTarget.value });
               }}
               onBlur={() => {
                 announce(
                   look.caption === ''
-                    ? `${record.title}: caption cleared`
-                    : `${record.title}: caption is “${look.caption}”`,
+                    ? `${record.title}: ${t('set.definition.field')} —`
+                    : `${record.title}: ${t('set.definition.field')} “${look.caption}”`,
                 );
               }}
             />
+          ) : (
+            <>
+              <Switch
+                label="Caption"
+                checked={look.captionShown}
+                disabled={!editable}
+                onCheckedChange={(on) => {
+                  commands.setTableLook(record.id, { captionShown: on });
+                }}
+              />
+              {look.captionShown && (
+                <TextField
+                  label="Caption text"
+                  value={look.caption}
+                  disabled={!editable}
+                  placeholder="What this table holds"
+                  onChange={(e) => {
+                    // As the title field does (TitleBar): the document is the state, and the
+                    // keystrokes merge into one undo step through the manager's capture window
+                    // — a `GridCommands` call would settle (and announce) every character.
+                    if (editable) setTableLook(gd, record.id, { caption: e.currentTarget.value });
+                  }}
+                  onBlur={() => {
+                    announce(
+                      look.caption === ''
+                        ? `${record.title}: caption cleared`
+                        : `${record.title}: caption is “${look.caption}”`,
+                    );
+                  }}
+                />
+              )}
+            </>
           )}
         </div>
       </Section>
@@ -239,6 +264,17 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             disabled: reason !== undefined,
           }))}
         />
+        {isSetKind(record.kind) && (
+          // SET-03: the set id in full — the meta row's chip shows its head — readable and
+          // selectable from the keyboard.
+          <TextField
+            label={t('set.id.field')}
+            value={record.id}
+            readOnly
+            className="gd-mono"
+            data-testid="set-id-field"
+          />
+        )}
       </Section>
       {/* INSP-04 / GRID-11: header row, header column and footer row *counts* — 0 or 1 for the
           rows (the lattice has one header strip and one footer strip), any count short of every

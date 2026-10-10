@@ -150,7 +150,8 @@ export function tableUnitBounds(
     record.headerRows +
     rowHeights(table, record).reduce((a, b) => a + b, 0) +
     record.footerRows +
-    (record.look.captionShown ? CAPTION_ROWS : 0);
+    // SET-04: a set table's caption is its definition, drawn in the title row, not below.
+    (record.look.captionShown && record.kind === 'plain' ? CAPTION_ROWS : 0);
   return { col: record.gridCol, row: record.gridRow, cols: tableWidthUnits(record), rows };
 }
 
