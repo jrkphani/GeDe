@@ -501,3 +501,112 @@ test.describe('Phase 3 red-team regressions', () => {
     await checkA11y('product past the cap 1440');
   });
 });
+
+/**
+ * Set tables, phase 4 (SET-02..07; designs SimpleSet and FamilyOfSets): a Simple set reads
+ * its meta row, title row, degree rail and count strip as it is typed into; a comma value in
+ * its range offers Split into rows; a family states each row's kind in words. Axe on each.
+ */
+for (const width of [1440, 1024] as const) {
+  test(`SET-02 SET-03 SET-04 SET-05 SET-07 at ${String(width)} px: a Simple set states its meta row, title row, degrees and counts as it is typed into, and a comma value splits into rows`, async ({
+    page,
+    checkA11y,
+    snapshot,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    const sheetId = createSheet(seeded);
+    seedSet(seeded, sheetId, 'E', 2, ['a', 'b', 'c', 'b']);
+    await asDesktop(page, width, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const set = page.getByRole('grid', { name: 'E' });
+    await expect(set).toBeVisible();
+    const section = page.locator('section[aria-label="E"]');
+
+    // ── The meta row (SET-03): kind, id, and “—” where the definition says nothing.
+    const meta = section.getByTestId('set-meta');
+    await expect(meta).toContainText('Simple set');
+    const facts = meta.getByRole('list', { name: 'Set facts' }).getByRole('listitem');
+    await expect(facts).toHaveCount(5);
+    await expect(facts.nth(2)).toHaveText(/bound or free variable: —/);
+    // ── The rail (SET-07) and the count strip (SET-05): a repeat counts in the bag only.
+    await expect(section.getByTestId('set-degree')).toHaveText([
+      '−2°',
+      '−1°',
+      '±0°',
+      '+1°',
+      '+2°',
+      '+3°',
+      '+4°',
+    ]);
+    await expect(section.getByTestId('set-counts')).toContainText('|E| = 3');
+    await expect(section.getByTestId('set-counts')).toContainText('bag 4');
+    await expect(section.getByTestId('set-note')).toHaveText(['repeat of +2°']);
+    // The rail is presentation: the first element keeps the address a plain table's has (C5).
+    await expect(set.getByRole('row').nth(1).getByRole('gridcell').first()).toHaveAttribute(
+      'data-address',
+      'C5',
+    );
+    await checkA11y(`simple set ${String(width)}`);
+    await snapshot(`simple-set-${String(width)}`);
+
+    // ── A comma value typed into the range offers Split into rows (SET-02).
+    await typeInto(page, 'E', 2, 0, 'c, d, e');
+    const offer = page.getByRole('button', { name: 'Split into rows' });
+    await expect(offer).toBeVisible();
+    await expect(page.getByText('C7 holds 3 elements')).toBeVisible();
+    // The toast fades in; axe measures it once its entrance has finished.
+    await page.evaluate(() =>
+      Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))),
+    );
+    await checkA11y(`split offer ${String(width)}`);
+    await offer.click();
+    await expect.poll(() => tableTitled(room, 'E')?.rows.length).toBe(6);
+    await expect(section.getByTestId('set-counts')).toContainText('|E| = 5');
+    await expect(section.getByTestId('set-counts')).toContainText('bag 6');
+    // The meta row and the counts follow the typing; the definition is the caption (SET-04).
+    await expect(meta).not.toContainText('singleton');
+  });
+}
+
+test('SET-06 SET-07 at 1440 px a family states each row as element, set or family in words, with degrees by depth', async ({
+  page,
+  checkA11y,
+}) => {
+  const room = await installFakes(page);
+  const seeded = openDocument(room.doc);
+  const sheetId = createSheet(seeded);
+  seedSet(seeded, sheetId, 'T', 2, ['d', 'A', 'a', 'b']);
+  const family = tablesOnSheet(seeded, sheetId)[0]!;
+  seeded.tables.get(family.id)!.set('kind', 'family');
+  await asDesktop(page, 1440, 900);
+  await signInTo(page, `/d/${DOC_ID}`);
+  const section = page.locator('section[aria-label="T"]');
+  await expect(section.getByRole('grid', { name: 'T' })).toBeVisible();
+  // Nest a and b under A by keyboard (HIER-01): the suite's Desktop Chrome UA is Windows, so ⌘]
+  // is Control here. Once a row nests the grid is a treegrid, so rows are found through the
+  // table's section.
+  for (const row of [3, 4]) {
+    await section.getByRole('row').nth(row).getByRole('gridcell').first().click();
+    await page.keyboard.press('Control+BracketRight');
+  }
+  await expect(section.getByTestId('set-meta')).toContainText('Family of sets');
+  await expect(section.getByTestId('set-note')).toHaveText([
+    'element',
+    'set',
+    'element',
+    'element',
+  ]);
+  await expect(section.getByTestId('set-degree')).toHaveText([
+    '−2°',
+    '−1°',
+    '±0°',
+    '+1°',
+    '+2°',
+    '+2.1°',
+    '+2.2°',
+  ]);
+  await expect(section.getByTestId('set-counts')).toContainText('|T| = 2');
+  await expect(section.getByTestId('set-counts')).toContainText('bag 3');
+  await checkA11y('family of sets 1440');
+});

@@ -101,3 +101,129 @@ p.gd-set-picker__legend {
 .gd-set-error--compact {
   flex-shrink: 0;
 }
+
+/* ---- set tables (SET-02..07; designs SimpleSet, FamilyOfSets) ----------------------------
+   Presentation over the table's rows: nothing here takes a lattice unit, so no A1 address
+   moves (SET-07). */
+
+/* SET-03 / SET-04: the title bar's two lattice rows hold the meta row and the title row. */
+.gd-table__title--set {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+}
+.gd-set-meta,
+.gd-set-title {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  height: var(--lattice-row);
+  min-width: 0;
+  padding: 0 var(--space-2);
+}
+.gd-set-meta {
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+}
+.gd-set-meta__kind {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  font-size: 0.5625rem;
+  line-height: 0.875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.gd-set-meta__values {
+  display: flex;
+  flex: 1;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
+}
+.gd-set-meta__value {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font-size: 0.5625rem;
+  line-height: 0.875rem;
+  white-space: nowrap;
+}
+/* The ULID is 26 characters; the chip shows its head, the tooltip and the accessible name all of it. */
+.gd-set-meta__value--id {
+  flex-shrink: 1;
+  max-width: 6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gd-set-title .gd-table__title-text {
+  flex: none;
+  max-width: 50%;
+}
+.gd-set-title .gd-table__degree {
+  margin-left: auto;
+}
+.gd-set-title__definition {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* SET-07: the degree rail, outside the table's left edge (and outside the row gutter while
+   the table is selected), so the cells keep every pixel of their lattice units. */
+.gd-set-degree {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 1px + var(--gd-gutter, 0px));
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  box-sizing: border-box;
+  width: 2.75rem;
+  height: var(--lattice-row);
+  padding-right: var(--space-1);
+  color: var(--ink-muted);
+  font-size: 0.5625rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* SET-02 / SET-06: a repeat's flag and a family row's kind, in words beside the element. */
+.gd-cell__note {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--space-1);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  white-space: nowrap;
+}
+
+/* SET-05: the count strip's counts. */
+.gd-set-counts {
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.gd-set-counts__cardinality {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+}

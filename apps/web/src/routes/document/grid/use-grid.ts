@@ -79,6 +79,8 @@ export interface GridOptions {
    * can change a row's lines re-measures it while `editable`.
    */
   fit?: (() => FitOptions | null) | undefined;
+  /** SET-02: offer Split into rows after a comma value lands in a set's range cell. */
+  offerSplit?: ((cell: CellSelection, elements: number, address: string) => void) | undefined;
 }
 
 /** True when the event is a deletion from a table's `rows` or `columns` array. */
@@ -98,6 +100,8 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
   editableRef.current = editable;
   const undoRef = useRef(options.undo);
   undoRef.current = options.undo;
+  const offerSplitRef = useRef(options.offerSplit);
+  offerSplitRef.current = options.offerSplit;
   // The selected table as last seen, so a vanished row or column can hand the
   // selection to the neighbour that took its place.
   const snapshotRef = useRef<{ tableId: Id; table: TraversalTable } | null>(null);
@@ -169,6 +173,9 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
         dispatch,
         announce,
         settle: () => undoRef.current?.stopCapturing(),
+        offerSplit: (cell, elements, address) => {
+          offerSplitRef.current?.(cell, elements, address);
+        },
       }),
     [gd, dispatch],
   );

@@ -10,3 +10,4 @@ export * from './sheets.js';
 export * from './presence.js';
 export * from './undo.js';
 export * from './seed.js';
+export * from './set-table.js';

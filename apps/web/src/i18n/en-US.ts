@@ -244,4 +244,37 @@ export const messages = {
   'set.column.range': 'range',
   'set.column.description': 'description',
   'set.column.note': 'note',
+  // SET-03: the meta row above a set table's header; every value computed, “—” when GeDe
+  // cannot determine it. The field names are the chips' accessible names.
+  'set.meta.label': 'Set facts',
+  'set.meta.id': 'set id',
+  'set.meta.finiteness': 'finite or infinite',
+  'set.meta.variable': 'bound or free variable',
+  'set.meta.quantifier': 'quantifier',
+  'set.meta.status': 'special status',
+  'set.meta.undetermined': 'not determined from the definition',
+  'set.meta.none': 'none',
+  'set.meta.finite': 'finite',
+  'set.meta.bound': 'bound',
+  'set.meta.universal': 'universal ∀',
+  'set.meta.existential': 'existential ∃',
+  'set.meta.null': 'null',
+  'set.meta.singleton': 'singleton',
+  // SET-04: the title row names the caption as the set's definition.
+  'set.title.definition': 'definition',
+  // SET-05: the footer count strip; `{set}` is the table's title, counts via Intl.NumberFormat.
+  'set.count.cardinality': '|{set}| = {count}',
+  'set.count.bag': 'bag {count}',
+  'set.count.label': '{set}: cardinality {cardinality}, bag {bag}',
+  // SET-02: a repeated element's flag (`{degree}` is the first occurrence's, e.g. +2°), and
+  // Split into rows, offered when a comma value lands in a range cell.
+  'set.repeat': 'repeat of {degree}',
+  'set.split.offer': '{cell} holds {count} elements',
+  'set.split.action': 'Split into rows',
+  'set.split.alt': 'Split {cell} into one row per element',
+  'set.split.done': 'Split {cell} into {count} rows',
+  // SET-06: a family row's kind, in words.
+  'set.rowKind.element': 'element',
+  'set.rowKind.set': 'set',
+  'set.rowKind.family': 'family',
 } as const;

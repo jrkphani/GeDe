@@ -15,6 +15,7 @@ import {
   readsTable,
   renameColumn,
   rowsArray,
+  setRangeColumn,
   setTableKind,
   setTableTitle,
   spreadMemberLabel,
@@ -30,7 +31,6 @@ import {
   type Pixels,
   type TableKind,
   type TableKindRefusal,
-  type TableRecord,
 } from '@gede/core';
 
 import { translate, type MessageKey } from '../../../i18n/index.js';
@@ -83,28 +83,12 @@ export interface SheetSet {
 
 const PREVIEW = 6;
 
-/**
- * SET-02: a set table's range column — the first column of a simple set or a family, the
- * first one-column computed column of a computed table. A product spread across columns
- * has no single range column and is not offered, whatever its kind: a spread Filled into a
- * set's first column is a tuple's first member, not the set.
- */
-function rangeColumn(record: TableRecord): Id | null {
-  if (record.kind === 'simple' || record.kind === 'family') {
-    const first = record.columns[0];
-    return first === undefined || first.computed?.shape === 'spread' ? null : first.id;
-  }
-  const computed = record.columns.filter((c) => c.computed !== null);
-  if (computed.length === 0) return record.columns[0]?.id ?? null;
-  return computed.find((c) => c.computed?.shape === 'column')?.id ?? null;
-}
-
 /** The set tables on a sheet, in sheet order, each with its range column (SET-02). */
 export function setsOnSheet(gd: GedeDoc, sheetId: Id): SheetSet[] {
   const out: SheetSet[] = [];
   for (const record of tablesOnSheet(gd, sheetId)) {
     if (record.kind === 'plain') continue;
-    const colId = rangeColumn(record);
+    const colId = setRangeColumn(record);
     const table = tableMap(gd, record.id);
     if (colId === null || table === null) continue;
     const elements: string[] = [];
@@ -134,7 +118,7 @@ export function pickFormula(gd: GedeDoc, pick: SetPick): string | null {
   const operands: string[] = [];
   for (const tableId of pick.sets) {
     const record = tableById(gd, tableId);
-    const colId = record === null ? null : rangeColumn(record);
+    const colId = record === null ? null : setRangeColumn(record);
     if (colId === null) return null;
     operands.push(encodeBound({ kind: 'column', columns: [{ tableId, colId }] }));
   }
