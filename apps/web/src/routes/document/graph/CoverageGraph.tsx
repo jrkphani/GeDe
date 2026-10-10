@@ -130,7 +130,7 @@ export const CoverageGraph = memo(function CoverageGraph({
         )}
       </p>
       {rows === 0 || cols === 0 ? (
-        <p className="gd-graph__note">Type into a row of the table to place the first context</p>
+        <p className="gd-graph__note">Type into a row of the table to add the first context</p>
       ) : (
         <svg
           className={clsx('gd-coverage__grid', {

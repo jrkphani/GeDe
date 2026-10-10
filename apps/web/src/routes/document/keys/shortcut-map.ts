@@ -62,7 +62,7 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
     group: 'Document',
     rows: [
       {
-        action: 'New workscape',
+        action: 'Add workscape',
         ids: ['newWorkscape'],
         reserved: 'the browser’s in Chrome and Safari — use + in the library',
       },

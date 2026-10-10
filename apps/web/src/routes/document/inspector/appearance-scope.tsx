@@ -20,6 +20,7 @@ import {
 } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
+import { useMessages } from '../../../i18n/index.js';
 import type { CellSelection } from '../selection.js';
 
 export type AppearanceScopeKind = 'column' | 'cell';
@@ -51,11 +52,14 @@ export function useAppearanceScope(
   editable: boolean,
   commands: GridCommands,
   what: string,
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string,
 ): AppearanceScope {
+  const t = useMessages();
   const [scope, setScope] = useState<AppearanceScopeKind>('column');
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
   const address = cell === null ? null : cellAddress(table, cell.rowId, cell.colId);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const disabledReason = viewOnly ?? (column === null ? 'select a cell first' : undefined);
   const override =
     cell === null || column === null ? null : cellAppearanceOverride(table, cell.rowId, column.id);
@@ -82,13 +86,22 @@ export function useAppearanceScope(
           }`;
   const control = (
     <SegmentedControl
-      label="Scope"
+      label={t('inspector.scope')}
       value={scope}
       onChange={setScope}
       disabled={disabledReason !== undefined}
       options={[
-        { value: 'column', label: column === null ? 'Column' : `Column ${column.label}` },
-        { value: 'cell', label: address === null ? 'Cell' : `Cell ${address}` },
+        {
+          value: 'column',
+          label:
+            column === null
+              ? t('inspector.column')
+              : t('inspector.columnLabel', { label: column.label }),
+        },
+        {
+          value: 'cell',
+          label: address === null ? t('inspector.cell') : t('inspector.cellAddress', { address }),
+        },
       ]}
     />
   );

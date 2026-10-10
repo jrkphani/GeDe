@@ -35,7 +35,7 @@ export function cellErrorMessage(error: CellError, locale?: string): string {
         ? 'Comp takes exactly 2 arguments: the set, then its universe'
         : `${error.name} takes ${arityText(error.arity)}`;
     case 'too-many-tuples':
-      return `Cross would make ${count(error.count)} tuples; narrow the sets`;
+      return `Cross would make ${count(error.count)} tuples, past the limit of ${count(MAX_CROSS_TUPLES)}; narrow the sets`;
     case 'too-many-subsets':
       return `Power over ${count(error.elements)} elements would make more than ${count(MAX_CROSS_TUPLES)} subsets; a set of at most 13 elements fits`;
   }

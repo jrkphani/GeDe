@@ -17,6 +17,8 @@
  * key that returns reclaims its row. A refused result (a capped Cross or
  * Power, an error, no formula) is handed off with no items: the table keeps its
  * rows, which are only kept sound (deduped, a removed typed row brought back).
+ * A computed row cannot be deleted by a person (`deleteRow` refuses it, ADR-056
+ * ruling c); changing the formula is how it goes.
  *
  * The reconciler writes rows only — ids, order, `computedKey`, `lostFrom` and,
  * where a key's text cannot be split back, its tuple members — never cell
@@ -29,7 +31,7 @@
  */
 import * as Y from 'yjs';
 
-import { rowMetaFor } from '../doc/mutations.js';
+import { addColumn, deleteColumn, rowMetaFor } from '../doc/mutations.js';
 import {
   cellsMap,
   cellText,
@@ -40,6 +42,7 @@ import {
   rowMeta,
   rowMetaMap,
   rowsArray,
+  tableById,
   tableRecord,
   tupleMembers,
   type ColumnRecord,
@@ -50,10 +53,11 @@ import {
 } from '../doc/schema.js';
 import { computedFormulaKey, workbookCellId, type WorkbookCellId } from '../engine/types.js';
 import type { CellValue } from '../formula/evaluate.js';
-import { isSetFunctionName } from '../formula/ast.js';
+import { isSetFunctionName, references } from '../formula/ast.js';
 import { parse } from '../formula/parser.js';
 import { dedupe } from '../formula/sets.js';
 import { cellKey, newId, type Id } from '../ids.js';
+import { renameColumn } from './derive.js';
 import { RowEditor } from './rows.js';
 import { deterministicId } from './split.js';
 
@@ -76,8 +80,47 @@ const MEMBERS = 'computedMembers';
  */
 const FILLED = 'computedRows';
 
-/** Column key: set when a Fill column was refused after a merge (`observeRefusedFills`). */
+/**
+ * Column key: set when a Fill column was refused after a merge (`observeRefusedFills`):
+ * `true` when a cell of it held a typed value, `'formula'` when another Fill of the same
+ * table won (`FORMULA_FILL`).
+ */
 const REFUSED = 'fillRefused';
+
+/**
+ * Table key: the Fill column step whose formula the table holds (`fillColumns`). Written
+ * with the formula, in the same transaction, so two concurrent Fills of one table leave
+ * the formula and this key from the same step; the other step's columns are then refused
+ * after the merge (ADR-056 ruling a), never left following a formula they were not filled with.
+ */
+const FORMULA_FILL = 'computedFill';
+
+/**
+ * Column key: the heading a Fill column step gave the column (`FillTarget.label`, a spread
+ * member's `x1 ∈ E`) with the one it had before, `{ before, after }`, so a Fill refused
+ * after a merge gives the column its own heading back (SET-10).
+ */
+const FILL_LABEL = 'fillLabel';
+
+/** One column of a Fill column step, in `spec`'s role, optionally renamed in the same step. */
+export interface FillTarget {
+  readonly colId: Id;
+  readonly spec: ComputedSpec;
+  /** The heading the Fill gives the column (`x1 ∈ E`); restored if the Fill is refused. */
+  readonly label?: string | undefined;
+}
+
+/** Why a Fill column was refused after a merge. */
+export type FillRefusal = 'typed' | 'formula';
+
+/**
+ * Table key: every row id the reconciler has given a key, with that key. A row and its
+ * meta deleted by an older client while another replica re-inserted it leaves the row
+ * with no meta; this record gives it its key back so it is reconciled like any other.
+ * ponytail: one entry per key ever filled, dropped only when the table stops being
+ * computed; prune keys with no row and no meta on snapshot if documents grow.
+ */
+const KEYS = 'computedIds';
 
 /** The row a result key fills in a table: the same on every replica (SPEC §2.2). */
 export function computedRowId(tableId: Id, key: string): Id {
@@ -117,14 +160,136 @@ function computedColumns(columns: readonly ColumnRecord[]): (ColumnRecord & {
  * one mutation re-points every computed column at once and two people
  * changing it concurrently converge on one formula (the later write wins).
  * Under the person's origin: it is an undo step.
+ * Known limit (Yjs map undo): undoing a change that won a concurrent change restores
+ * neither the losing value nor the previous one, so both replicas converge on no formula;
+ * the columns stay computed and the rows stay put until a formula is typed again.
  */
 export function setTableFormula(gd: GedeDoc, tableId: Id, formula: string): boolean {
   const table = gd.tables.get(tableId);
   if (table === undefined || !isSetFormula(formula)) return false;
   gd.doc.transact(() => {
     table.set('computedFormula', formula);
+    refitSpread(gd, tableId, table, spreadWidth(formula));
   }, gd.origin);
   return true;
+}
+
+/**
+ * The number of sets a top-level `Cross` multiplies, or null for any other formula — and
+ * for a `Cross` of the wrong arity (fewer than two sets), which evaluates to an error and
+ * so reconciles nothing (SPEC §2.4): the spread is not re-fitted to it.
+ */
+function spreadWidth(formula: string | null): number | null {
+  if (formula === null) return null;
+  const parsed = parse(formula);
+  return parsed.ok &&
+    parsed.value.kind === 'call' &&
+    parsed.value.name === 'Cross' &&
+    parsed.value.args.length >= 2
+    ? parsed.value.args.length
+    : null;
+}
+
+/** A table's spread member columns, in column order. */
+function spreadColumns(table: TableMap): (ColumnRecord & { computed: ComputedSpec })[] {
+  return computedColumns(tableRecord(table).columns).filter((c) => c.computed.shape === 'spread');
+}
+
+/** The id a re-fit gives the member at `index` of the spread Fill `fill`: the same on every replica. */
+function refitId(tableId: Id, fill: string, index: number): Id {
+  return deterministicId(`${tableId}\u0000${fill}\u0000${String(index)}`);
+}
+
+/**
+ * A spread member's heading, `x1 ∈ E` (SET-09): the set is named where the operand is a
+ * column or range of a table (what the operand picker writes), by that table's title;
+ * any other operand (a literal, a nested call) leaves the bare `x1`.
+ */
+export function spreadMemberLabel(gd: GedeDoc, formula: string | null, index: number): string {
+  const bare = `x${String(index + 1)}`;
+  if (formula === null) return bare;
+  const parsed = parse(formula);
+  if (!parsed.ok || parsed.value.kind !== 'call' || parsed.value.name !== 'Cross') return bare;
+  const arg = parsed.value.args[index];
+  if (arg?.kind !== 'bound') return bare;
+  const ref = arg.ref;
+  const tableId =
+    ref.kind === 'range'
+      ? ref.tableId
+      : ref.kind === 'column' && ref.columns.length === 1
+        ? ref.columns[0]?.tableId
+        : undefined;
+  const title = tableId === undefined ? undefined : tableById(gd, tableId)?.title;
+  return title === undefined || title === '' ? bare : `${bare} ∈ ${title}`;
+}
+
+/**
+ * SET-09 ruling (b): a spread table has one member column per set of its `Cross`. A
+ * member past the width, or a second column for the same member (two replicas growing
+ * the spread at once), goes; a missing member is added after the last one, in the
+ * spread's Fill step, under an id derived from that step and its index, so replicas
+ * adding the same member at once (or a merge of a widen with a narrow) converge on one
+ * column. A spread grows only from a column a person filled: a Fill step left with none
+ * (its Fill undone after a peer's re-fit added a member to it) is orphaned, and its re-fit
+ * columns go rather than growing it back. Typed neighbour columns are never touched.
+ * Returns writes.
+ */
+function refitSpread(gd: GedeDoc, tableId: Id, table: TableMap, width: number | null): number {
+  const all = spreadColumns(table);
+  if (all.length === 0) return 0;
+  let writes = 0;
+  const byPerson = (c: ColumnRecord & { computed: ComputedSpec }): boolean =>
+    c.computed.fill === undefined ||
+    c.id !== refitId(tableId, c.computed.fill, c.computed.spreadIndex ?? 0);
+  const live = new Set(all.filter(byPerson).map((c) => c.computed.fill));
+  for (const c of all) {
+    if (!live.has(c.computed.fill)) writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+  }
+  const spread = all.filter((c) => live.has(c.computed.fill));
+  if (spread.length === 0 || width === null) return writes;
+  const fill = spread[0]?.computed.fill ?? newId();
+  const derived = (index: number): Id => refitId(tableId, fill, index);
+  /**
+   * Member index → the column kept for it: a column a person filled wins over one this
+   * re-fit added (a spread Fill made one column at a time keeps the person's column), then
+   * column order. Both are the same on every replica, so replicas keep the same column.
+   */
+  const keep = new Map<number, ColumnRecord>();
+  for (const c of spread) {
+    const index = c.computed.spreadIndex ?? 0;
+    const held = keep.get(index);
+    if (index < width && (held === undefined || (held.id === derived(index) && c.id !== held.id))) {
+      keep.set(index, c);
+    }
+  }
+  // By record, not id: replicas adding the same member at once leave two columns with its id.
+  const keptRecords = new Set(keep.values());
+  for (const c of spread) {
+    if (!keptRecords.has(c)) writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+  }
+  const kept = new Map([...keep].map(([index, c]) => [index, c.id]));
+  const formula = tableRecord(table).computedFormula;
+  for (let index = 0; index < width; index += 1) {
+    if (kept.has(index)) continue;
+    // Beside its neighbouring member, so member order is column order whatever merged.
+    const below = [...kept.keys()].filter((i) => i < index);
+    const above = [...kept.keys()].filter((i) => i > index);
+    const id = addColumn(gd, tableId, {
+      label: spreadMemberLabel(gd, formula, index),
+      afterColId: below.length > 0 ? kept.get(Math.max(...below)) : undefined,
+      beforeColId:
+        below.length === 0 && above.length > 0 ? kept.get(Math.min(...above)) : undefined,
+      id: derived(index),
+    });
+    kept.set(index, id);
+    const map = columnsArray(table)
+      .toArray()
+      .find((c) => readString(c, 'id') === id);
+    map?.set('source', 'computed');
+    map?.set('computed', { shape: 'spread', spreadIndex: index, fill });
+    writes += 1;
+  }
+  return writes;
 }
 
 /**
@@ -164,25 +329,69 @@ export function setComputedColumns(
   tableId: Id,
   columns: readonly { readonly colId: Id; readonly spec: ComputedSpec }[],
 ): boolean {
+  return markComputed(gd, tableId, columns) !== null;
+}
+
+/**
+ * SET-10, ADR-056 ruling (a): Fill column with formula…, as one undo step — the columns
+ * made computed (`setComputedColumns`) and the table's one formula (`setTableFormula`),
+ * stamped with this step (`FORMULA_FILL`) so a concurrent Fill of another column of the
+ * same table is refused after the merge rather than silently following this formula.
+ * False, writing nothing, when a column holds a typed value or the formula is no set.
+ */
+export function fillColumns(
+  gd: GedeDoc,
+  tableId: Id,
+  columns: readonly FillTarget[],
+  formula: string,
+): boolean {
   const table = gd.tables.get(tableId);
-  if (table === undefined || columns.length === 0) return false;
+  if (table === undefined || !isSetFormula(formula)) return false;
+  let ok = false;
+  gd.doc.transact(() => {
+    const fill = markComputed(gd, tableId, columns);
+    if (fill === null) return;
+    table.set(FORMULA_FILL, fill);
+    ok = setTableFormula(gd, tableId, formula);
+  }, gd.origin);
+  return ok;
+}
+
+/** `setComputedColumns`, returning the step's id, or null when refused (nothing written). */
+function markComputed(gd: GedeDoc, tableId: Id, columns: readonly FillTarget[]): string | null {
+  const table = gd.tables.get(tableId);
+  if (table === undefined || columns.length === 0) return null;
   const maps = columnsArray(table).toArray();
-  const targets = columns.map(({ colId, spec }) => ({
+  const targets = columns.map(({ colId, spec, label }) => ({
     spec,
+    label,
     map: maps.find((c) => readString(c, 'id') === colId),
   }));
   const rows = rowsArray(table).toArray();
   for (const { map } of targets) {
-    if (map === undefined) return false;
+    if (map === undefined) return null;
     const colId = readString(map, 'id');
     if (map.get('source') !== 'computed' && rows.some((r) => cellText(table, r, colId) !== '')) {
-      return false;
+      return null;
     }
   }
-  const fill = newId();
+  // A spread is one unit, however many steps made it: a spread column joins the table's
+  // spread Fill, so a refusal after a merge reverts the whole spread (SET-09, SET-10).
+  const spreadFill = spreadColumns(table)[0]?.computed.fill;
+  const fill =
+    spreadFill !== undefined && columns.every(({ spec }) => spec.shape === 'spread')
+      ? spreadFill
+      : newId();
   gd.doc.transact(() => {
-    for (const { map, spec } of targets) {
+    for (const { map, spec, label } of targets) {
       if (map === undefined) continue;
+      const id = readString(map, 'id');
+      const before = readString(map, 'label');
+      map.delete(FILL_LABEL);
+      // Renamed while still entered (Rename's own rules), and remembered for a refusal.
+      if (label !== undefined && label !== before && renameColumn(gd, tableId, id, label)) {
+        map.set(FILL_LABEL, { before, after: label });
+      }
       map.set('source', 'computed');
       map.set('computed', { ...spec, fill });
       map.delete(REFUSED);
@@ -191,7 +400,57 @@ export function setComputedColumns(
       map.delete('pull');
     }
   }, gd.origin);
-  return true;
+  return fill;
+}
+
+/** The tables a formula reads through its id-bound operands. */
+function boundTables(formula: string, out: Set<Id>): void {
+  const parsed = parse(formula);
+  if (!parsed.ok) return;
+  for (const ref of references(parsed.value)) {
+    if (ref.kind !== 'bound') continue;
+    const bound = ref.ref;
+    if (bound.kind === 'column') for (const c of bound.columns) out.add(c.tableId);
+    else out.add(bound.tableId);
+  }
+}
+
+/** The tables `tableId` reads: its computed formula's, its formula cells', its pulls' and mappings'. */
+function tablesReadBy(gd: GedeDoc, tableId: Id): Set<Id> {
+  const out = new Set<Id>();
+  const table = gd.tables.get(tableId);
+  if (table === undefined) return out;
+  const record = tableRecord(table);
+  if (record.computedFormula !== null) boundTables(record.computedFormula, out);
+  for (const value of cellsMap(table).values()) {
+    if (isFormula(value)) boundTables(value, out);
+  }
+  for (const c of record.columns) {
+    if (c.pull !== null) out.add(c.pull.tableId);
+    if (c.link !== null) out.add(c.link.tableId);
+  }
+  return out;
+}
+
+/**
+ * SET-10, FX-06: whether any of `operands` reads `target`, directly or through the tables
+ * they read in turn (a computed table `U = P ∪ C` reads P). A Fill of `target` from such
+ * operands would make its formula depend on its own rows: the engine reports it
+ * `circular` and the rows could never settle, so Fill refuses it before writing. Follows
+ * id-bound operands (what the operand picker writes), pulls and mappings; an operand that
+ * follows an address rather than a cell is left to the engine, whose `circular` the
+ * table's header then shows.
+ */
+export function readsTable(gd: GedeDoc, operands: readonly Id[], target: Id): boolean {
+  const seen = new Set<Id>();
+  const stack = [...operands];
+  for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
+    if (id === target) return true;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    stack.push(...tablesReadBy(gd, id));
+  }
+  return false;
 }
 
 /** What the engine hands the main thread for one computed table (SPEC §2.4). */
@@ -214,15 +473,18 @@ export interface ComputedItems {
  * still kept sound (`ComputedItems.items`). A table that has computed rows
  * but no computed column any more (an undo of Fill column) is handed off with
  * no column and no items, so the reconciler clears the computed rows it left.
+ * `only` limits the hand-off to those tables (the ones a transaction touched).
  */
 export function computedItemsOf(
   gd: GedeDoc,
   resultOf: (
     cellId: WorkbookCellId,
   ) => { readonly value: CellValue | null; readonly error: unknown } | undefined,
+  only?: ReadonlySet<Id>,
 ): ComputedItems[] {
   const out: ComputedItems[] = [];
   gd.tables.forEach((table, tableId) => {
+    if (only !== undefined && !only.has(tableId)) return;
     const record = tableRecord(table);
     const [driver] = computedColumns(record.columns);
     if (driver === undefined) {
@@ -239,6 +501,13 @@ export function computedItemsOf(
           leftover = true;
           break;
         }
+      }
+      // A row the reconciler keyed, left with no meta by an older client's delete.
+      const keyed = table.get(KEYS);
+      if (!leftover && keyed instanceof Y.Map) {
+        leftover = [...keyed.keys()].some(
+          (id) => rows.has(id) && rowMeta(table, id).computedKey === null,
+        );
       }
       if (leftover) out.push({ tableId, items: [], members: new Map() });
       return;
@@ -285,6 +554,18 @@ export function reconcileComputed(
     const keyOf = (id: Id): string | null => rowMeta(table, id).computedKey;
     editor.dedupe();
 
+    // A row the reconciler keyed that has no key now lost its meta to an older client's
+    // delete merged with a re-insert (ADR-056 ruling c): it gets its key back, and is then
+    // kept, labelled or removed like any computed row.
+    const known = table.get(KEYS);
+    const keyed = known instanceof Y.Map ? (known as Y.Map<unknown>) : null;
+    for (const id of keyed === null ? [] : editor.ids) {
+      const key = keyed?.get(id);
+      if (typeof key !== 'string' || keyOf(id) !== null) continue;
+      rowMetaFor(table, id).set('computedKey', key);
+      writes += 1;
+    }
+
     // SET-10 after a merge: a column made computed while another replica typed into it is
     // refused here, as it would have been locally. Nothing computed is ever stored, so
     // anything stored under a computed column's key is a person's — on a removed row too,
@@ -313,11 +594,41 @@ export function reconcileComputed(
         if (!all.has(id)) continue;
         map.set('source', 'entered');
         map.delete('computed');
+        restoreLabel(gd, tableId, map);
         // The flag names the column that held the typed value: that is the one announced.
         if (refused.has(id)) map.set(REFUSED, true);
         writes += 1;
       }
     }
+    // ADR-056 ruling (a) after a merge: two people filled different columns of this table at
+    // once. The formula is one step's (`FORMULA_FILL`); the other step's columns are refused —
+    // a column a person filled holds typed values again, one a re-fit added for it goes — so
+    // no column shows a formula it was not filled with.
+    const owner = table.get(FORMULA_FILL);
+    if (typeof owner === 'string') {
+      const losing = computedColumns(tableRecord(table).columns).filter(
+        (c) => c.computed.fill !== undefined && c.computed.fill !== owner,
+      );
+      const added = (c: (typeof losing)[number]): boolean =>
+        c.computed.shape === 'spread' &&
+        c.id === refitId(tableId, c.computed.fill ?? '', c.computed.spreadIndex ?? 0);
+      const reverted = new Set(losing.filter((c) => !added(c)).map((c) => c.id));
+      for (const c of losing) {
+        if (added(c)) writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+      }
+      for (const map of columnsArray(table).toArray()) {
+        if (!reverted.has(readString(map, 'id')) || map.get('source') !== 'computed') continue;
+        map.set('source', 'entered');
+        map.delete('computed');
+        restoreLabel(gd, tableId, map);
+        map.set(REFUSED, 'formula');
+        writes += 1;
+      }
+      if (losing.length > 0) record = tableRecord(table);
+    }
+    // SET-09 after a merge: two replicas re-fitting the spread at once leave a member twice,
+    // or (a widen merged with a narrow) none at all.
+    writes += refitSpread(gd, tableId, table, spreadWidth(record.computedFormula));
     if (writes > 0) record = tableRecord(table);
     const [driver] = computedColumns(record.columns);
 
@@ -353,11 +664,19 @@ export function reconcileComputed(
               ? editor.indexOf(after) + 1
               : editor.ids.length;
         editor.insertAt(at, id);
+        // With no result to say otherwise, it is back because its key left: it says so.
+        if (driver !== undefined && result === null && meta.get('lostFrom') !== driver.id) {
+          meta.set('lostFrom', driver.id);
+          writes += 1;
+        }
       }
     }
 
-    // No result to fill from: the rows stay as they are (SPEC §2.4).
+    // No result to fill from: the rows stay as they are (SPEC §2.4), except a lost row
+    // whose typed values were cleared, which leaves (SET-12): its key left the result
+    // already, and a key that returns brings it back under the same id.
     if (driver !== undefined && result === null) {
+      removeWhere((id) => metas.get(id)?.has('lostFrom') === true && !typed(id));
       writes += editor.writes;
       return;
     }
@@ -369,6 +688,7 @@ export function reconcileComputed(
       for (const id of editor.ids) {
         const meta = metas.get(id);
         if (meta?.has('computedKey') !== true) continue;
+        keyed?.delete(id);
         meta.delete('computedKey');
         meta.delete('lostFrom');
         meta.delete(MEMBERS);
@@ -384,6 +704,11 @@ export function reconcileComputed(
     const isLost = (id: Id): boolean => !wantedSet.has(id) && keyOf(id) !== null;
     if (table.get(FILLED) !== true) {
       table.set(FILLED, true);
+      writes += 1;
+    }
+    const keysById = keyed ?? new Y.Map<unknown>();
+    if (keyed === null) {
+      table.set(KEYS, keysById);
       writes += 1;
     }
 
@@ -403,9 +728,14 @@ export function reconcileComputed(
     writes += editor.writes;
 
     keys.forEach((key, i) => {
-      const meta = rowMetaFor(table, wanted[i] ?? '');
+      const id = wanted[i] ?? '';
+      const meta = rowMetaFor(table, id);
       if (meta.get('computedKey') !== key) {
         meta.set('computedKey', key);
+        writes += 1;
+      }
+      if (keysById.get(id) !== key) {
+        keysById.set(id, key);
         writes += 1;
       }
       if (meta.has('lostFrom')) {
@@ -429,6 +759,20 @@ export function reconcileComputed(
     });
   }, origin);
   return writes;
+}
+
+/**
+ * A refused Fill gives its column back the heading it had (SET-10): a typed column must not
+ * go on claiming `x1 ∈ E`. Only while the heading is still the one the Fill gave it; a
+ * rename since is a person's and stays.
+ */
+function restoreLabel(gd: GedeDoc, tableId: Id, column: Y.Map<unknown>): void {
+  const given: unknown = column.get(FILL_LABEL);
+  column.delete(FILL_LABEL);
+  if (typeof given !== 'object' || given === null) return;
+  const { before, after } = given as { before?: unknown; after?: unknown };
+  if (typeof before !== 'string' || readString(column, 'label') !== after) return;
+  renameColumn(gd, tableId, readString(column, 'id'), before);
 }
 
 const OPERATORS: Readonly<Record<string, string>> = {
@@ -460,21 +804,26 @@ export function computedOperandsLabel(displayFormula: string): string {
 }
 
 /**
- * SET-10 after a merge: `onRefused(tableId, colId)` once on each replica when a Fill
- * column is refused because a cell of the column holds a typed value (the reconciler
- * sets the column back to entered, here or on another replica). Returns the stop.
+ * SET-10 after a merge: `onRefused(tableId, colId, reason)` once on each replica when a
+ * Fill column is refused — `typed` when a cell of the column holds a typed value,
+ * `formula` when another person's concurrent Fill of the same table won (ADR-056 ruling
+ * a) — the reconciler sets the column back to entered, here or on another replica.
+ * Returns the stop.
  */
 export function observeRefusedFills(
   gd: GedeDoc,
-  onRefused: (tableId: Id, colId: Id) => void,
+  onRefused: (tableId: Id, colId: Id, reason: FillRefusal) => void,
 ): () => void {
   const observer = (events: Y.YEvent<Y.AbstractType<unknown>>[]): void => {
     for (const event of events) {
       const column = event.target;
+      // `add` only: a refused column is filled again only after `markComputed` clears the flag,
+      // and two replicas refusing it at once merge into an `update` already announced.
       if (!(column instanceof Y.Map) || event.changes.keys.get(REFUSED)?.action !== 'add') continue;
       const table = column.parent?.parent;
       if (!(table instanceof Y.Map) || table.parent !== gd.tables) continue;
-      onRefused(readString(table as Y.Map<unknown>, 'id'), readString(column, 'id'));
+      const reason: FillRefusal = column.get(REFUSED) === 'formula' ? 'formula' : 'typed';
+      onRefused(readString(table as Y.Map<unknown>, 'id'), readString(column, 'id'), reason);
     }
   };
   gd.tables.observeDeep(observer);

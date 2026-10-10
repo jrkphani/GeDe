@@ -3,8 +3,9 @@ import { Button, Menu, type MenuEntry } from '@gede/ui';
 
 import type { CellSelection, Selection } from '../../../doc/selection.js';
 import { LABELS } from '../../../doc/shortcuts.js';
+import { useMessages } from '../../../i18n/index.js';
 import { useYVersion } from '../../../doc/use-y.js';
-import type { GridCommands } from './commands.js';
+import { rowDeleteReason, type GridCommands } from './commands.js';
 
 export interface TableMenuProps {
   gd: GedeDoc;
@@ -37,6 +38,7 @@ export function frozenOptions(columnCount: number): number[] {
  */
 export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: TableMenuProps) {
   useYVersion(gd.tables);
+  const t = useMessages();
   const record = selection === null ? null : tableById(gd, selection.tableId);
   const cell: CellSelection | null =
     selection?.cell && record !== null ? { tableId: record.id, ...selection.cell } : null;
@@ -53,7 +55,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
     {
       kind: 'item',
       id: 'row-above',
-      label: 'Insert row above',
+      label: t('menu.addRowAbove'),
       disabledReason: needsCell,
       onSelect: () => {
         commands.insertRowAbove(tableId, rowId);
@@ -62,9 +64,9 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
     {
       kind: 'item',
       id: 'row-delete',
-      label: 'Delete row',
+      label: t('menu.deleteRow'),
       danger: true,
-      disabledReason: needsCell,
+      disabledReason: needsCell ?? rowDeleteReason(gd, tableId, rowId),
       onSelect: () => {
         commands.deleteRow(tableId, rowId);
       },
@@ -73,7 +75,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
     {
       kind: 'item',
       id: 'col-before',
-      label: 'Insert column before',
+      label: t('menu.addColumnBefore'),
       disabledReason: needsCell,
       onSelect: () => {
         commands.insertColumnBefore(tableId, columnId);
@@ -82,7 +84,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
     {
       kind: 'item',
       id: 'col-delete',
-      label: 'Delete column',
+      label: t('menu.deleteColumn'),
       danger: true,
       disabledReason: needsCell,
       onSelect: () => {
@@ -92,7 +94,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
     {
       kind: 'item',
       id: 'col-hide',
-      label: 'Hide column',
+      label: t('menu.hideColumn'),
       disabledReason: needsCell,
       onSelect: () => {
         commands.hideColumn(tableId, columnId);
@@ -103,8 +105,10 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
       id: 'col-unhide',
       label:
         hiddenCount === 0
-          ? 'Unhide columns'
-          : `Unhide ${String(hiddenCount)} ${hiddenCount === 1 ? 'column' : 'columns'}`,
+          ? t('menu.unhideColumns')
+          : t(hiddenCount === 1 ? 'menu.unhideCountColumn' : 'menu.unhideCountColumns', {
+              count: hiddenCount,
+            }),
       disabledReason: needsTable ?? (hiddenCount === 0 ? 'no hidden columns' : undefined),
       onSelect: () => {
         commands.unhideAllColumns(tableId);
@@ -113,7 +117,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
     {
       kind: 'item',
       id: 'col-widen',
-      label: 'Widen column',
+      label: t('menu.widenColumn'),
       disabledReason: needsCell,
       onSelect: () => {
         commands.setColumnWidth(tableId, columnId, (column?.width ?? 1) + 1);
@@ -122,7 +126,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
     {
       kind: 'item',
       id: 'col-narrow',
-      label: 'Narrow column',
+      label: t('menu.narrowColumn'),
       disabledReason:
         needsCell ?? ((column?.width ?? 1) <= 1 ? 'already one unit wide' : undefined),
       onSelect: () => {
@@ -135,7 +139,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
       // dialog. ⌫ with the table selected and the table context menu are the routes.
       kind: 'item',
       id: 'table-delete',
-      label: 'Delete table',
+      label: t('menu.deleteTable'),
       shortcut: LABELS.clear,
       danger: true,
       disabledReason:
@@ -148,12 +152,17 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
 
   return (
     <Menu
-      label="Table"
+      label={t('menu.table')}
       align="start"
       entries={entries}
       trigger={
-        <Button size="sm" variant="ghost" className="gd-tool gd-tool--text" aria-label="Table menu">
-          Table
+        <Button
+          size="sm"
+          variant="ghost"
+          className="gd-tool gd-tool--text"
+          aria-label={t('menu.tableMenu')}
+        >
+          {t('menu.table')}
         </Button>
       }
     />

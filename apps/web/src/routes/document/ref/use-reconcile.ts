@@ -1,5 +1,7 @@
 /**
- * Keeps pulls (REF-02), `Split()` children (HIER-07) and computed rows (SET-08) reconciled while a
+ * Keeps pulls (REF-02), `Split()` children (HIER-07), computed rows (SET-08), a family's
+ * `@` references (SET-06, `observeSetRefs`) and rows two replicas both split into (SET-02,
+ * `settleSetRows`) reconciled while a
  * document is open for editing. One installation per document, reference-
  * counted by the tables that mount it; a read-only session (phone, viewer)
  * installs nothing — the replica that can write reconciles for both, and
@@ -8,18 +10,32 @@
  * Pulls follow the document (`observePulls`). Split children follow the
  * engine: after every batch of results the pieces of each table's split
  * column are read off the results and materialised as rows. Values are never
- * computed here; the engine's Worker did that.
+ * computed here; the engine's Worker did that. Computed tables are also kept
+ * sound after every other update, remote or local (ADR-056 ruling d): a merge
+ * can refuse a Fill, return a removed noted row or leave a row twice, and a
+ * cleared note lets a lost row go (SET-12), with no result changing. That pass
+ * hands off no items and runs only for the tables a transaction touched. A
+ * table's rows are filled only while no change to that table is outstanding:
+ * a Worker answers in order, so while a later request touching the table is
+ * pending its cached result may still be the previous formula's, and filling
+ * from it would revert a peer's change (its formula, or the rows its replica
+ * filled) and broadcast the revert. A pending change to an operand's table
+ * alone cannot do that: the rows still match the cached result, so the fill
+ * writes nothing until the operand's answer arrives with the new result.
  */
 import { useEffect } from 'react';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import {
+  COMPUTED_ORIGIN,
   computedItemsOf,
   observePulls,
   observeRefusedFills,
+  observeSetRefs,
   openDocument,
   reconcileComputed,
   reconcileFilteredPulls,
   reconcileSplitChildren,
+  settleSetRows,
   splitPiecesOf,
   tableById,
   workbookCellId,
@@ -45,12 +61,44 @@ function install(doc: Y.Doc): () => void {
   const cellValue = (tableId: string, key: CellKey) =>
     host.result(workbookCellId(tableId, key))?.value;
   const stopPulls = observePulls(gd, { cellValue });
+  // SET-06, REF-01: a family row that references another set through `@E` holds E's rows.
+  const stopSetRefs = observeSetRefs(gd);
   // SET-10 after a merge: a Fill column refused here or on another replica is said, not silent.
-  const stopRefusals = observeRefusedFills(gd, (tableId, colId) => {
+  // `formula`: another person's Fill of the same table won the merge (ADR-056 ruling a).
+  const stopRefusals = observeRefusedFills(gd, (tableId, colId, reason) => {
     const column = tableById(gd, tableId)?.columns.find((c) => c.id === colId);
     if (column === undefined) return;
-    announce(translate(activeLocale(), 'set.fillRefused', { column: column.label }));
+    const key = reason === 'formula' ? 'set.fillSuperseded' : 'set.fillRefused';
+    announce(translate(activeLocale(), key, { column: column.label }));
   });
+  let stopped = false;
+  /** Tables whose fill waits for a change to them to be answered. */
+  const waiting = new Set<string>();
+  const waitFor = (tableId: string): void => {
+    if (waiting.has(tableId)) return;
+    waiting.add(tableId);
+    void host.settledFor(tableId).then(() => {
+      waiting.delete(tableId);
+      if (!stopped) run();
+    });
+  };
+  // SET-08: a computed table's formula, evaluated once in the Worker, fills its table's rows —
+  // only once every change to that table is answered (see the header), so formula traffic in
+  // other tables never holds it back. A Worker that gave up answers nothing: its cached
+  // results predate the document, and nothing is filled from them until Retry.
+  const fillComputed = (): void => {
+    if (host.status.failed) return;
+    for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
+      if (host.busyFor(tableId)) waitFor(tableId);
+      else reconcileComputed(gd, tableId, items, members);
+    }
+  };
+  // Ruling (d): the soundness pass, with no items (see the header).
+  const keepComputedSound = (tables: ReadonlySet<string>): void => {
+    for (const { tableId } of computedItemsOf(gd, () => undefined, tables)) {
+      reconcileComputed(gd, tableId, null);
+    }
+  };
   let running = false;
   const run = (): void => {
     if (running) return;
@@ -59,10 +107,7 @@ function install(doc: Y.Doc): () => void {
       for (const [tableId, pieces] of splitPiecesOf(gd, (id) => host.result(id))) {
         reconcileSplitChildren(gd, tableId, pieces);
       }
-      // SET-08: a computed column's formula, evaluated once in the Worker, fills its table's rows.
-      for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
-        reconcileComputed(gd, tableId, items, members);
-      }
+      fillComputed();
       // Results moved: a filtered pull over engine-backed cells may admit different rows now.
       reconcileFilteredPulls(gd, { cellValue });
     } finally {
@@ -71,10 +116,36 @@ function install(doc: Y.Doc): () => void {
   };
   const stopResults = host.subscribeAll(run);
   run();
+  // Ruling (d): once per burst of transactions other than its own, coalesced into one pass
+  // over the tables they touched.
+  const touched = new Set<string>();
+  const onTransaction = (tr: Y.Transaction): void => {
+    if (tr.origin === COMPUTED_ORIGIN) return;
+    const before = touched.size;
+    for (const type of tr.changed.keys()) {
+      let t: unknown = type;
+      while (t instanceof Y.AbstractType && t.parent !== gd.tables) t = t.parent;
+      const id: unknown = t instanceof Y.Map ? t.get('id') : undefined;
+      if (typeof id === 'string') touched.add(id);
+    }
+    if (before > 0 || touched.size === 0) return;
+    queueMicrotask(() => {
+      const tables = new Set(touched);
+      touched.clear();
+      if (stopped) return;
+      keepComputedSound(tables);
+      // SET-02: two replicas that both split the same value hold its new rows twice.
+      for (const tableId of tables) settleSetRows(gd, tableId);
+    });
+  };
+  doc.on('afterTransaction', onTransaction);
   return () => {
+    stopped = true;
     stopPulls();
+    stopSetRefs();
     stopRefusals();
     stopResults();
+    doc.off('afterTransaction', onTransaction);
   };
 }
 

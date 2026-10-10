@@ -182,7 +182,7 @@ function GraphTabBody({
         label="dimensions"
         hint={
           record === null
-            ? 'Point the graph at a table to choose its dimensions.'
+            ? 'Point the graph at a table to pick its dimensions.'
             : `${n(derivation.dimensions.length)}-D matrix · ${n(derivation.tupleSpace)} possible tuples. Derived, linked and pulled columns are not offered — a context must be typeable back into its table.`
         }
       >

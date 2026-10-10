@@ -98,6 +98,8 @@ function layerTransform(): string {
 
 async function addTable() {
   await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
+  // SET-01: Plain table is preselected; Enter adds it.
+  await userEvent.keyboard('{Enter}');
   await waitFor(() => {
     expect(screen.getAllByRole('grid').length).toBeGreaterThan(0);
   });
@@ -247,7 +249,7 @@ describe('DocumentShell', () => {
   it('DOC-02 toolbar clusters: working commands work, unimplemented ones are present but disabled with a reason; aria-keyshortcuts carry key tokens', async () => {
     await openShell();
     const toolbar = screen.getByRole('toolbar', { name: 'Document tools' });
-    for (const name of ['Insert', 'Arrange', 'Data', 'View', 'Inspectors']) {
+    for (const name of ['Add', 'Arrange', 'Data', 'View', 'Inspectors']) {
       expect(within(toolbar).getByRole('group', { name })).toBeInTheDocument();
     }
     // GRAPH-01: + Graph is live; the still-unbuilt Arrange tools are present but disabled with a reason.
@@ -1010,9 +1012,9 @@ describe('DocumentShell', () => {
     await userEvent.keyboard('{Escape}');
     // The Table menu no longer repeats the toolbar's Add row / Add column (DOC-02, ADR-041).
     await userEvent.click(within(toolbar).getByRole('button', { name: 'Table menu' }));
-    expect(screen.queryByRole('menuitem', { name: /Insert row below/ })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: /Add row below/ })).toBeNull();
     expect(screen.queryByRole('menuitemcheckbox', { name: /Header row/ })).toBeNull();
-    expect(screen.getByRole('menuitem', { name: /Insert row above/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Add row above/ })).toBeInTheDocument();
   });
 
   it('KEYS-07 INSP-02 ⌥⌘I toggles the inspector between the rail and the 38 px strip; ⌥⌘1 and ⌥⌘2 pick Format and Organize', async () => {

@@ -97,6 +97,8 @@ async function openShell(path = `/d/${ID}`) {
 
 async function addTable() {
   await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
+  // SET-01: Plain table is preselected; Enter adds it.
+  await userEvent.keyboard('{Enter}');
   await waitFor(() => {
     expect(screen.getAllByRole('grid').length).toBeGreaterThan(0);
   });
@@ -188,6 +190,8 @@ describe('context graphs', () => {
     await openShell();
     await addTable();
     await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
+    // SET-01: Plain table is preselected; Enter adds it.
+    await userEvent.keyboard('{Enter}');
     await until(() => room.doc.getMap('tables').size === 2);
     await userEvent.click(screen.getByRole('button', { name: 'Add graph' }));
     const targets = screen.getAllByTestId('pointing-target');
@@ -282,6 +286,8 @@ describe('context graphs', () => {
     // INSP-08: the Graph tab exists only now.
     expect(screen.getByRole('tab', { name: 'Graph' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
+    // SET-01: Plain table is preselected; Enter adds it.
+    await userEvent.keyboard('{Enter}');
     // A table selection made in the grid drops the graph selection, and the tab with it.
     await waitFor(() => {
       expect(screen.queryByRole('tab', { name: 'Graph' })).not.toBeInTheDocument();
@@ -578,6 +584,8 @@ describe('context graphs', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
     expect(screen.getByTestId('graph-source')).toHaveTextContent('Contexts 1');
     await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
+    // SET-01: Plain table is preselected; Enter adds it.
+    await userEvent.keyboard('{Enter}');
     await until(() => tablesOnSheet(gd, sheetId).length === 2);
     await userEvent.click(within(ring()).getByRole('button', { name: /^Move Ring graph/ }));
     await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));

@@ -3,6 +3,7 @@ import { cellAddress, rowMeta, tableRecord, type TableMap } from '@gede/core';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import type { Selection } from '../selection.js';
+import { useMessages } from '../../../i18n/index.js';
 
 /** A selected object that is not a table (INSP-08: a graph): its name and what the head says of it. */
 export interface HeadObject {
@@ -29,11 +30,12 @@ export function InspectorHead({
   /** The label of the column the viewer groups the table by, or null (INSP-03 "grouping"). */
   groupedBy?: string | null | undefined;
 }) {
+  const t = useMessages();
   if (table === null || selection === null) {
     return (
       <div className="gd-inspector__selected" data-testid="inspector-selected">
         {object === undefined ? (
-          <p className="gd-inspector__none">Nothing selected</p>
+          <p className="gd-inspector__none">{t('inspector.nothingSelected')}</p>
         ) : (
           <>
             <p className="gd-inspector__object">{object.label}</p>

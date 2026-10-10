@@ -46,6 +46,15 @@ export function resolveMenuTarget(gd: GedeDoc, node: EventTarget | null): MenuTa
     if (header !== null) return { kind: 'column', tableId, colId: header.dataset.colId ?? '' };
     return { kind: 'table', tableId };
   }
+  // SET-17: a section's heading (the lanes themselves let the pointer through to the canvas).
+  const section = node.closest<HTMLElement>('[data-section-id]');
+  if (section !== null) {
+    return {
+      kind: 'section',
+      sheetId: section.dataset.sheetId ?? '',
+      sectionId: section.dataset.sectionId ?? '',
+    };
+  }
   const sheetTab = node.closest<HTMLElement>('.gd-doc__sheets [role="tab"][data-value]');
   if (sheetTab !== null) {
     const sheet = listSheets(gd).find((s) => s.id === sheetTab.dataset.value);
@@ -131,7 +140,7 @@ export function DocumentContextMenu({
         // sheet or Add sheet after, the strip's selected tab (the neighbour, the new sheet) is
         // where the keyboard is — the tab the menu opened on may be gone.
         const renameField = document.querySelector<HTMLElement>(
-          '[data-sheet-rename], [data-table-rename]',
+          '[data-sheet-rename], [data-table-rename], [data-section-rename]',
         );
         if (renameField !== null) return renameField;
         if (opener?.matches('[role="tab"][data-value]') === true) {

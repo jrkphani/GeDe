@@ -28,6 +28,7 @@ import {
 } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
+import { useMessages } from '../../../i18n/index.js';
 import { markAriaKeys, markLabel } from '../keys/shortcut-map.js';
 import type { AxisBand, CellSelection } from '../selection.js';
 import { useAppearanceScope } from './appearance-scope.js';
@@ -42,6 +43,8 @@ export interface TextTabProps {
   editing: boolean;
   editable: boolean;
   commands: GridCommands;
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string | undefined;
   /** KEYS-05: toggle a mark over the whole selected cell (the shell owns the write). */
   onToggleMark: (mark: ToggleMark) => void;
 }
@@ -92,17 +95,27 @@ export function TextTab({
   editing,
   editable,
   commands,
+  readOnlyReason,
   onToggleMark,
 }: TextTabProps) {
+  const t = useMessages();
   const record = tableRecord(table);
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const needsCell = cell === null ? 'select a cell first' : undefined;
   const marksReason =
     viewOnly ?? needsCell ?? (editing ? 'finish editing to format the whole cell' : undefined);
   const marksReasonId = useId();
   const rich = cell === null ? null : cellRich(table, cell.rowId, cell.colId);
-  const look = useAppearanceScope(table, record, cell, editable, commands, 'the typography');
+  const look = useAppearanceScope(
+    table,
+    record,
+    cell,
+    editable,
+    commands,
+    'the typography',
+    readOnlyReason,
+  );
   const a = look.effective;
   const activeStyle = characterStyleOf(a);
   // ADR-049 (Numbers N8): one "Wrap text in cell" switch whose scope is the selection's —
@@ -129,11 +142,11 @@ export function TextTab({
 
   return (
     <>
-      <Section label="font" hint={look.sentence}>
+      <Section label={t('inspector.font')} hint={look.sentence}>
         <div className="gd-insp__stack">
           {look.control}
           <Select
-            label="Family"
+            label={t('inspector.family')}
             value={a.font ?? 'ui'}
             disabledReason={look.disabledReason}
             onValueChange={(font) => {
@@ -142,7 +155,7 @@ export function TextTab({
             options={FONT_FAMILIES.map((f) => ({ value: f, label: FONT_FAMILY_LABELS[f] }))}
           />
           <Select
-            label="Weight"
+            label={t('inspector.weight')}
             value={String(a.weight ?? 400)}
             disabledReason={look.disabledReason}
             onValueChange={(value) => {
@@ -151,8 +164,8 @@ export function TextTab({
             options={FONT_WEIGHTS.map((w) => ({ value: String(w), label: FONT_WEIGHT_LABELS[w] }))}
           />
           <Select
-            label="Size"
-            hint="type scale"
+            label={t('inspector.size2')}
+            hint={t('inspector.typeScale')}
             value={a.size ?? 'cell'}
             disabledReason={look.disabledReason}
             onValueChange={(size) => {
@@ -167,7 +180,7 @@ export function TextTab({
         </div>
       </Section>
       <Section
-        label="marks"
+        label={t('inspector.marks')}
         // INSP-11 / #126: the reason is visible under the label and is what each mark's
         // `aria-describedby` reads, so it reaches pointer, keyboard and assistive tech.
         hint={
@@ -178,7 +191,7 @@ export function TextTab({
           )
         }
       >
-        <div className="gd-insp__row" role="group" aria-label="Inline marks">
+        <div className="gd-insp__row" role="group" aria-label={t('inspector.inlineMarks')}>
           {TOGGLE_MARKS.map((mark) => {
             const on = rich !== null && hasMarkThroughout(rich, mark);
             const label = MARK_NAMES[mark];
@@ -223,11 +236,8 @@ export function TextTab({
           })}
         </div>
       </Section>
-      <Section
-        label="character styles"
-        hint="Title, Heading and Body set size and weight together on the type scale."
-      >
-        <div className="gd-insp__row" role="group" aria-label="Character styles">
+      <Section label={t('inspector.characterStyles')} hint={t('inspector.titleHeadingAndBody')}>
+        <div className="gd-insp__row" role="group" aria-label={t('inspector.characterStyles2')}>
           {CHARACTER_STYLES.map((style) => {
             const label = CHARACTER_STYLE_LABELS[style];
             const bundle = CHARACTER_STYLE_BUNDLES[style];
@@ -249,14 +259,11 @@ export function TextTab({
           })}
         </div>
       </Section>
-      <Section
-        label="text colour"
-        hint="Every token clears 4.5:1 on the surface; on a fill the ink adjusts."
-      >
+      <Section label={t('inspector.textColour2')} hint={t('inspector.everyTokenClears4')}>
         <Select
-          label="Text colour"
+          label={t('inspector.textColour')}
           value={a.textColour ?? ''}
-          placeholder="Inherit"
+          placeholder={t('inspector.inherit')}
           clearLabel="Inherit"
           disabledReason={look.disabledReason}
           onValueChange={(textColour) => {
@@ -273,10 +280,10 @@ export function TextTab({
           }))}
         />
       </Section>
-      <Section label="alignment" hint="Auto keeps numbers right and text left (FMT-02).">
+      <Section label={t('inspector.alignment')} hint={t('inspector.autoKeepsNumbersRight')}>
         <div className="gd-insp__stack">
           <SegmentedControl
-            label="Horizontal alignment"
+            label={t('inspector.horizontalAlignment')}
             value={a.hAlign ?? 'auto'}
             disabled={look.disabledReason !== undefined}
             onChange={(value) => {
@@ -288,7 +295,7 @@ export function TextTab({
             }))}
           />
           <SegmentedControl
-            label="Vertical alignment"
+            label={t('inspector.verticalAlignment')}
             value={a.vAlign ?? 'middle'}
             disabled={look.disabledReason !== undefined}
             onChange={(vAlign) => {
@@ -298,10 +305,7 @@ export function TextTab({
           />
         </div>
       </Section>
-      <Section
-        label="wrap"
-        hint="On, the text wraps and the row grows to show every line; off, it clips at the cell. Addresses never move. The table's default is in the Table tab."
-      >
+      <Section label={t('inspector.wrap')} hint={t('inspector.onTheTextWraps')}>
         <div className="gd-insp__stack">
           <Switch
             label={wrapLabel}
@@ -317,7 +321,7 @@ export function TextTab({
           />
           {rowBand === null && look.scope === 'cell' && look.override?.wrap !== undefined && (
             <ReasonedButton
-              label="Follow the column's wrap"
+              label={t('inspector.followTheColumnS')}
               reason={viewOnly}
               onClick={() => {
                 look.write({ wrap: null });
@@ -326,7 +330,7 @@ export function TextTab({
           )}
           {rowBand !== null && rowBand.ids.some((id) => rowMeta(table, id).wrap !== null) && (
             <ReasonedButton
-              label="Follow the columns' wrap"
+              label={t('inspector.followTheColumnsWrap')}
               reason={viewOnly}
               onClick={() => {
                 commands.setRowsWrap(record.id, rowBand.ids, null);

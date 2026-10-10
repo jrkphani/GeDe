@@ -224,7 +224,7 @@ export function DerivedColumnPanel({
             ? 'Update derived column'
             : isSplit
               ? 'Split into child rows'
-              : 'Create derived column'}
+              : 'Derive column'}
         </Button>
         {editing !== null && (
           <Button

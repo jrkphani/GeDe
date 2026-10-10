@@ -10,3 +10,7 @@ export * from './sheets.js';
 export * from './presence.js';
 export * from './undo.js';
 export * from './seed.js';
+export * from './set-table.js';
+export * from './sections.js';
+export * from './lock-guard.js';
+export * from './sheet-sets.js';

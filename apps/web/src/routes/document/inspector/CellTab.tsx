@@ -34,6 +34,7 @@ import {
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { useMessages, type MessageKey } from '../../../i18n/index.js';
 import type { GridCommands } from '../grid/commands.js';
 import type { CellSelection } from '../selection.js';
 import { useAppearanceScope } from './appearance-scope.js';
@@ -49,19 +50,21 @@ export interface CellTabProps {
   cell: CellSelection | null;
   editable: boolean;
   commands: GridCommands;
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string | undefined;
 }
 
-const FILLS: readonly { value: HighlightToken | 'none'; label: string }[] = [
-  { value: 'none', label: 'None' },
-  { value: 'amber', label: 'Amber' },
-  { value: 'forest', label: 'Forest' },
-  { value: 'slate', label: 'Slate' },
+const FILLS: readonly { value: HighlightToken | 'none'; label: MessageKey }[] = [
+  { value: 'none', label: 'inspector.none' },
+  { value: 'amber', label: 'inspector.amber' },
+  { value: 'forest', label: 'inspector.forest' },
+  { value: 'slate', label: 'inspector.slate' },
 ];
 
-const WEIGHT_LABELS: Readonly<Record<BorderWeight, string>> = {
-  hairline: 'Hairline',
-  strong: 'Strong',
-  accent: 'Accent',
+const WEIGHT_LABELS: Readonly<Record<BorderWeight, MessageKey>> = {
+  hairline: 'inspector.hairline',
+  strong: 'inspector.strong',
+  accent: 'inspector.accent',
 };
 
 /** The matrix's glyphs (prototype `borderCells`), decorative beside each label. */
@@ -79,21 +82,13 @@ const EDGE_GLYPHS: Readonly<Record<BorderEdges, string>> = {
 
 type Scope = 'column' | 'cell';
 
-const TEXT_CASES: readonly { value: TextPreset | 'none'; label: string }[] = [
-  { value: 'none', label: 'As typed' },
-  { value: 'titleCase', label: 'Title case' },
-  { value: 'upper', label: 'Uppercase' },
-  { value: 'lower', label: 'Lowercase' },
-  { value: 'trimmed', label: 'Trimmed' },
+const TEXT_CASES: readonly { value: TextPreset | 'none'; label: MessageKey }[] = [
+  { value: 'none', label: 'inspector.asTyped' },
+  { value: 'titleCase', label: 'inspector.titleCase' },
+  { value: 'upper', label: 'inspector.uppercase' },
+  { value: 'lower', label: 'inspector.lowercase' },
+  { value: 'trimmed', label: 'inspector.trimmed' },
 ];
-
-const DECIMALS = [
-  { value: 'auto', label: 'As typed' },
-  ...Array.from({ length: MAX_DECIMALS - MIN_DECIMALS + 1 }, (_v, i) => ({
-    value: String(i + MIN_DECIMALS),
-    label: String(i + MIN_DECIMALS),
-  })),
-] as const;
 
 /**
  * INSP-05, INSP-10, FMT-06: data format with its options, fill, the
@@ -103,12 +98,21 @@ const DECIMALS = [
  * states the scope before anything is applied; every change writes at once
  * (INSP-12), one undo step each.
  */
-export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
+export function CellTab({ gd, table, cell, editable, commands, readOnlyReason }: CellTabProps) {
+  const t = useMessages();
   const record = tableRecord(table);
   const [scope, setScope] = useState<Scope>('column');
-  const look = useAppearanceScope(table, record, cell, editable, commands, 'the fill and border');
+  const look = useAppearanceScope(
+    table,
+    record,
+    cell,
+    editable,
+    commands,
+    'the fill and border',
+    readOnlyReason,
+  );
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const needsCell = column === null ? 'select a cell first' : undefined;
   const disabledReason = viewOnly ?? needsCell;
   const override = cell === null ? null : cellFormatOverride(table, cell.rowId, cell.colId);
@@ -149,6 +153,13 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
     apply(effective.kind, { ...effective.opts, ...patch });
   };
 
+  const decimalOptions = [
+    { value: 'auto', label: t('inspector.asTyped') },
+    ...Array.from({ length: MAX_DECIMALS - MIN_DECIMALS + 1 }, (_v, i) => ({
+      value: String(i + MIN_DECIMALS),
+      label: String(i + MIN_DECIMALS),
+    })),
+  ];
   const currency = effective.opts.currency ?? DEFAULT_CURRENCY;
   const hint =
     column === null
@@ -157,20 +168,30 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
 
   return (
     <>
-      <Section label="data format" hint={hint}>
+      <Section label={t('inspector.dataFormat')} hint={hint}>
         <div className="gd-insp__stack">
           <SegmentedControl
-            label="Scope"
+            label={t('inspector.scope')}
             value={scope}
             onChange={setScope}
             disabled={disabledReason !== undefined}
             options={[
-              { value: 'column', label: column === null ? 'Column' : `Column ${column.label}` },
-              { value: 'cell', label: address === null ? 'Cell' : `Cell ${address}` },
+              {
+                value: 'column',
+                label:
+                  column === null
+                    ? t('inspector.column')
+                    : t('inspector.columnLabel', { label: column.label }),
+              },
+              {
+                value: 'cell',
+                label:
+                  address === null ? t('inspector.cell') : t('inspector.cellAddress', { address }),
+              },
             ]}
           />
           <Select
-            label="Format"
+            label={t('inspector.format')}
             hint={cellOnly ? 'this cell' : 'whole column'}
             value={effective.kind}
             disabledReason={disabledReason}
@@ -180,7 +201,7 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
           {(effective.kind === 'number' || effective.kind === 'currency') && (
             <>
               <Select
-                label="Decimals"
+                label={t('inspector.decimals')}
                 value={
                   effective.opts.decimals === undefined ? 'auto' : String(effective.opts.decimals)
                 }
@@ -192,10 +213,10 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
                     value === 'auto' ? rest : { ...rest, decimals: Number(value) },
                   );
                 }}
-                options={DECIMALS}
+                options={decimalOptions}
               />
               <Switch
-                label="Group thousands"
+                label={t('inspector.groupThousands')}
                 checked={effective.opts.grouping !== false}
                 disabled={disabledReason !== undefined}
                 onCheckedChange={(on) => {
@@ -206,7 +227,7 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
           )}
           {effective.kind === 'currency' && (
             <Select
-              label="Currency"
+              label={t('inspector.currency')}
               value={currency}
               disabledReason={disabledReason}
               onValueChange={(value) => {
@@ -217,7 +238,7 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
           )}
           {effective.kind === 'date' && (
             <Select
-              label="Date pattern"
+              label={t('inspector.datePattern')}
               value={effective.opts.datePattern ?? DEFAULT_DATE_PATTERN}
               disabledReason={disabledReason}
               onValueChange={(value: DatePattern) => {
@@ -228,20 +249,20 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
           )}
           {effective.kind === 'text' && (
             <Select
-              label="Text case"
+              label={t('inspector.textCase')}
               value={effective.opts.textCase ?? 'none'}
               disabledReason={disabledReason}
               onValueChange={(value) => {
                 const { textCase: _dropped, ...rest } = effective.opts;
                 apply('text', value === 'none' ? rest : { ...rest, textCase: value });
               }}
-              options={TEXT_CASES}
+              options={TEXT_CASES.map((c) => ({ value: c.value, label: t(c.label) }))}
             />
           )}
           {override !== null && cell !== null && (
             <ReasonedButton
-              label="Use column format"
-              available="Drop this cell’s own format so it follows the column"
+              label={t('inspector.useColumnFormat')}
+              available={t('inspector.dropThisCellS')}
               reason={viewOnly}
               onClick={() => {
                 setCellFormat(gd, record.id, cell.rowId, cell.colId, null);
@@ -253,11 +274,11 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
       </Section>
       {/* FX-07 / FX-08: the formula behind the cell (filled from the formula release). */}
       {cell !== null && <FormulaSection table={table} cell={cell} />}
-      <Section label="fill and border" hint={look.sentence}>
+      <Section label={t('inspector.fillAndBorder')} hint={look.sentence}>
         <div className="gd-insp__stack">
           {look.control}
           <SegmentedControl
-            label="Fill"
+            label={t('inspector.fill')}
             className="gd-insp__fills"
             value={look.effective.fill ?? 'none'}
             disabled={look.disabledReason !== undefined}
@@ -273,13 +294,13 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
               label: (
                 <span className="gd-insp__fill" data-fill={f.value}>
                   <span className="gd-insp__fill-swatch" aria-hidden="true" />
-                  {f.label}
+                  {t(f.label)}
                 </span>
               ),
             }))}
           />
           <SegmentedControl
-            label="Border edges"
+            label={t('inspector.borderEdges')}
             className="gd-insp__matrix"
             value={look.effective.border?.edges ?? 'none'}
             disabled={look.disabledReason !== undefined}
@@ -305,24 +326,24 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
             }))}
           />
           <Select
-            label="Weight"
+            label={t('inspector.weight')}
             value={look.effective.border?.weight ?? 'hairline'}
             disabledReason={
               look.disabledReason ??
               (look.effective.border === undefined || look.effective.border.edges === 'none'
-                ? 'choose an edge first'
+                ? 'pick an edge first'
                 : undefined)
             }
             onValueChange={(weight) => {
               const border = look.effective.border;
               if (border !== undefined) look.write({ border: { edges: border.edges, weight } });
             }}
-            options={BORDER_WEIGHTS.map((w) => ({ value: w, label: WEIGHT_LABELS[w] }))}
+            options={BORDER_WEIGHTS.map((w) => ({ value: w, label: t(WEIGHT_LABELS[w]) }))}
           />
           {look.scope === 'cell' && look.override !== null && (
             <ReasonedButton
-              label="Use column appearance"
-              available="Drop this cell’s own appearance so it follows the column"
+              label={t('inspector.useColumnAppearance')}
+              available={t('inspector.dropThisCellS2')}
               reason={viewOnly}
               onClick={() => {
                 look.clearOverride();

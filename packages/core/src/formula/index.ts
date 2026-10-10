@@ -42,6 +42,7 @@ export {
   power,
   powerCardinality,
   splitSetElements,
+  splitSetPieces,
   union,
 } from './sets.js';
 export {
@@ -84,6 +85,7 @@ export {
   defaultFormatValue,
   errorLabel,
   evaluate,
+  valueElements,
   type BoundOperand,
   type CellValue,
   type EvaluateOptions,
