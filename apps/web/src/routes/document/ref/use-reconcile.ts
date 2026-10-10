@@ -12,12 +12,14 @@
  * sound after every other update, remote or local (ADR-056 ruling d): a merge
  * can refuse a Fill, return a removed noted row or leave a row twice, and a
  * cleared note lets a lost row go (SET-12), with no result changing. That pass
- * hands off no items and runs only for the tables a transaction touched. Rows
- * are filled only from a result batch answered while nothing else is
- * outstanding: a Worker answers in order, so while a later request is pending
- * any table's cached result may still be the previous formula's (or the
- * previous operands'), and filling from it would revert a peer's change and
- * broadcast the revert.
+ * hands off no items and runs only for the tables a transaction touched. A
+ * table's rows are filled only while no change to that table is outstanding:
+ * a Worker answers in order, so while a later request touching the table is
+ * pending its cached result may still be the previous formula's, and filling
+ * from it would revert a peer's change (its formula, or the rows its replica
+ * filled) and broadcast the revert. A pending change to an operand's table
+ * alone cannot do that: the rows still match the cached result, so the fill
+ * writes nothing until the operand's answer arrives with the new result.
  */
 import { useEffect } from 'react';
 import * as Y from 'yjs';
@@ -62,24 +64,25 @@ function install(doc: Y.Doc): () => void {
     announce(translate(activeLocale(), 'set.fillRefused', { column: column.label }));
   });
   let stopped = false;
-  let awaitingSettle = false;
+  /** Tables whose fill waits for a change to them to be answered. */
+  const waiting = new Set<string>();
+  const waitFor = (tableId: string): void => {
+    if (waiting.has(tableId)) return;
+    waiting.add(tableId);
+    void host.settledFor(tableId).then(() => {
+      waiting.delete(tableId);
+      if (!stopped) run();
+    });
+  };
   // SET-08: a computed table's formula, evaluated once in the Worker, fills its table's rows —
-  // only once every request is answered (see the header); the settle that follows fills them.
-  // ponytail: one gate for every table; key each result by the request that made it if a
-  // session never goes quiet long enough for rows to follow.
+  // only once every change to that table is answered (see the header), so formula traffic in
+  // other tables never holds it back. A Worker that gave up answers nothing: its cached
+  // results predate the document, and nothing is filled from them until Retry.
   const fillComputed = (): void => {
-    if (host.busy) {
-      if (!awaitingSettle) {
-        awaitingSettle = true;
-        void host.settled().then(() => {
-          awaitingSettle = false;
-          if (!stopped) run();
-        });
-      }
-      return;
-    }
+    if (host.status.failed) return;
     for (const { tableId, items, members } of computedItemsOf(gd, (id) => host.result(id))) {
-      reconcileComputed(gd, tableId, items, members);
+      if (host.busyFor(tableId)) waitFor(tableId);
+      else reconcileComputed(gd, tableId, items, members);
     }
   };
   // Ruling (d): the soundness pass, with no items (see the header).

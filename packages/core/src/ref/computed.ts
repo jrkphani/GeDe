@@ -42,6 +42,7 @@ import {
   rowMeta,
   rowMetaMap,
   rowsArray,
+  tableById,
   tableRecord,
   tupleMembers,
   type ColumnRecord,
@@ -163,21 +164,60 @@ function spreadColumns(table: TableMap): (ColumnRecord & { computed: ComputedSpe
   return computedColumns(tableRecord(table).columns).filter((c) => c.computed.shape === 'spread');
 }
 
+/** The id a re-fit gives the member at `index` of the spread Fill `fill`: the same on every replica. */
+function refitId(tableId: Id, fill: string, index: number): Id {
+  return deterministicId(`${tableId}\u0000${fill}\u0000${String(index)}`);
+}
+
+/**
+ * A spread member's heading, `x1 ∈ E` (SET-09): the set is named where the operand is a
+ * column or range of a table (what the operand picker writes), by that table's title;
+ * any other operand (a literal, a nested call) leaves the bare `x1`.
+ */
+export function spreadMemberLabel(gd: GedeDoc, formula: string | null, index: number): string {
+  const bare = `x${String(index + 1)}`;
+  if (formula === null) return bare;
+  const parsed = parse(formula);
+  if (!parsed.ok || parsed.value.kind !== 'call' || parsed.value.name !== 'Cross') return bare;
+  const arg = parsed.value.args[index];
+  if (arg?.kind !== 'bound') return bare;
+  const ref = arg.ref;
+  const tableId =
+    ref.kind === 'range'
+      ? ref.tableId
+      : ref.kind === 'column' && ref.columns.length === 1
+        ? ref.columns[0]?.tableId
+        : undefined;
+  const title = tableId === undefined ? undefined : tableById(gd, tableId)?.title;
+  return title === undefined || title === '' ? bare : `${bare} ∈ ${title}`;
+}
+
 /**
  * SET-09 ruling (b): a spread table has one member column per set of its `Cross`. A
  * member past the width, or a second column for the same member (two replicas growing
  * the spread at once), goes; a missing member is added after the last one, in the
  * spread's Fill step, under an id derived from that step and its index, so replicas
  * adding the same member at once (or a merge of a widen with a narrow) converge on one
- * column. Typed neighbour columns are never touched. Returns writes.
+ * column. A spread grows only from a column a person filled: a Fill step left with none
+ * (its Fill undone after a peer's re-fit added a member to it) is orphaned, and its re-fit
+ * columns go rather than growing it back. Typed neighbour columns are never touched.
+ * Returns writes.
  */
 function refitSpread(gd: GedeDoc, tableId: Id, table: TableMap, width: number | null): number {
-  const spread = spreadColumns(table);
-  if (spread.length === 0 || width === null) return 0;
+  const all = spreadColumns(table);
+  if (all.length === 0) return 0;
   let writes = 0;
+  const byPerson = (c: ColumnRecord & { computed: ComputedSpec }): boolean =>
+    c.computed.fill === undefined ||
+    c.id !== refitId(tableId, c.computed.fill, c.computed.spreadIndex ?? 0);
+  const live = new Set(all.filter(byPerson).map((c) => c.computed.fill));
+  for (const c of all) {
+    if (!live.has(c.computed.fill)) writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+  }
+  const spread = all.filter((c) => live.has(c.computed.fill));
+  if (spread.length === 0 || width === null) return writes;
   const fill = spread[0]?.computed.fill ?? newId();
-  const derived = (index: number): Id =>
-    deterministicId(`${tableId}\u0000${fill}\u0000${String(index)}`);
+  const derived = (index: number): Id => refitId(tableId, fill, index);
   /**
    * Member index → the column kept for it: a column a person filled wins over one this
    * re-fit added (a spread Fill made one column at a time keeps the person's column), then
@@ -197,13 +237,14 @@ function refitSpread(gd: GedeDoc, tableId: Id, table: TableMap, width: number | 
     if (!keptRecords.has(c)) writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
   }
   const kept = new Map([...keep].map(([index, c]) => [index, c.id]));
+  const formula = tableRecord(table).computedFormula;
   for (let index = 0; index < width; index += 1) {
     if (kept.has(index)) continue;
     // Beside its neighbouring member, so member order is column order whatever merged.
     const below = [...kept.keys()].filter((i) => i < index);
     const above = [...kept.keys()].filter((i) => i > index);
     const id = addColumn(gd, tableId, {
-      label: `x${String(index + 1)}`,
+      label: spreadMemberLabel(gd, formula, index),
       afterColId: below.length > 0 ? kept.get(Math.max(...below)) : undefined,
       beforeColId:
         below.length === 0 && above.length > 0 ? kept.get(Math.min(...above)) : undefined,

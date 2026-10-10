@@ -886,3 +886,132 @@ describe('SET-08 computed columns', () => {
     expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range);
   });
 });
+
+describe('SET-08 computed rows follow their own table, not the whole engine', () => {
+  /** A labelled fake: the real inline engine, answering `delay` ms late as a Worker may. */
+  const lateEngine = (delay: number) => {
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        post: (request) => {
+          setTimeout(() => {
+            inner.post(request);
+          }, delay);
+        },
+      };
+    });
+  };
+
+  it('SET-08 a computed table fills while formula traffic in another table never stops', async () => {
+    lateEngine(30);
+    let typing: ReturnType<typeof setInterval> | undefined;
+    try {
+      const sets = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 1, row: 12 },
+        columns: 2,
+        rows: 0,
+        title: 'Sets',
+      });
+      const other = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 20, row: 30 },
+        columns: 1,
+        rows: 1,
+        title: 'Other',
+      });
+      const o = tableById(gd, other)!;
+      render(<Mount gd={gd} tableId={sets} />);
+      await settled();
+      // A formula elsewhere edited every 10 ms: the engine always has a request outstanding.
+      let n = 0;
+      typing = setInterval(() => {
+        n += 1;
+        setCellText(gd, other, o.rows[0]!, o.columns[0]!.id, `=1+${String(n)}`);
+      }, 10);
+      act(() => {
+        setTableFormula(gd, sets, '=Union("a, b", "c")');
+        setComputedColumn(gd, sets, tableById(gd, sets)!.columns[0]!.id, { shape: 'column' });
+      });
+      await waitFor(
+        () => {
+          expect(engineFor(gd.doc).busy).toBe(true);
+          expect(tableById(gd, sets)!.rows).toHaveLength(3);
+        },
+        { timeout: 2000 },
+      );
+    } finally {
+      clearInterval(typing);
+      setEngineTransportForTests(null);
+    }
+  });
+
+  it('SET-08 a Worker that gave up fills nothing from its stale results', async () => {
+    // A labelled fake: the real inline engine until `dead`, then a Worker that never answers;
+    // `fail` raises its error event as a crashing Worker does.
+    let dead = false;
+    let fail: ((error: unknown) => void) | undefined;
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        mode: 'worker' as const,
+        post: (request) => {
+          if (!dead) inner.post(request);
+        },
+        onError: (handler) => {
+          fail = handler;
+        },
+      };
+    });
+    try {
+      const sets = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 1, row: 12 },
+        columns: 2,
+        rows: 0,
+        title: 'Sets',
+      });
+      render(<Mount gd={gd} tableId={sets} />);
+      act(() => {
+        setTableFormula(gd, sets, '=Union("a", "b")');
+        setComputedColumn(gd, sets, tableById(gd, sets)!.columns[0]!.id, { shape: 'column' });
+      });
+      await settled();
+      await waitFor(() => {
+        expect(tableById(gd, sets)!.rows).toHaveLength(2);
+      });
+      // A peer's formula change and the rows its replica filled arrive while an edit here is
+      // still being answered, and from then on nothing answers.
+      const peer = openDocument(new Y.Doc());
+      Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+      setTableFormula(peer, sets, '=Union("a", "c")');
+      reconcileComputed(peer, sets, ['a', 'c']);
+      const peerRows = tableById(peer, sets)!.rows;
+      const p = tableById(gd, peaks)!;
+      await act(async () => {
+        setCellText(gd, peaks, p.rows[0]!, p.columns[0]!.id, '=1+1');
+        dead = true;
+        Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+        await new Promise((r) => setTimeout(r, 5));
+      });
+      expect(engineFor(gd.doc).busy).toBe(true);
+      let writes = 0;
+      gd.doc.on('afterTransaction', (tr: Y.Transaction) => {
+        if (tr.origin === 'ref-computed' && tr.changed.size > 0) writes += 1;
+      });
+      const host = engineFor(gd.doc);
+      for (let i = 0; i <= 3; i += 1) {
+        act(() => {
+          fail?.(new Error('formula worker crashed'));
+        });
+      }
+      expect(host.status.failed).toBe(true);
+      await act(() => new Promise((r) => setTimeout(r, 20)));
+      expect({ rows: tableById(gd, sets)!.rows, writes }).toEqual({ rows: peerRows, writes: 0 });
+    } finally {
+      setEngineTransportForTests(null);
+    }
+  });
+});

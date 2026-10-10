@@ -61,6 +61,7 @@ export {
   setComputedColumn,
   setComputedColumns,
   setTableFormula,
+  spreadMemberLabel,
   type ComputedItems,
 } from './computed.js';
 export {
