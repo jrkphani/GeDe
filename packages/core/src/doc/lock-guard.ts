@@ -17,16 +17,29 @@
  * — a computed table follows its formula, a pulled or split row follows its source — and no
  * replica can tell, from the update, whose hand wrote them: the reconcilers' bookkeeping keys
  * and rows whose meta, as it was before the update, marks them as machine-written. A row the
- * update adds is read by its own meta, so a client can still add a row dressed as a pulled
- * one (shortcut: no replica can tell it from a reconciler's; upgrade when rows carry a
- * signed provenance). Row order alone is not an edit. A locked sheet is put back if deleted.
+ * update adds is read by its own meta only in a machine-driven table (a computed formula, a
+ * non-entered column, or a formula in a cell, judged as the table was before the update); in
+ * any other table it is a person's row. shortcut: in a machine-driven locked table a client can
+ * still add a row dressed as a machine one, when rows carry a signed provenance, close it.
+ * Row order alone is not an edit. A locked sheet is put back if deleted, with all its tables;
+ * a locked section's name and columns are put back.
  */
 import * as Y from 'yjs';
 
 import type { Id } from '../ids.js';
 import { isCellKey, splitCellKey } from '../ids.js';
-import { anyLock, lockReasonOfTable, sheetHasLock } from './sections.js';
 import {
+  anyLock,
+  listSections,
+  lockReasonOfTable,
+  SECTION_PREFIX,
+  isSheetLocked,
+  sheetHasLock,
+} from './sections.js';
+import {
+  cellsMap,
+  columnsArray,
+  readColumnSource,
   openDocument,
   readString,
   rowMeta,
@@ -67,15 +80,25 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
         offending.add(tableId);
       }
     };
+    // Only a table the reconcilers drive (as it was before the update) has machine rows or keys.
+    const machineTable = (tableId: Id): boolean => {
+      const t = tableMap(gd, tableId);
+      return (
+        t !== null &&
+        (readString(t, 'computedFormula') !== '' ||
+          columnsArray(t)
+            .toArray()
+            .some((c) => readColumnSource(c) !== 'entered') ||
+          [...cellsMap(t).values()].some((v) => typeof v === 'string'))
+      );
+    };
     // A row's provenance is read from the document as it was: an update cannot vouch for its
-    // own writes by setting `pulledFrom` on a row a person owns. Only a row the update adds
-    // has no earlier meta, so its own is all there is to read.
+    // own writes by setting `pulledFrom` on a row a person owns. A row the update adds has no
+    // earlier meta: its own counts only in a machine-driven table.
     const machineRow = (tableId: Id, rowId: Id): boolean => {
       const before = tableMap(gd, tableId);
-      const table =
-        before !== null && rowsArray(before).toArray().includes(rowId)
-          ? before
-          : tableMap(after, tableId);
+      const owned = before !== null && rowsArray(before).toArray().includes(rowId);
+      const table = owned ? before : machineTable(tableId) ? tableMap(after, tableId) : null;
       if (table === null) return false;
       const meta = rowMeta(table, rowId);
       return rowReadOnlyReason(meta) !== null || meta.computedKey !== null;
@@ -90,7 +113,8 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
         if (tableId === undefined) {
           for (const id of keys) edit(id);
         } else if (member === undefined) {
-          if (keys.some((k) => !MACHINE_TABLE_KEYS.has(k))) edit(tableId);
+          if (keys.some((k) => !(MACHINE_TABLE_KEYS.has(k) && machineTable(tableId))))
+            edit(tableId);
         } else if (member === 'cells') {
           const changed = cellKey === undefined ? keys : [cellKey];
           if (changed.some((k) => !machineCell(tableId, k))) edit(tableId);
@@ -133,15 +157,52 @@ export function applyGuardedUpdate(gd: GedeDoc, update: Uint8Array, origin: unkn
         .toArray()
         .flatMap((s, i) => (sheetHasLock(s) ? [{ i, id: readString(s, 'id'), s: s.clone() }] : []))
     : [];
+  // The sheets' tables and locked sections go back with them.
+  const kept = new Set(sheets.map((k) => k.id));
+  const tables =
+    sheets.length === 0
+      ? []
+      : [...gd.tables.entries()].filter(([, t]) => kept.has(readString(t, 'sheetId')));
+  const lanes = sheets.flatMap((k) =>
+    listSections(gd, k.id)
+      .filter((s) => s.locked || isSheetLocked(gd, k.id))
+      .map((s) => ({ ...s, sheetId: k.id })),
+  );
+  const savedTables = tables.map(([id, t]) => [id, readString(t, 'sheetId'), t.clone()] as const);
   Y.applyUpdate(gd.doc, update, origin);
   const gone = sheets.filter((k) => !gd.sheets.toArray().some((s) => readString(s, 'id') === k.id));
-  if (saved.length === 0 && gone.length === 0) return [];
+  const renamed = lanes.filter((s) => {
+    const m = gd.sheets
+      .toArray()
+      .find((x) => readString(x, 'id') === s.sheetId)
+      ?.get(`${SECTION_PREFIX}${s.id}`);
+    return (
+      m instanceof Y.Map &&
+      (m.get('name') !== s.name ||
+        m.get('firstColumn') !== s.firstColumn ||
+        m.get('lastColumn') !== s.lastColumn)
+    );
+  });
+  if (saved.length === 0 && gone.length === 0 && renamed.length === 0) return [];
   gd.doc.transact(() => {
-    for (const k of gone) gd.sheets.insert(Math.min(k.i, gd.sheets.length), [k.s]);
+    for (const k of gone) {
+      gd.sheets.insert(Math.min(k.i, gd.sheets.length), [k.s]);
+      for (const [id, sheet, t] of savedTables)
+        if (sheet === k.id && !gd.tables.has(id)) gd.tables.set(id, t);
+    }
+    for (const s of renamed) {
+      const m = gd.sheets
+        .toArray()
+        .find((x) => readString(x, 'id') === s.sheetId)
+        ?.get(`${SECTION_PREFIX}${s.id}`) as Y.Map<unknown>;
+      m.set('name', s.name);
+      m.set('firstColumn', s.firstColumn);
+      m.set('lastColumn', s.lastColumn);
+    }
     for (const [id, table] of saved) {
       if (table === null) gd.tables.delete(id);
       else gd.tables.set(id, table);
     }
   }, LOCK_RESTORE_ORIGIN);
-  return [...offending, ...gone.map((k) => k.id)];
+  return [...offending, ...gone.map((k) => k.id), ...renamed.map((s) => s.sheetId)];
 }

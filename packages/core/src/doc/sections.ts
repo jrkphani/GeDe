@@ -13,7 +13,7 @@ import * as Y from 'yjs';
 import { newId, type Id } from '../ids.js';
 import { readBoolean, readNumber, readString, type GedeDoc, type SheetMap } from './schema.js';
 
-const SECTION_PREFIX = 'section:';
+export const SECTION_PREFIX = 'section:';
 
 /** One empty lattice column separates two sections (SET-17). */
 export const SECTION_GUTTER = 1;
