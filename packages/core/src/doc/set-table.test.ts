@@ -14,8 +14,17 @@ import { splitSetElements, union } from '../formula/sets.js';
 import { cellKey } from '../ids.js';
 import { cellRich, setCellRich } from '../text/mutations.js';
 import { docNode, paragraphNode, textNode } from '../text/types.js';
-import { addRow, createTable, setCellText, setFooterRows } from './mutations.js';
+import { setColumnFormat } from '../format/mutations.js';
 import {
+  addRow,
+  createTable,
+  deleteRow,
+  setCellText,
+  setFooterRows,
+  setTableTitle,
+} from './mutations.js';
+import {
+  cellsMap,
   cellText,
   openDocument,
   rowMeta,
@@ -28,7 +37,9 @@ import {
 } from './schema.js';
 import {
   degreeLabels,
+  observeSetRefs,
   readDefinition,
+  reconcileAllSetRefs,
   SET_DEGREE,
   setRangeColumn,
   setTableFacts,
@@ -537,5 +548,328 @@ describe('set tables after review (ADR-056)', () => {
     setTableLook(gd, set, { caption: '{ x | x ∈ E }', captionShown: true });
     expect(tableUnitBounds(plainMap).rows).toBe((before[0] ?? 0) + 1);
     expect(tableUnitBounds(setMap).rows).toBe(before[1]);
+  });
+});
+
+describe('set tables after the second review (ADR-056)', () => {
+  /** Run `body` across many fresh replica pairs, so both client-id orders and both batch orders occur. */
+  function acrossReplicas(body: (a: GedeDoc, b: GedeDoc) => void): void {
+    for (let run = 0; run < 24; run += 1) {
+      const a = openDocument(new Y.Doc());
+      gd = a;
+      const b = openDocument(new Y.Doc());
+      body(a, b);
+    }
+  }
+
+  function settleBoth(a: GedeDoc, b: GedeDoc, id: Id): void {
+    sync(a.doc, b.doc);
+    settleSetRows(a, id);
+    settleSetRows(b, id);
+    sync(a.doc, b.doc);
+  }
+
+  function elementsOf(doc: GedeDoc, id: Id): string[] {
+    return [...new Set(textsOf(doc, id).flatMap((t) => splitSetElements(t)))].sort();
+  }
+
+  test('SET-02 undoing a split after both replicas split the same value and settled loses no element', () => {
+    acrossReplicas((a, b) => {
+      const id = setTable('simple', ['a, b, c']);
+      sync(a.doc, b.doc);
+      const undoA = createUndoManager(a, { captureTimeout: 0 });
+      const [row] = rows(id);
+      const col = range(id);
+      splitIntoRows(a, id, row ?? '', col);
+      splitIntoRows(b, id, row ?? '', col);
+      settleBoth(a, b, id);
+      expect(textsOf(a, id)).toEqual(['a', 'b', 'c']);
+      expect(textsOf(b, id)).toEqual(['a', 'b', 'c']);
+      undoA.undo();
+      settleBoth(a, b, id);
+      expect(textsOf(a, id)).toEqual(textsOf(b, id));
+      expect(elementsOf(a, id)).toEqual(['a', 'b', 'c']);
+      expect(textsOf(a, id)).not.toContain('');
+    });
+  });
+
+  test('SET-02 B undoing too after a shared split brings the value back whole', () => {
+    acrossReplicas((a, b) => {
+      const id = setTable('simple', ['a, b, c']);
+      sync(a.doc, b.doc);
+      const undoA = createUndoManager(a, { captureTimeout: 0 });
+      const undoB = createUndoManager(b, { captureTimeout: 0 });
+      const [row] = rows(id);
+      splitIntoRows(a, id, row ?? '', range(id));
+      splitIntoRows(b, id, row ?? '', range(id));
+      settleBoth(a, b, id);
+      undoA.undo();
+      undoB.undo();
+      settleBoth(a, b, id);
+      expect(textsOf(a, id)).toEqual(textsOf(b, id));
+      expect(elementsOf(a, id)).toEqual(['a', 'b', 'c']);
+    });
+  });
+
+  test('SET-02 B extends the value and splits while A splits the original: each element once', () => {
+    acrossReplicas((a, b) => {
+      const id = setTable('simple', ['a, b, c']);
+      sync(a.doc, b.doc);
+      const [row] = rows(id);
+      const col = range(id);
+      splitIntoRows(a, id, row ?? '', col);
+      setCellText(b, id, row ?? '', col, 'a, b, c, d');
+      splitIntoRows(b, id, row ?? '', col);
+      settleBoth(a, b, id);
+      expect(textsOf(a, id)).toEqual(textsOf(b, id));
+      expect([...textsOf(a, id)].sort()).toEqual(['a', 'b', 'c', 'd']);
+      expect(facts(id).bag).toBe(4);
+      // Settled replicas write nothing more, and a later edit does not re-open the merge.
+      expect(settleSetRows(a, id)).toBe(0);
+      const last = rows(id).at(-1) ?? '';
+      setCellText(a, id, last, col, 'b');
+      expect(settleSetRows(a, id)).toBe(0);
+      expect(rows(id)).toHaveLength(4);
+    });
+  });
+
+  test('SET-02 a concurrent edit typed into the cell while the other replica splits it is not lost', () => {
+    acrossReplicas((a, b) => {
+      const id = setTable('simple', ['a, b']);
+      sync(a.doc, b.doc);
+      const [row] = rows(id);
+      const col = range(id);
+      setCellRich(b, id, row ?? '', col, docNode([paragraphNode([textNode('a, b, x')])]));
+      splitIntoRows(a, id, row ?? '', col);
+      settleBoth(a, b, id);
+      expect(textsOf(a, id)).toEqual(textsOf(b, id));
+      expect(textsOf(a, id).join(', ')).toContain('x');
+    });
+  });
+
+  test('SET-02 a split cuts the cell in place: the characters it keeps are the ones typed', () => {
+    const id = setTable('simple', ['x']);
+    const [row] = rows(id);
+    const col = range(id);
+    setCellRich(
+      gd,
+      id,
+      row ?? '',
+      col,
+      docNode([paragraphNode([textNode('  alpha', [{ type: 'bold' }]), textNode(' , beta')])]),
+    );
+    const table = tableMap(gd, id);
+    const before = table === null ? null : cellsMap(table).get(cellKey(row ?? '', col));
+    splitIntoRows(gd, id, row ?? '', col);
+    if (table === null) throw new Error('no table');
+    // The same fragment, cut: not a replacement.
+    expect(cellsMap(table).get(cellKey(row ?? '', col))).toBe(before);
+    expect(cellRich(table, row ?? '', col).content[0]?.content?.[0]?.marks).toEqual([
+      { type: 'bold' },
+    ]);
+    expect(textsOf(gd, id)).toEqual(['alpha', 'beta']);
+  });
+
+  test('SET-05 FX-09 under an explicit Number format a typed 1,234 is one element, as Union reads it', () => {
+    const engine = new FormulaEngine();
+    const results = new Map<string, CellResult>();
+    observeWorkbook(gd, (changes) => {
+      const out = engine.apply(changes);
+      for (const r of out.results) results.set(r.cellId, r);
+    });
+    const id = setTable('simple', ['1,234', '5', '1,23,456']);
+    const col = range(id);
+    setColumnFormat(gd, id, col, 'number');
+    const table = tableMap(gd, id);
+    const record = tableById(gd, id);
+    if (table === null || record === null) throw new Error('no table');
+    const other = record.columns[1]?.id ?? '';
+    const [r1, r2, r3] = rows(id);
+    const grid = tableAddresses(table);
+    commitCellText(
+      gd,
+      id,
+      r1 ?? '',
+      other,
+      `=Union(${grid[0]?.[0] ?? ''}:${grid[2]?.[0] ?? ''}, "")`,
+    );
+    const union = results.get(workbookCellId(id, cellKey(r1 ?? '', other)))?.value;
+    expect(union?.kind === 'list' ? union.items.length : -1).toBe(3);
+    const f = facts(id);
+    expect(f.cardinality).toBe(3);
+    expect(f.bag).toBe(3);
+    expect(f.rows.get(r1 ?? '')?.elements).toEqual(['1234']);
+    expect(f.rows.get(r3 ?? '')?.elements).toEqual(['123456']);
+    // One number is not offered for splitting.
+    expect(splitOffer(gd, id, r1 ?? '', col)).toBeNull();
+    expect(splitIntoRows(gd, id, r1 ?? '', col)).toBeNull();
+    // Text that does not parse under the format still splits as typed (FMT-05).
+    setCellText(gd, id, r2 ?? '', col, 'x, y');
+    expect(facts(id).rows.get(r2 ?? '')?.elements).toEqual(['x', 'y']);
+  });
+
+  test('SET-03 the English article “a” after “there exists” is not a bound variable', () => {
+    const none = { finite: null, variable: null, quantifier: null };
+    expect(readDefinition('Rooms where there exists a window and a door')).toEqual(none);
+    expect(readDefinition('There exists a reason, a good one')).toEqual(none);
+  });
+
+  test('SET-03 the pronoun “I” after “for all” is not a bound variable', () => {
+    const none = { finite: null, variable: null, quantifier: null };
+    expect(readDefinition('Good for all I know, I think')).toEqual(none);
+    expect(readDefinition('For all I know, I am right')).toEqual(none);
+  });
+
+  test('SET-03 a Devanagari or Tamil word after “for all” is not a one-letter variable', () => {
+    const none = { finite: null, variable: null, quantifier: null };
+    expect(readDefinition('for all किताबें, किताबें पढ़ो')).toEqual(none);
+    expect(readDefinition('for all கைகள், கைகள்')).toEqual(none);
+    // A Latin or Greek variable still binds, whatever the script around it.
+    expect(readDefinition('for all x, x किताब है').quantifier).toBe('universal');
+    expect(readDefinition('there exists ε such that ε > 0').quantifier).toBe('existential');
+  });
+
+  test('SET-06 two top-level sets named alike but holding different elements are two members', () => {
+    const id = setTable('family', ['A', 'x', 'A', 'y', 'B', 'x']);
+    const [, x, , y, , x2] = rows(id);
+    for (const row of [x, y, x2]) nestRow(gd, id, row ?? '');
+    const f = facts(id);
+    // {x}, {y} and {x} again: two distinct members, the third repeats the first.
+    expect(f.cardinality).toBe(2);
+    expect(f.bag).toBe(3);
+    const [first, , second, , third] = rows(id).map((r) => f.rows.get(r));
+    expect(first?.repeatOf).toBeNull();
+    expect(second?.repeatOf).toBeNull();
+    expect(third?.repeatOf).toBe('+1°');
+  });
+});
+
+describe('@ references in a family of sets (SET-06, REF-01)', () => {
+  function sourceSet(title: string, elements: readonly string[]): Id {
+    const id = createTable(gd, {
+      sheetId,
+      at: { col: 10, row: 2 },
+      columns: 1,
+      rows: 0,
+      kind: 'simple',
+      title,
+    });
+    for (const element of elements) {
+      const rowId = addRow(gd, id);
+      setCellText(gd, id, rowId, range(id), element);
+    }
+    return id;
+  }
+
+  test('SET-06 REF-01 a family row that references another set table through @ gets that set’s children, read-only', () => {
+    const stop = observeSetRefs(gd);
+    const source = sourceSet('A', ['p', 'q']);
+    const fam = setTable('family', ['d', 'x']);
+    const [d, x] = rows(fam);
+    commitCellText(gd, fam, x ?? '', range(fam), '=@A');
+    expect(rows(fam)).toHaveLength(4);
+    const table = tableMap(gd, fam);
+    if (table === null) throw new Error('no table');
+    const [, , p, q] = rows(fam);
+    expect(textsOf(gd, fam).slice(2)).toEqual(['p', 'q']);
+    for (const row of [p, q]) {
+      expect(rowMeta(table, row ?? '').depth).toBe(1);
+      expect(rowMeta(table, row ?? '').setRefOf).toEqual({ rowId: x, tableId: source });
+      expect(cellReadOnlyReason(table, row ?? '', range(fam))).toBe('pulled');
+      // A followed row is not split, nor typed into.
+      expect(splitOffer(gd, fam, row ?? '', range(fam))).toBeNull();
+    }
+    const f = facts(fam);
+    expect(f.rows.get(x ?? '')?.kind).toBe('set');
+    expect(f.rows.get(d ?? '')?.kind).toBe('element');
+    expect(f.cardinality).toBe(2);
+    expect(f.bag).toBe(3);
+    stop();
+  });
+
+  test('SET-06 the followed rows follow their source: added, edited and removed elements', () => {
+    const stop = observeSetRefs(gd);
+    const source = sourceSet('Vowels', ['a', 'e']);
+    const fam = setTable('family', ['x']);
+    const [x] = rows(fam);
+    commitCellText(gd, fam, x ?? '', range(fam), '=@vowels');
+    expect(textsOf(gd, fam)).toEqual(['=@vowels', 'a', 'e']);
+    const added = addRow(gd, source);
+    setCellText(gd, source, added, range(source), 'i');
+    const [a, e] = rows(source);
+    setCellText(gd, source, a ?? '', range(source), 'A');
+    expect(textsOf(gd, fam)).toEqual(['=@vowels', 'A', 'e', 'i']);
+    deleteRow(gd, source, e ?? '');
+    expect(textsOf(gd, fam)).toEqual(['=@vowels', 'A', 'i']);
+    // Nothing more to do once settled.
+    expect(reconcileAllSetRefs(gd)).toBe(0);
+    stop();
+  });
+
+  test('SET-06 undoing the @ takes the followed rows away; two replicas converge on one copy', () => {
+    const b = openDocument(new Y.Doc());
+    sourceSet('A', ['p', 'q']);
+    const fam = setTable('family', ['x']);
+    sync(gd.doc, b.doc);
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const [x] = rows(fam);
+    commitCellText(gd, fam, x ?? '', range(fam), '=@A');
+    // Both replicas reconcile the reference at once: the same rows, one copy each after merge.
+    sync(gd.doc, b.doc);
+    reconcileAllSetRefs(gd);
+    reconcileAllSetRefs(b);
+    sync(gd.doc, b.doc);
+    reconcileAllSetRefs(gd);
+    reconcileAllSetRefs(b);
+    sync(gd.doc, b.doc);
+    expect(textsOf(gd, fam)).toEqual(['=@A', 'p', 'q']);
+    expect(textsOf(b, fam)).toEqual(textsOf(gd, fam));
+    expect(reconcileAllSetRefs(gd)).toBe(0);
+    undo.undo();
+    reconcileAllSetRefs(gd);
+    sync(gd.doc, b.doc);
+    expect(textsOf(gd, fam)).toEqual(textsOf(b, fam));
+    expect(textsOf(gd, fam)).toEqual(['x']);
+  });
+
+  test('SET-06 REF-01 @E evaluates to the set E holds, and follows it', () => {
+    const engine = new FormulaEngine();
+    const results = new Map<string, CellResult>();
+    observeWorkbook(gd, (changes) => {
+      const out = engine.apply(changes);
+      for (const r of out.results) results.set(r.cellId, r);
+    });
+    const source = sourceSet('A', ['p', 'q, r', 'p']);
+    const fam = setTable('family', ['x']);
+    const [x] = rows(fam);
+    commitCellText(gd, fam, x ?? '', range(fam), '=@A');
+    const other = tableById(gd, fam)?.columns[1]?.id ?? '';
+    commitCellText(gd, fam, x ?? '', other, '=Union(@A, "z")');
+    const value = (colId: Id): unknown => {
+      const v = results.get(workbookCellId(fam, cellKey(x ?? '', colId)))?.value;
+      return v?.kind === 'list' ? v.items.map((i) => (i.kind === 'text' ? i.text : '?')) : v;
+    };
+    // The set, one element each, in first-seen order: shown as a list in the cell.
+    expect(value(range(fam))).toEqual({ kind: 'text', text: 'p, q, r' });
+    expect(value(other)).toEqual(['p', 'q', 'r', 'z']);
+    const added = addRow(gd, source);
+    setCellText(gd, source, added, range(source), 's');
+    expect(value(other)).toEqual(['p', 'q', 'r', 's', 'z']);
+    // Only a set table is named this way: a one-segment path to nothing stays an error.
+    commitCellText(gd, fam, x ?? '', range(fam), '=@Nowhere');
+    expect(results.get(workbookCellId(fam, cellKey(x ?? '', range(fam))))?.error).not.toBeNull();
+  });
+
+  test('SET-06 a row that names a plain table, itself or nothing follows nothing', () => {
+    const stop = observeSetRefs(gd);
+    createTable(gd, { sheetId, at: { col: 20, row: 2 }, columns: 1, rows: 1, title: 'Plain' });
+    const fam = setTable('family', ['x', 'y', 'z']);
+    setTableTitle(gd, fam, 'F');
+    const [x, y, z] = rows(fam);
+    commitCellText(gd, fam, x ?? '', range(fam), '=@Plain');
+    commitCellText(gd, fam, y ?? '', range(fam), '=@F');
+    commitCellText(gd, fam, z ?? '', range(fam), '=Union(@A, "b")');
+    expect(rows(fam)).toHaveLength(3);
+    stop();
   });
 });

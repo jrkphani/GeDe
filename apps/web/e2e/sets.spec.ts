@@ -848,3 +848,170 @@ test.describe('Phase 4 at 200 % zoom', () => {
     await checkA11y('family 1440 200%');
   });
 });
+
+test.describe('Phase 4 second red-team regressions', () => {
+  test('SET-02 KEYS-01 Split into rows from the cell menu keeps focus on the cell, withdraws the offer, and ⌘Z undoes it', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    seedSet(seeded, createSheet(seeded), 'E', 2, ['a', 'b']);
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'E' })).toBeVisible();
+    // The offer opens on the commit; the split is then made from the cell menu instead.
+    await typeInto(page, 'E', 0, 0, 'x, y, z');
+    const offer = page.getByRole('button', { name: 'Split into rows' });
+    await expect(offer).toBeVisible();
+    const cell = page
+      .getByRole('grid', { name: 'E' })
+      .getByRole('row')
+      .nth(1)
+      .getByRole('gridcell')
+      .first();
+    await cell.click();
+    await expect(cell).toBeFocused();
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: 'Split into rows' }).focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => tableTitled(room, 'E')?.rows.length).toBe(4);
+    // The offer for a cell already split is gone, and the keyboard is still on the cell.
+    await expect(offer).toHaveCount(0);
+    await expect(cell).toBeFocused();
+    await expect(page.getByRole('status').filter({ hasText: 'into 3 rows' })).toHaveCount(1);
+    // The suite's UA is Windows: ⌘ is Control.
+    await page.keyboard.press('Control+KeyZ');
+    await expect.poll(() => tableTitled(room, 'E')?.rows.length).toBe(2);
+    const e = tableTitled(room, 'E')!;
+    const table = openDocument(room.doc).tables.get(e.id)!;
+    expect(cellText(table, e.rows[0]!, e.columns[0]!.id)).toBe('x, y, z');
+  });
+
+  test('SET-02 the Split offer’s toast: pressing it once splits, and it closes', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    seedSet(seeded, createSheet(seeded), 'E', 2, ['a', 'b']);
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'E' })).toBeVisible();
+    await typeInto(page, 'E', 0, 0, 'p, q');
+    const offer = page.getByRole('button', { name: 'Split into rows' });
+    await offer.click();
+    await expect.poll(() => tableTitled(room, 'E')?.rows.length).toBe(3);
+    await expect(offer).toHaveCount(0);
+  });
+
+  for (const width of [1440, 1024, 768] as const) {
+    test(`SET-06 at ${String(width)} px a one-column family: the kind column is a column of its own, the elements read whole`, async ({
+      page,
+      checkA11y,
+    }) => {
+      const room = await installFakes(page);
+      const seeded = openDocument(room.doc);
+      const sheetId = createSheet(seeded);
+      const id = createTable(seeded, {
+        sheetId,
+        at: { col: 2, row: 1 },
+        columns: 1,
+        rows: 3,
+        title: 'F',
+        kind: 'family',
+      });
+      const record = tableRecord(seeded.tables.get(id)!);
+      const [first, second, third] = record.rows;
+      const range = record.columns[0]!.id;
+      setCellText(seeded, id, first!, range, 'Alphabetical');
+      setCellText(seeded, id, second!, range, 'beta');
+      setCellText(seeded, id, third!, range, 'gamma');
+      nestRow(seeded, id, second!);
+      nestRow(seeded, id, third!);
+      // A table abutting the family's kind column on the right is never drawn over.
+      createTable(seeded, { sheetId, at: { col: 4, row: 1 }, columns: 1, rows: 1, title: 'Next' });
+      await asDesktop(page, width, 900);
+      await signInTo(page, `/d/${DOC_ID}`);
+      const section = page.locator('section[aria-label="F"]');
+      await expect(section.getByTestId('set-kind')).toHaveText(['set', 'element', 'element']);
+      const tags = await section.locator('.gd-set-kind__tag').all();
+      const cells = await section.getByRole('row').getByRole('gridcell').all();
+      expect(cells).toHaveLength(3);
+      for (const [i, cell] of cells.entries()) {
+        // The whole text — not its clipped box — ends before the kind tag begins.
+        const textRight = await cell.evaluate((el) => {
+          const range = document.createRange();
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let right = 0;
+          for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+            range.selectNodeContents(n);
+            right = Math.max(right, range.getBoundingClientRect().right);
+          }
+          return right;
+        });
+        const tag = (await tags[i]!.boundingBox())!;
+        expect(textRight, `row ${String(i)}`).toBeLessThanOrEqual(tag.x + 0.5);
+        const box = (await cell.boundingBox())!;
+        expect(textRight, `row ${String(i)} fits its cell`).toBeLessThanOrEqual(box.x + box.width);
+      }
+      // Every meta value reads (a value, never an empty pill), and the badge reads whole.
+      expect(await clippedFacts(page, section)).toEqual([]);
+      for (const shown of await section.locator('.gd-set-meta__shown').all()) {
+        expect(((await shown.textContent()) ?? '').trim()).not.toBe('');
+      }
+      const badge = section.getByTestId('set-kind-badge');
+      expect(await badge.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      // The kind column stays inside the family; the next table is not drawn over.
+      const familyBox = (await section.boundingBox())!;
+      const nextBox = (await page.locator('section[aria-label="Next"]').boundingBox())!;
+      for (const tag of tags) {
+        const b = (await tag.boundingBox())!;
+        expect(b.x + b.width).toBeLessThanOrEqual(familyBox.x + familyBox.width + 0.5);
+        expect(b.x + b.width).toBeLessThanOrEqual(nextBox.x + 0.5);
+      }
+      await checkA11y(`one-column family ${String(width)}`);
+    });
+  }
+
+  test('SET-06 REF-01 a family row that references another set through @ holds that set’s elements, read-only, and follows it', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    const seeded = openDocument(room.doc);
+    const sheetId = createSheet(seeded);
+    seedSet(seeded, sheetId, 'A', 7, ['p', 'q']);
+    const family = seedSet(seeded, sheetId, 'T', 2, ['d', 'x']);
+    seeded.tables.get(family)!.set('kind', 'family');
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const section = page.locator('section[aria-label="T"]');
+    await expect(section.getByRole('grid', { name: 'T' })).toBeVisible();
+    // REF-01: `@` in a plain cell opens the picker; the set A is offered whole, first, and
+    // Enter picks it and commits the reference.
+    await typeInto(page, 'T', 1, 0, '@A');
+    await expect(section.getByTestId('set-kind')).toHaveText([
+      'element',
+      'set',
+      'element',
+      'element',
+    ]);
+    await expect(section.getByTestId('set-degree')).toContainText(['+2.1°', '+2.2°']);
+    await expect(section.getByTestId('set-counts')).toContainText('|T| = 2');
+    // A followed row is read-only: typing into it is refused, with the reason.
+    const followed = section.getByRole('row').nth(4).getByRole('gridcell').first();
+    await followed.click();
+    await page.keyboard.press('Enter');
+    await expect(page.getByLabel(/^Edit /)).toHaveCount(0);
+    // The source changes; the family follows.
+    const a = tableTitled(room, 'A')!;
+    setCellText(openDocument(room.doc), a.id, a.rows[1]!, a.columns[0]!.id, 'r');
+    await expect
+      .poll(() => {
+        const t = tableTitled(room, 'T')!;
+        const table = openDocument(room.doc).tables.get(t.id)!;
+        return t.rows.map((r) => cellText(table, r, t.columns[0]!.id));
+      })
+      .toEqual(['d', '=@A', 'p', 'r']);
+    await checkA11y('family with an @ reference');
+  });
+});

@@ -211,10 +211,10 @@ export function rowKindDescription(row: SetRowFacts | undefined, t: Translate): 
 }
 
 /**
- * SET-06: one cell of a family's kind column — “element”, “set” or “family” in words, along
- * the table's right edge inside its footprint (the last column yields the room, as the first
- * yields the rail's). Presentation: the range cell's description says the same to assistive
- * technology, so the grid's columns and their count are untouched.
+ * SET-06: one cell of a family's kind column — “element”, “set” or “family” in words, in the
+ * lattice unit the family's footprint keeps beyond its last column (`SET_KIND_COLUMN_UNITS`).
+ * Presentation: the range cell's description says the same to assistive technology, so the
+ * grid's columns and their count are untouched.
  */
 export function SetKindCell({ kind }: { readonly kind: SetRowFacts['kind'] | null }) {
   const t = useMessages();

@@ -11,8 +11,11 @@
  */
 import {
   cellAddress,
+  cellKey,
+  cellsMap,
   graphById,
   graphsInPair,
+  isFormula,
   isLastSheet,
   mergeRoom,
   outlineColumnId,
@@ -35,7 +38,12 @@ import { translate, type MessageKey } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GraphsActions } from '../graph/use-graphs.js';
-import { columnRenameReason, rowDeleteReason, type GridCommands } from '../grid/commands.js';
+import {
+  columnRenameReason,
+  readOnlyLabel,
+  rowDeleteReason,
+  type GridCommands,
+} from '../grid/commands.js';
 import type { RenameTarget } from '../grid/rename.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { RENAME_KEYS, SHEET_KEYS } from '../keys/shortcut-map.js';
@@ -135,8 +143,11 @@ function splitEntries(ctx: MenuContext, tableId: Id, rowId: Id, colId: Id): Menu
   const record = tableById(ctx.gd, tableId);
   if (record === null || (record.kind !== 'simple' && record.kind !== 'family')) return [];
   if (setRangeColumn(record) !== colId) return [];
-  const t = (key: MessageKey) => translate(activeLocale(), key);
+  const locale = activeLocale();
+  const t = (key: MessageKey) => translate(locale, key);
   const readOnly = ctx.commands.readOnlyReason({ tableId, rowId, colId });
+  const table = tableMap(ctx.gd, tableId);
+  const formula = table !== null && isFormula(cellsMap(table).get(cellKey(rowId, colId)));
   return [
     {
       kind: 'item',
@@ -145,10 +156,12 @@ function splitEntries(ctx: MenuContext, tableId: Id, rowId: Id, colId: Id): Menu
       disabledReason: !ctx.editable
         ? VIEW_ONLY
         : readOnly !== null
-          ? `${readOnly} cells are read-only`
-          : splitOffer(ctx.gd, tableId, rowId, colId) === null
-            ? t('set.split.single')
-            : undefined,
+          ? translate(locale, 'cell.readOnly', { reason: readOnlyLabel(readOnly) })
+          : formula
+            ? t('set.split.formula')
+            : splitOffer(ctx.gd, tableId, rowId, colId) === null
+              ? t('set.split.single')
+              : undefined,
       onSelect: () => {
         ctx.commands.splitIntoRows({ tableId, rowId, colId });
       },

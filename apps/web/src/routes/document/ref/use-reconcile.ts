@@ -1,6 +1,7 @@
 /**
- * Keeps pulls (REF-02), `Split()` children (HIER-07), computed rows (SET-08) and rows two
- * replicas both split into (SET-02, `settleSetRows`) reconciled while a
+ * Keeps pulls (REF-02), `Split()` children (HIER-07), computed rows (SET-08), a family's
+ * `@` references (SET-06, `observeSetRefs`) and rows two replicas both split into (SET-02,
+ * `settleSetRows`) reconciled while a
  * document is open for editing. One installation per document, reference-
  * counted by the tables that mount it; a read-only session (phone, viewer)
  * installs nothing — the replica that can write reconciles for both, and
@@ -29,6 +30,7 @@ import {
   computedItemsOf,
   observePulls,
   observeRefusedFills,
+  observeSetRefs,
   openDocument,
   reconcileComputed,
   reconcileFilteredPulls,
@@ -59,6 +61,8 @@ function install(doc: Y.Doc): () => void {
   const cellValue = (tableId: string, key: CellKey) =>
     host.result(workbookCellId(tableId, key))?.value;
   const stopPulls = observePulls(gd, { cellValue });
+  // SET-06, REF-01: a family row that references another set through `@E` holds E's rows.
+  const stopSetRefs = observeSetRefs(gd);
   // SET-10 after a merge: a Fill column refused here or on another replica is said, not silent.
   // `formula`: another person's Fill of the same table won the merge (ADR-056 ruling a).
   const stopRefusals = observeRefusedFills(gd, (tableId, colId, reason) => {
@@ -138,6 +142,7 @@ function install(doc: Y.Doc): () => void {
   return () => {
     stopped = true;
     stopPulls();
+    stopSetRefs();
     stopRefusals();
     stopResults();
     doc.off('afterTransaction', onTransaction);

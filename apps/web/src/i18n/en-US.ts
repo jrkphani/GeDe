@@ -278,6 +278,13 @@ export const messages = {
   'set.rowKind.set': 'set',
   'set.rowKind.family': 'family',
   'set.split.single': 'the cell holds one element',
+  'set.split.formula': 'the cell holds a formula, not typed elements',
+  'set.ref.hint': 'the whole set',
+  // SET-04 / INSP-04: the definition and caption fields say what they hold on blur.
+  'set.definition.cleared': '{set}: definition cleared',
+  'set.definition.changed': '{set}: definition is “{definition}”',
+  'caption.cleared': '{table}: caption cleared',
+  'caption.changed': '{table}: caption is “{caption}”',
   'set.kind.header': 'kind',
   'set.kind.label': 'kind: {kind}',
   'set.definition.field': 'Definition',

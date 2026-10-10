@@ -106,12 +106,11 @@ p.gd-set-picker__legend {
    Presentation over the table's rows: nothing here takes a lattice unit, so no A1 address
    moves (SET-07), and nothing draws outside the table's footprint, so a neighbouring table
    (tables abut on the lattice) and the row ruler stay clear. The rail is the footprint's
-   left edge, as wide as its longest label; a family's kind column is its right edge. The
-   first and last columns yield that room as padding: their cells keep their lattice units. */
+   left edge, as wide as its longest label, and the first column yields that room as padding
+   (its cells keep their lattice units); a family's kind column is a unit of its own. */
 .gd-table--set {
   /* IBM Plex Mono advances 0.6 em; the rail's labels are 0.625 rem. */
   --gd-set-rail: calc(var(--gd-set-rail-chars, 3) * 0.375rem + var(--space-2));
-  --gd-set-kind: 4.5rem;
 }
 
 /* SET-03 / SET-04: the title bar's two lattice rows hold the meta row and the title row. */
@@ -240,18 +239,17 @@ p.gd-set-picker__legend {
   );
 }
 
-/* SET-06: a family's kind column, along the table's right edge inside its footprint. */
+/* SET-06: a family's kind column — a lattice unit of its own beyond the last column, in the
+   table's footprint (core `SET_KIND_COLUMN_UNITS`), so the person's columns keep their whole
+   width: a one-column family's range cell still reads its elements. */
 .gd-set-kind {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: flex-start;
   box-sizing: border-box;
-  width: var(--gd-set-kind);
-  padding: 0 var(--space-1);
+  width: var(--lattice-col);
+  padding: 0 var(--space-2);
   border-left: 1px solid var(--border);
   overflow: hidden;
   pointer-events: none;
@@ -273,10 +271,6 @@ p.gd-set-picker__legend {
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
-}
-.gd-table--set-kinds .gd-cell:has(+ .gd-set-kind),
-.gd-table--set-kinds .gd-table__header:has(+ .gd-set-kind) {
-  padding-right: calc(var(--gd-set-kind) + var(--space-1));
 }
 
 /* SET-02: a repeat's flag, in words beside the element. */

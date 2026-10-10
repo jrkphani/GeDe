@@ -81,6 +81,8 @@ export interface GridOptions {
   fit?: (() => FitOptions | null) | undefined;
   /** SET-02: offer Split into rows after a comma value lands in a set's range cell. */
   offerSplit?: ((cell: CellSelection, elements: number, address: string) => void) | undefined;
+  /** SET-02: withdraw an open offer once its cell has been split, from whichever route. */
+  withdrawSplit?: ((cell: CellSelection) => void) | undefined;
 }
 
 /** True when the event is a deletion from a table's `rows` or `columns` array. */
@@ -102,6 +104,8 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
   undoRef.current = options.undo;
   const offerSplitRef = useRef(options.offerSplit);
   offerSplitRef.current = options.offerSplit;
+  const withdrawSplitRef = useRef(options.withdrawSplit);
+  withdrawSplitRef.current = options.withdrawSplit;
   // The selected table as last seen, so a vanished row or column can hand the
   // selection to the neighbour that took its place.
   const snapshotRef = useRef<{ tableId: Id; table: TraversalTable } | null>(null);
@@ -175,6 +179,9 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
         settle: () => undoRef.current?.stopCapturing(),
         offerSplit: (cell, elements, address) => {
           offerSplitRef.current?.(cell, elements, address);
+        },
+        withdrawSplit: (cell) => {
+          withdrawSplitRef.current?.(cell);
         },
       }),
     [gd, dispatch],

@@ -26,7 +26,14 @@ import { DependencyGraph } from '../graph.js';
 import { deriveArgValues, type DeriveSpec } from '../doc/schema.js';
 import { references, type Ast, type ParseError, type Reference } from '../formula/ast.js';
 import { encodeBound, type BoundReference } from '../formula/bound.js';
-import { evaluate, type BoundOperand, type CellValue, type Resolver } from '../formula/evaluate.js';
+import {
+  evaluate,
+  valueElements,
+  type BoundOperand,
+  type CellValue,
+  type Resolver,
+} from '../formula/evaluate.js';
+import { setNameKey } from '../doc/set-range.js';
 import { formatMethodCall } from '../formula/methods.js';
 import { parse } from '../formula/parser.js';
 import { AUTO_FORMAT, isFormatLocale, type CellFormat } from '../format/types.js';
@@ -145,8 +152,17 @@ class EngineResolver implements Resolver {
 
   entity(path: readonly string[]): CellValue | undefined {
     const entry = this.engine.index.entityIndex().byKey.get(entityKey(path));
-    if (entry === undefined) return undefined;
-    return this.engine.valueOf(entry.cellId, this.blocked);
+    if (entry !== undefined) return this.engine.valueOf(entry.cellId, this.blocked);
+    // SET-06, REF-01: `@E` names a set table — the set its range column holds, as a list.
+    const ids = this.engine.setCellsNamed(path);
+    if (ids === undefined) return undefined;
+    const elements = ids.flatMap((id) =>
+      valueElements(this.engine.valueOf(id, this.blocked), () => []),
+    );
+    return {
+      kind: 'list',
+      items: [...new Set(elements)].map((text) => ({ kind: 'text', text }) as const),
+    };
   }
 
   columnValues(col: number): { row: number; value: CellValue }[] {
@@ -293,6 +309,31 @@ export class FormulaEngine {
    * (FMT-02, FMT-03, FMT-05) — inferred from the text under Automatic — or a
    * formula's result (errors propagate).
    */
+  /**
+   * SET-06, REF-01: the range cells of the set table a one-segment `@` path names by title
+   * (titles are unique, ADR-051), in row order; undefined when the path names none. A path
+   * of a row or cell always wins: it has two segments at least.
+   */
+  setCellsNamed(path: readonly string[]): WorkbookCellId[] | undefined {
+    if (path.length !== 1) return undefined;
+    const name = setNameKey(path[0] ?? '');
+    if (name === '') return undefined;
+    const ids = [...this.tables.keys()].sort();
+    for (const tableId of ids) {
+      const table = this.tables.get(tableId);
+      const range = table?.structure.setRange;
+      if (table === undefined || range === undefined) continue;
+      if (setNameKey(table.structure.title) !== name) continue;
+      const out: WorkbookCellId[] = [];
+      for (const rowId of table.structure.rows) {
+        const key = cellKey(rowId, range);
+        if (table.cells.has(key)) out.push(workbookCellId(tableId, key));
+      }
+      return out;
+    }
+    return undefined;
+  }
+
   valueOf(cellId: WorkbookCellId, blocked: ReadonlySet<WorkbookCellId>): CellValue {
     const cell = this.cells.get(cellId);
     if (cell === undefined) return { kind: 'blank' };
@@ -657,7 +698,7 @@ export class FormulaEngine {
         return {
           index,
           kind: 'entity',
-          cellIds: entry === undefined ? [] : [entry.cellId],
+          cellIds: entry === undefined ? (this.setCellsNamed(ref.path) ?? []) : [entry.cellId],
           missing: false,
           anchored: false,
         };

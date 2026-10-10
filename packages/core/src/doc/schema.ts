@@ -180,6 +180,16 @@ export interface PulledFrom {
   readonly rowId: Id;
 }
 
+/**
+ * A row a family of sets holds because one of its rows references another set table
+ * through `@` (SET-06, REF-01): `rowId` is the referencing row, `tableId` the set it
+ * follows. Read-only, like a pulled row; the reconciler (`reconcileSetRefs`) owns it.
+ */
+export interface SetRefOf {
+  readonly rowId: Id;
+  readonly tableId: Id;
+}
+
 /** A `Split()` child (HIER-07): piece `index` of its parent row's split column. */
 export interface SplitOf {
   readonly rowId: Id;
@@ -257,6 +267,8 @@ export interface RowMeta {
   readonly pulledFrom: PulledFrom | null;
   /** Which parent and piece a `Split()` child came from (HIER-07 provenance); null otherwise. */
   readonly splitOf: SplitOf | null;
+  /** SET-06: the referencing row and the set this row follows; null on any other row. */
+  readonly setRefOf: SetRefOf | null;
   /**
    * The result element or tuple a computed table's row stands for (SET-08):
    * its canonical text (FX-09 spelling, NFC). Provenance, like `splitOf`;
@@ -561,6 +573,14 @@ export function readPulledFrom(value: unknown): PulledFrom | null {
   return { tableId, rowId };
 }
 
+export function readSetRefOf(value: unknown): SetRefOf | null {
+  if (!isRecord(value)) return null;
+  const { rowId, tableId } = value;
+  if (typeof rowId !== 'string' || typeof tableId !== 'string') return null;
+  if (rowId === '' || tableId === '') return null;
+  return { rowId, tableId };
+}
+
 export function readSplitOf(value: unknown): SplitOf | null {
   if (!isRecord(value)) return null;
   const { rowId, index } = value;
@@ -813,6 +833,7 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
       splitChild: false,
       pulledFrom: null,
       splitOf: null,
+      setRefOf: null,
       computedKey: null,
       lostFrom: null,
       outlineColumn: null,
@@ -837,6 +858,7 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
     splitChild: readBoolean(meta, 'splitChild', false),
     pulledFrom: readPulledFrom(meta.get('pulledFrom')),
     splitOf: readSplitOf(meta.get('splitOf')),
+    setRefOf: readSetRefOf(meta.get('setRefOf')),
     computedKey: readNullableString(meta.get('computedKey')),
     lostFrom: readNullableString(meta.get('lostFrom')),
     outlineColumn: readOutlineColumn(meta.get('outlineColumn')),
@@ -865,7 +887,8 @@ export type ReadOnlyReason = Exclude<ColumnSource, 'entered'> | 'group' | 'split
 export function rowReadOnlyReason(
   meta: RowMeta,
 ): Extract<ReadOnlyReason, 'pulled' | 'group' | 'splitChild'> | null {
-  if (meta.pulledFrom !== null) return 'pulled';
+  // A row a family follows from another set through `@` reads as pulled (SET-06, REF-05).
+  if (meta.pulledFrom !== null || meta.setRefOf !== null) return 'pulled';
   if (meta.group) return 'group';
   if (meta.splitChild) return 'splitChild';
   return null;
