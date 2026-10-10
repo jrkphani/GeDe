@@ -17,10 +17,13 @@
  * — a computed table follows its formula, a pulled or split row follows its source — and no
  * replica can tell, from the update, whose hand wrote them: the reconcilers' bookkeeping keys
  * and rows whose meta, as it was before the update, marks them as machine-written. A row the
- * update adds is read by its own meta only in a machine-driven table (a computed formula, a
- * non-entered column, or a formula in a cell, judged as the table was before the update); in
- * any other table it is a person's row. shortcut: in a machine-driven locked table a client can
- * still add a row dressed as a machine one, when rows carry a signed provenance, close it.
+ * update adds is read by its own meta only in a machine-driven table (a computed formula or a
+ * non-entered column, judged as the table was before the update; a formula in a cell does not
+ * make one), and only when the tag is backed: a computed key needs the table's formula and its
+ * computedIds entry, a pulled row needs a source table and row that exist once the update lands and a pull spec on
+ * the receiving table. Anything else is a person's row. shortcut: a split, followed or band tag
+ * on an added row is trusted in a machine-driven table, when rows carry a signed provenance,
+ * close it.
  * Row order alone is not an edit. A locked sheet is put back if deleted, with all its tables;
  * a locked section's name and columns are put back.
  */
@@ -37,9 +40,9 @@ import {
   sheetHasLock,
 } from './sections.js';
 import {
-  cellsMap,
   columnsArray,
   readColumnSource,
+  readPullSpec,
   openDocument,
   readString,
   rowMeta,
@@ -88,9 +91,38 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
         (readString(t, 'computedFormula') !== '' ||
           columnsArray(t)
             .toArray()
-            .some((c) => readColumnSource(c) !== 'entered') ||
-          [...cellsMap(t).values()].some((v) => typeof v === 'string'))
+            .some((c) => readColumnSource(c) !== 'entered'))
       );
+    };
+    // A machine tag on a row the update adds counts only when the document backs it: a computed
+    // key the table's formula and its computedIds vouch for, a pull whose source row exists
+    // under a pull spec of the receiving table.
+    const tagBacked = (tableId: Id, meta: ReturnType<typeof rowMeta>, rowId: Id): boolean => {
+      const before = tableMap(gd, tableId);
+      if (before === null) return false;
+      const { pulledFrom, computedKey } = meta;
+      if (computedKey !== null) {
+        const ids = tableMap(after, tableId)?.get('computedIds');
+        if (
+          readString(before, 'computedFormula') === '' ||
+          !(ids instanceof Y.Map) ||
+          ids.get(rowId) !== computedKey
+        )
+          return false;
+      }
+      if (pulledFrom !== null) {
+        const source = tableMap(after, pulledFrom.tableId);
+        const pulls = columnsArray(before)
+          .toArray()
+          .some(
+            (c) =>
+              readColumnSource(c) === 'pulled' &&
+              readPullSpec(c.get('pull'))?.tableId === pulledFrom.tableId,
+          );
+        if (source === null || !rowsArray(source).toArray().includes(pulledFrom.rowId) || !pulls)
+          return false;
+      }
+      return true;
     };
     // A row's provenance is read from the document as it was: an update cannot vouch for its
     // own writes by setting `pulledFrom` on a row a person owns. A row the update adds has no
@@ -101,7 +133,8 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       const table = owned ? before : machineTable(tableId) ? tableMap(after, tableId) : null;
       if (table === null) return false;
       const meta = rowMeta(table, rowId);
-      return rowReadOnlyReason(meta) !== null || meta.computedKey !== null;
+      if (rowReadOnlyReason(meta) === null && meta.computedKey === null) return false;
+      return owned || tagBacked(tableId, meta, rowId);
     };
     const machineCell = (tableId: Id, key: string): boolean =>
       isCellKey(key) && machineRow(tableId, splitCellKey(key).rowId);

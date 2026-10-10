@@ -9,6 +9,7 @@ import { nestRow } from '../hier/mutations.js';
 import { cellKey, type Id } from '../ids.js';
 import { tableAddresses } from './geometry.js';
 import { applyGuardedUpdate, lockedTablesEdited } from './lock-guard.js';
+import { reconcilePull, setPull } from '../ref/pull.js';
 import { deleteSheet } from './sheets.js';
 import {
   addRow,
@@ -294,25 +295,22 @@ describe('lock on received updates (SET-18)', () => {
     expect(text(outside)).toBe('y');
   });
 
-  test('SET-18 the reconcilers still write a locked table: its rows and a pulled row’s cells', () => {
+  test('SET-18 the reconcilers still write a locked table: a row pulled from a source that exists', () => {
     const lane = section('Lane', 0, 5);
     const id = setTable('E', ['a'], 1);
-    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
+    const src = setTable('S', ['x'], 8);
+    expect(setPull(gd, id, rangeOf(id), { tableId: src, colId: rangeOf(src), filter: '' })).toBe(
+      true,
+    );
     setSectionLocked(gd, sheetId, lane, true);
-    // A row added by a machine (row membership is open) and its cell, on a row a source owns.
-    const rowId = 'ROWPULLED';
     const sent = update((r) => {
-      const table = tableMap(r, id);
-      if (table === null) return;
-      r.doc.transact(() => {
-        const meta = new Y.Map<unknown>();
-        meta.set('depth', 0);
-        meta.set('pulledFrom', { tableId: 'src', rowId: 'x' });
-        (table.get('rows') as Y.Array<string>).push([rowId]);
-        (table.get('rowMeta') as Y.Map<unknown>).set(rowId, meta);
-      });
+      setCellText(r, src, addRow(r, src), rangeOf(src), 'y');
+      reconcilePull(r, id);
     });
+    expect(tableById(gd, id)?.rows).toHaveLength(2);
     expect(lockedTablesEdited(gd, sent)).toEqual([]);
+    applyGuardedUpdate(gd, sent, 'client');
+    expect(tableById(gd, id)?.rows).toHaveLength(3);
   });
 });
 
@@ -596,11 +594,51 @@ describe('lock guard holes (SET-17, SET-18)', () => {
     const sent = sentBy((r) => {
       const row = addRow(r, id);
       r.doc.transact(() => {
+        const table = tableMap(r, id);
+        const meta = table?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
+        meta?.get(row)?.set('computedKey', 'k');
+        const ids = new Y.Map<unknown>();
+        ids.set(row, 'k');
+        table?.set('computedIds', ids);
+      });
+    });
+    expect(lockedTablesEdited(gd, sent)).toEqual([]);
+  });
+
+  test('SET-18 a formula cell does not make a locked table machine-driven: forged machine rows are refused', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    setCellText(gd, id, rowOf(gd, id), rangeOf(id), '=Sum(A1, A2)');
+    setSectionLocked(gd, sheetId, lane, true);
+    const pulled = sentBy((r) => setCellText(r, id, forgedRow(r, id), rangeOf(id), 'HACKED'));
+    expect(lockedTablesEdited(gd, pulled)).toEqual([id]);
+    const keyed = sentBy((r) => {
+      const row = forgedRow(r, id);
+      r.doc.transact(() => {
+        const meta = tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
+        meta?.get(row)?.set('computedKey', 'k');
+      });
+      setCellText(r, id, row, rangeOf(id), 'HACKED');
+    });
+    expect(applyGuardedUpdate(gd, keyed, 'client')).toEqual([id]);
+    expect(tableById(gd, id)?.rows).toHaveLength(1);
+  });
+
+  test('SET-18 a machine-driven locked table still refuses an unbacked pulled or computed row', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
+    setSectionLocked(gd, sheetId, lane, true);
+    const forgedPull = sentBy((r) => void forgedRow(r, id));
+    expect(lockedTablesEdited(gd, forgedPull)).toEqual([id]);
+    const noId = sentBy((r) => {
+      const row = addRow(r, id);
+      r.doc.transact(() => {
         const meta = tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
         meta?.get(row)?.set('computedKey', 'k');
       });
     });
-    expect(lockedTablesEdited(gd, sent)).toEqual([]);
+    expect(lockedTablesEdited(gd, noId)).toEqual([id]);
   });
 
   test('SET-18 a client cannot move an unlocked table into a locked section', () => {
