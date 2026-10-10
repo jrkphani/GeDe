@@ -17,6 +17,8 @@ const SECTION_PREFIX = 'section:';
 
 /** One empty lattice column separates two sections (SET-17). */
 export const SECTION_GUTTER = 1;
+/** The last lattice column a section may reach (a range beyond it is refused, not stored). */
+export const MAX_SECTION_COLUMN = 16383;
 /** Lattice columns a new section spans when the caller names none. */
 export const DEFAULT_SECTION_COLUMNS = 6;
 
@@ -122,16 +124,19 @@ export function lockReasonOfTable(gd: GedeDoc, tableId: Id): LockReason | null {
 
 /** Whether any sheet or section is locked: the sync service checks nothing else on a document without one. */
 export function anyLock(gd: GedeDoc): boolean {
-  return gd.sheets.toArray().some((sheet) => {
-    if (readBoolean(sheet, 'locked', false)) return true;
-    let found = false;
-    sheet.forEach((value, key) => {
-      if (key.startsWith(SECTION_PREFIX) && value instanceof Y.Map) {
-        found ||= readBoolean(value as Y.Map<unknown>, 'locked', false);
-      }
-    });
-    return found;
+  return gd.sheets.toArray().some(sheetHasLock);
+}
+
+/** Whether the sheet, or any of its sections, is locked. */
+export function sheetHasLock(sheet: SheetMap): boolean {
+  if (readBoolean(sheet, 'locked', false)) return true;
+  let found = false;
+  sheet.forEach((value, key) => {
+    if (key.startsWith(SECTION_PREFIX) && value instanceof Y.Map) {
+      found ||= readBoolean(value as Y.Map<unknown>, 'locked', false);
+    }
   });
+  return found;
 }
 
 /** SET-18: why the section cannot change, or null: its own lock, else the sheet's. */
@@ -170,7 +175,7 @@ export function nextSectionRange(
 
 /**
  * SET-17: add a section, as one undo step. Null — nothing written — for an empty name, a range
- * that is not whole non-negative columns, one that overlaps another section or leaves less
+ * that is not whole non-negative columns within the lattice, one that overlaps another section or leaves less
  * than the gutter between them, or a locked sheet.
  */
 export function addSection(
@@ -181,7 +186,7 @@ export function addSection(
   const name = input.name.trim();
   const { firstColumn, lastColumn } = input;
   if (name === '' || !Number.isInteger(firstColumn) || !Number.isInteger(lastColumn)) return null;
-  if (firstColumn < 0 || lastColumn < firstColumn) return null;
+  if (firstColumn < 0 || lastColumn < firstColumn || lastColumn > MAX_SECTION_COLUMN) return null;
   if (
     isSheetLocked(gd, sheetId) ||
     !fits(listSections(gd, sheetId), firstColumn, lastColumn, null)

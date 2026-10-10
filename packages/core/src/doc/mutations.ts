@@ -8,7 +8,7 @@ import * as Y from 'yjs';
 import { parse } from '../formula/parser.js';
 import { effectiveDepths, hasDescendants } from '../hier/outline.js';
 import { rowHidden, tableWidthUnits } from './geometry.js';
-import { clampToSection } from './sections.js';
+import { clampToSection, lockReasonAt, lockReasonOfTable } from './sections.js';
 import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
 import { snapPoint, snapSizeToUnits, type LatticeUnits, type Pixels } from '../lattice.js';
 import {
@@ -359,15 +359,11 @@ export function setTablePosition(gd: GedeDoc, tableId: Id, at: LatticeUnits | Pi
   transact(gd, () => {
     const table = requireTable(gd, tableId);
     // SET-17: a table put inside a section snaps within it.
-    table.set(
-      'gridCol',
-      clampToSection(
-        gd,
-        readString(table, 'sheetId'),
-        origin.col,
-        tableWidthUnits(tableRecord(table)),
-      ),
-    );
+    const sheetId = readString(table, 'sheetId');
+    const col = clampToSection(gd, sheetId, origin.col, tableWidthUnits(tableRecord(table)));
+    // SET-18: a table does not leave a locked lane, and none moves into one.
+    if (lockReasonOfTable(gd, tableId) !== null || lockReasonAt(gd, sheetId, col) !== null) return;
+    table.set('gridCol', col);
     table.set('gridRow', origin.row);
   });
 }

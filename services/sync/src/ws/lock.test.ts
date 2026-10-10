@@ -62,7 +62,7 @@ function cell(gd: GedeDoc, tableId: string): string {
 }
 
 describe('lock on received updates (SET-18)', () => {
-  test('SET-18 the room drops an edit to a table in a locked section, and keeps one elsewhere', async () => {
+  test('SET-18 the room puts back an edit to a table in a locked section, and keeps one elsewhere', async () => {
     const owner = await connect(ownerToken);
     const gd = openDocument(owner.doc);
     const sheetId = ensureFirstSheet(gd);
@@ -85,7 +85,7 @@ describe('lock on received updates (SET-18)', () => {
     expect(server.app.rooms.get(docId)?.stats.lockedEdits).toBeGreaterThanOrEqual(1);
   });
 
-  test('SET-18 a locked sheet drops every table’s edits until it is unlocked', async () => {
+  test('SET-18 a locked sheet puts back every table’s edits until it is unlocked', async () => {
     const owner = await connect(ownerToken);
     const gd = openDocument(owner.doc);
     const sheetId = ensureFirstSheet(gd);
