@@ -134,6 +134,7 @@ for (const width of [1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     // Table 1 at B2: title rows 2–3, header row 4, data B5:D9.
     await enter(page, 'B5', 'Lukla (2860 m)');
     await enter(page, 'B6', 'Namche (3440 m)');
@@ -243,6 +244,7 @@ for (const width of [1024, 1440]) {
 
     // ── REF-02: a second table pulls the Nepal rows; the receiving column renames itself.
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     await expect(page.getByRole('grid', { name: 'Table 2' })).toBeVisible();
     const second = tableTitled(gd, 'Table 2');
     // Well beneath Table 1 (which grows child rows later) and inside the 1024 viewport: the
@@ -442,6 +444,7 @@ test('INSP-09 the Derive tab lists the pipeline step by step with what each read
   await page.setViewportSize({ width: 1440, height: 900 });
   await signInTo(page, `/d/${DOC_ID}`);
   await page.getByRole('button', { name: 'Add table' }).click();
+  await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
   await enter(page, 'B5', 'Lukla (2860 m)');
   await enter(page, 'B6', 'Namche (3440 m)');
   await enter(page, 'B7', 'Leh');
@@ -487,6 +490,7 @@ test('RESP-02 REF-03 on a phone a mapping cell shows its value and offers no pic
   await page.setViewportSize({ width: 1440, height: 900 });
   await signInTo(page, `/d/${DOC_ID}`);
   await page.getByRole('button', { name: 'Add table' }).click();
+  await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
   await enter(page, 'B5', 'Nepal');
   const gd = openDocument(room.doc);
   const t = tableTitled(gd, 'Table 1');

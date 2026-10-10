@@ -143,6 +143,7 @@ test.describe('resize and wrap (Numbers on the lattice, #167)', () => {
       await page.setViewportSize({ width, height: 900 });
       await signInTo(page, `/d/${DOC_ID}`);
       await page.getByRole('button', { name: 'Add table' }).click();
+      await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
       const grid = page.getByRole('grid').first();
       const b5 = page.locator('[data-address="B5"]');
       await expect(b5).toBeVisible();
@@ -349,6 +350,7 @@ test.describe('resize and wrap (Numbers on the lattice, #167)', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     const grid = page.getByRole('grid').first();
     await expect.poll(() => room.doc.getMap('tables').size).toBe(1);
     const gd = openDocument(room.doc);
@@ -461,6 +463,7 @@ test.describe('resize and wrap (Numbers on the lattice, #167)', () => {
     const room = await installFakes(page);
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     await expect.poll(() => room.doc.getMap('tables').size).toBe(1);
     const gd = openDocument(room.doc);
     const tableId = Array.from(gd.tables.keys())[0] ?? '';

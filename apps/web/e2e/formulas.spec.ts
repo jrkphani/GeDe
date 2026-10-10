@@ -105,6 +105,7 @@ test.describe('formulas', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     // The table sits at (1, 1): title bar + header put its first data cell at B5 (rows 5–9).
     await expect(page.locator('[data-address="B5"]')).toBeVisible();
     // Evaluation runs in the Worker, not on the main thread.
@@ -259,6 +260,7 @@ test.describe('formulas', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     await enter(page, 'B5', 'Lukla');
     await enter(page, 'C5', '2860');
     const d5 = page.locator('[data-address="D5"]');
@@ -292,6 +294,7 @@ test.describe('formulas', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     await expect(page.locator('[data-address="B5"]')).toBeVisible();
     await expect(page.getByTestId('formula-engine')).toHaveAttribute('data-mode', 'worker');
     // A collaborator adds a fourth column so the results have a home at E5:E9.
@@ -390,6 +393,7 @@ test.describe('formulas', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     await enter(page, 'B5', '2');
     await enter(page, 'B6', '=Sum(B5)');
     await enter(page, 'B7', '=Sum(B6, B5)');

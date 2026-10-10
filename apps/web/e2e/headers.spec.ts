@@ -140,6 +140,7 @@ for (const width of [1024, 1440] as const) {
     const room = await openDoc(page, width);
     // The customer's case: a table the person just added, not the seeded sample.
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     const b5 = page.locator('[data-address="B5"]');
     await expect(b5).toBeVisible();
     await expect.poll(() => room.doc.getMap('tables').size).toBe(1);
