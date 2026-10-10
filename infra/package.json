@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@gede/mail": "*",
-    "aws-cdk-lib": "^2.261.0",
+    "aws-cdk-lib": "^2.273.0",
     "constructs": "^10.4.0"
   },
   "devDependencies": {
