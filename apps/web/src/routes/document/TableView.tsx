@@ -111,6 +111,7 @@ import { useGraphLitRows } from './graph/store.js'; // wave4/graphs: GRAPH-09 li
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ComputedFormulaError } from './sets/ComputedFormulaError.js';
 import { useSetFacts } from './sets/use-set-facts.js';
+import { useTableLock } from './sets/use-table-lock.js';
 import {
   railCharacters,
   rangeCellNote,
@@ -246,7 +247,7 @@ export const TableView = memo(function TableView({
   axisBand = null,
   fitter: givenFitter,
   editing,
-  editable,
+  editable: editableProp,
   viewSorted = false,
   presence,
   pinnedLeft,
@@ -259,6 +260,9 @@ export const TableView = memo(function TableView({
   // Per-cell counters (not just the table's): a keystroke re-renders its own cell only.
   const versions = useCellVersions(table);
   const version = versions.table;
+  // SET-18: a locked section or sheet reads as view-only for this table, with its own reason.
+  const lock = useTableLock(table);
+  const editable = editableProp && lock === null;
   const [activeLocale] = useLocale();
   const locale = toFormatLocale(activeLocale);
   // One record per document change: its `rows` and `columns` keep identity between
@@ -1023,7 +1027,7 @@ export const TableView = memo(function TableView({
                           const cell = { tableId: record.id, rowId, colId: col.id };
                           // Column source wins over the row reason, as `cellReadOnlyReason` in core.
                           const readOnly: ReadOnlyReason | null =
-                            columnReadOnly.get(col.id) ?? rowReadOnly;
+                            lock ?? columnReadOnly.get(col.id) ?? rowReadOnly;
                           return (
                             <Cell
                               key={col.id}

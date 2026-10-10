@@ -17,6 +17,10 @@ import {
   graphsInPair,
   isFormula,
   isLastSheet,
+  isSheetLocked,
+  listSections,
+  lockReasonOfTable,
+  sectionLockReason,
   mergeRoom,
   outlineColumnId,
   spanAt,
@@ -64,6 +68,8 @@ export type MenuTarget =
   /** ADR-047: a graph half — collapse or expand it, delete it or its pair. */
   | { kind: 'graph'; graphId: Id; pairId: Id }
   | { kind: 'sheet'; sheetId: Id }
+  /** SET-17: a section's heading. */
+  | { kind: 'section'; sheetId: Id; sectionId: Id }
   | { kind: 'canvas' };
 
 /** What the other Wave 2 PRs mount; each `undefined` leaves its commands disabled with a reason. */
@@ -122,6 +128,17 @@ export interface MenuContext {
    * its graph pairs go as one undo step; the shell moves focus afterwards.
    */
   deleteTable?: ((tableId: Id) => void) | undefined;
+  /** SET-17, SET-18: Add section, Rename section…, Lock and Unlock. Absent where nothing can be written. */
+  sections?:
+    | {
+        /** The sheet shown. */
+        sheetId: Id | null;
+        add: () => void;
+        rename: (sheetId: Id, sectionId: Id) => void;
+        setLocked: (sheetId: Id, sectionId: Id, locked: boolean) => void;
+        setSheetLocked: (sheetId: Id, locked: boolean) => void;
+      }
+    | undefined;
   /** SET-10: open Fill column with formula… on a column. Absent where nothing can be written. */
   fillColumn?: ((tableId: Id, colId: Id) => void) | undefined;
   /** ADR-047: the graph menu's commands (the Graph tab is their home). */
@@ -954,9 +971,73 @@ export function tableMenuEntries(
   ];
 }
 
+const lockText = (reason: 'sheet' | 'section'): string =>
+  translate(activeLocale(), reason === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked');
+
+/** SET-17: Add section, on the canvas menu; disabled with its reason on a locked sheet. */
+function sectionAddEntries(ctx: MenuContext): MenuEntry[] {
+  if (ctx.sections === undefined) return [];
+  const { sheetId } = ctx.sections;
+  return [
+    sep('s-section'),
+    {
+      kind: 'item',
+      id: 'section-add',
+      label: translate(activeLocale(), 'section.add'),
+      disabledReason:
+        (ctx.editable ? undefined : VIEW_ONLY) ??
+        (sheetId !== null && isSheetLocked(ctx.gd, sheetId) ? lockText('sheet') : undefined),
+      onSelect: ctx.sections.add,
+    },
+  ];
+}
+
+/**
+ * SET-17, SET-18: a section heading's menu — Rename section… and Lock section / Unlock
+ * section. Rename is disabled with “the section is locked” or “the sheet is locked”; Unlock
+ * is always available to anyone who can edit (SPEC §7 v1 default 5).
+ */
+export function sectionMenuEntries(
+  ctx: MenuContext,
+  target: MenuTarget & { kind: 'section' },
+): MenuEntry[] {
+  const section = listSections(ctx.gd, target.sheetId).find((s) => s.id === target.sectionId);
+  if (section === undefined || ctx.sections === undefined) return [];
+  const sections = ctx.sections;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const lock = sectionLockReason(ctx.gd, target.sheetId, target.sectionId);
+  const t = (key: MessageKey) => translate(activeLocale(), key);
+  return [
+    {
+      kind: 'item',
+      id: 'section-rename',
+      label: t('section.rename'),
+      disabledReason: viewOnly ?? (lock === null ? undefined : lockText(lock)),
+      onSelect: () => {
+        sections.rename(target.sheetId, target.sectionId);
+      },
+    },
+    sep('s-lock'),
+    {
+      kind: 'item',
+      id: 'section-lock',
+      label: t(section.locked ? 'lock.sectionOff' : 'lock.section'),
+      disabledReason: viewOnly,
+      onSelect: () => {
+        sections.setLocked(target.sheetId, target.sectionId, !section.locked);
+      },
+    },
+  ];
+}
+
 /** Empty canvas: place a table here, view commands. */
 export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const sheetId = ctx.sections?.sheetId ?? null;
+  const viewOnly = ctx.editable
+    ? sheetId !== null && isSheetLocked(ctx.gd, sheetId)
+      ? lockText('sheet')
+      : undefined
+    : VIEW_ONLY;
   return [
     {
       kind: 'item',
@@ -984,6 +1065,7 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
         ctx.canvas.addGraph?.();
       },
     },
+    ...sectionAddEntries(ctx),
     sep('s-view'),
     {
       kind: 'item',
@@ -1035,6 +1117,23 @@ export function sheetMenuEntries(
         ctx.sheets.rename(target.sheetId);
       },
     },
+    ...(ctx.sections === undefined
+      ? []
+      : [
+          sep('s-lock'),
+          {
+            kind: 'item' as const,
+            id: 'sheet-lock',
+            label: translate(
+              activeLocale(),
+              isSheetLocked(ctx.gd, target.sheetId) ? 'lock.sheetOff' : 'lock.sheet',
+            ),
+            disabledReason: viewOnly,
+            onSelect: () => {
+              ctx.sections?.setSheetLocked(target.sheetId, !isSheetLocked(ctx.gd, target.sheetId));
+            },
+          },
+        ]),
     sep('s-delete'),
     {
       kind: 'item',
@@ -1042,7 +1141,10 @@ export function sheetMenuEntries(
       label: 'Delete sheet',
       shortcut: SHEET_KEYS.remove,
       danger: true,
-      disabledReason: viewOnly ?? (isLastSheet(ctx.gd) ? LAST_SHEET_REASON : undefined),
+      disabledReason:
+        viewOnly ??
+        (isSheetLocked(ctx.gd, target.sheetId) ? lockText('sheet') : undefined) ??
+        (isLastSheet(ctx.gd) ? LAST_SHEET_REASON : undefined),
       onSelect: () => {
         ctx.sheets.remove(target.sheetId);
       },
@@ -1050,18 +1152,47 @@ export function sheetMenuEntries(
   ];
 }
 
+/**
+ * SET-18: a table in a locked section or sheet reads as view-only for its menus — every
+ * command that writes is disabled — but says why: “the section is locked”, “the sheet is
+ * locked” in place of “you have view-only access”.
+ */
+function lockedEntries(ctx: MenuContext, build: (ctx: MenuContext) => MenuEntry[], tableId: Id) {
+  const reason = ctx.editable ? lockReasonOfTable(ctx.gd, tableId) : null;
+  if (reason === null) return build(ctx);
+  const text = lockText(reason);
+  const swap = (disabledReason: string | undefined) =>
+    disabledReason === VIEW_ONLY ? text : disabledReason;
+  return build({ ...ctx, editable: false }).map((entry): MenuEntry => {
+    switch (entry.kind) {
+      case 'item':
+      case 'check':
+        return { ...entry, disabledReason: swap(entry.disabledReason) };
+      case 'radio':
+        return {
+          ...entry,
+          options: entry.options.map((o) => ({ ...o, disabledReason: swap(o.disabledReason) })),
+        };
+      case 'separator':
+        return entry;
+    }
+  });
+}
+
 export function menuEntriesFor(ctx: MenuContext, target: MenuTarget): MenuEntry[] {
   switch (target.kind) {
     case 'cell':
-      return cellMenuEntries(ctx, target);
+      return lockedEntries(ctx, (c) => cellMenuEntries(c, target), target.tableId);
     case 'column':
-      return columnMenuEntries(ctx, target);
+      return lockedEntries(ctx, (c) => columnMenuEntries(c, target), target.tableId);
     case 'table':
-      return tableMenuEntries(ctx, target);
+      return lockedEntries(ctx, (c) => tableMenuEntries(c, target), target.tableId);
     case 'graph':
       return graphMenuEntries(ctx, target);
     case 'sheet':
       return sheetMenuEntries(ctx, target);
+    case 'section':
+      return sectionMenuEntries(ctx, target);
     case 'canvas':
       return canvasMenuEntries(ctx);
   }
@@ -1080,6 +1211,8 @@ export function menuLabelFor(target: MenuTarget): string {
       return 'Graph menu';
     case 'sheet':
       return 'Sheet menu';
+    case 'section':
+      return 'Section menu';
     case 'canvas':
       return 'Canvas menu';
   }

@@ -7,7 +7,8 @@ import * as Y from 'yjs';
 
 import { parse } from '../formula/parser.js';
 import { effectiveDepths, hasDescendants } from '../hier/outline.js';
-import { rowHidden } from './geometry.js';
+import { rowHidden, tableWidthUnits } from './geometry.js';
+import { clampToSection } from './sections.js';
 import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
 import { snapPoint, snapSizeToUnits, type LatticeUnits, type Pixels } from '../lattice.js';
 import {
@@ -227,7 +228,9 @@ export function createTable(gd: GedeDoc, options: CreateTableOptions): Id {
       'title',
       options.title ?? `Table ${String(tablesOnSheet(gd, options.sheetId).length + 1)}`,
     );
-    map.set('gridCol', origin.col);
+    // SET-17: a table put inside a section snaps within it.
+    const width = columnCount + (options.kind === 'family' ? 1 : 0);
+    map.set('gridCol', clampToSection(gd, options.sheetId, origin.col, width));
     map.set('gridRow', origin.row);
     if (options.kind !== undefined && options.kind !== 'plain') map.set('kind', options.kind);
     const columns = new Y.Array<ColumnMap>();
@@ -355,7 +358,16 @@ export function setTablePosition(gd: GedeDoc, tableId: Id, at: LatticeUnits | Pi
   const origin = isPixels(at) ? snapPoint(at) : snapUnits(at);
   transact(gd, () => {
     const table = requireTable(gd, tableId);
-    table.set('gridCol', origin.col);
+    // SET-17: a table put inside a section snaps within it.
+    table.set(
+      'gridCol',
+      clampToSection(
+        gd,
+        readString(table, 'sheetId'),
+        origin.col,
+        tableWidthUnits(tableRecord(table)),
+      ),
+    );
     table.set('gridRow', origin.row);
   });
 }

@@ -14,6 +14,7 @@
  *     size, a bounded send buffer that is cut immediately when exceeded;
  *   - hands every accepted update to the persistence writer.
  */
+import { applyGuardedUpdate, openDocument } from '@gede/core';
 import * as decoding from 'lib0/decoding';
 import type { WebSocket } from 'ws';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -150,6 +151,8 @@ export interface RoomStats {
   oversized: number;
   /** Updates refused because the document would exceed `DOC_MAX_BYTES`; the socket is closed 4413 (#99). */
   tooLarge: number;
+  /** Updates dropped because they edit a table in a locked section or sheet (SET-18). */
+  lockedEdits: number;
   /** Sockets closed for not reading (buffered bytes over the limit, #37). */
   slowConsumers: number;
   /** Connections closed for sending updates faster than the limit (#37). */
@@ -191,6 +194,7 @@ export class Room {
     malformed: 0,
     oversized: 0,
     tooLarge: 0,
+    lockedEdits: 0,
     slowConsumers: 0,
     rateLimited: 0,
     bytesRateLimited: 0,
@@ -540,7 +544,15 @@ export class Room {
       return;
     }
     try {
-      Y.applyUpdate(this.doc, update, conn);
+      // SET-18: an edit to a locked table is applied, then the table is put back as it was
+      // (dropping the update would strand every later one from that client). The socket stays
+      // open: a client that checks the lock never sends one, so this is a race with the lock
+      // or a client that does not check (the notice channel carries no other code, protocol.ts).
+      const locked = applyGuardedUpdate(openDocument(this.doc), update, conn);
+      if (locked.length > 0) {
+        this.stats.lockedEdits += 1;
+        this.refuse(conn, 'locked', { tables: locked }, 'update edited a locked table; restored');
+      }
     } catch (error) {
       // Decoded but not integrable: refused the same way, and noted at warn
       // because it is a case decoding should have caught.

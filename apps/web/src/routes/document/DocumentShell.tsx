@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
+  addSection,
   cellAddress,
   cellRich,
   createSheet,
@@ -10,9 +11,18 @@ import {
   graphById,
   graphsOnSheet,
   isLastSheet,
+  isSheetLocked,
   LATTICE,
+  listSections,
   listSheets,
+  lockReasonAt,
+  lockReasonOfTable,
+  nextSectionRange,
+  renameSection,
   renameSheet,
+  sectionLockReason,
+  setSectionLocked,
+  setSheetLocked,
   sheetBounds,
   sheetEdgesShown,
   tableById,
@@ -79,6 +89,7 @@ import { MatchHighlights } from './find/MatchHighlights.js';
 import { matchBounds } from './find/match-geometry.js';
 import { useFind, type FindNavigation } from './find/useFind.js';
 import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2/formulas mount points
+import { sentence } from './grid/commands.js';
 import { pinnedPanelOffset } from './grid/pinned.js';
 import type { RenameResult, RenameTarget, TableRenaming } from './grid/rename.js';
 import { DocumentMenu } from './grid/DocumentMenu.js';
@@ -115,8 +126,9 @@ import { AddTableDialog } from './sets/AddTableDialog.js';
 import { FillColumnDialog } from './sets/FillColumnDialog.js';
 import { addTableOfKind, fillColumnWith, pickDisplay, type SetPick } from './sets/set-tables.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
-import type { MenuContext } from './menus/entries.js';
+import { menuEntriesFor, type MenuContext } from './menus/entries.js';
 import { SheetTabs, type SheetEditing } from './SheetTabs.js';
+import { SheetStructure } from './sets/SheetStructure.js';
 import {
   deletedSheetAnnouncement,
   deletedSheetTitle,
@@ -462,6 +474,10 @@ function OpenDocument({
         return;
       }
       if (listSheets(gd).every((s) => s.id !== sheetId)) return; // already gone
+      if (isSheetLocked(gd, sheetId)) {
+        announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
+        return;
+      }
       const wasActive = sheetId === activeSheetId;
       session.undo.stopCapturing();
       const result = deleteSheet(gd, sheetId);
@@ -671,6 +687,23 @@ function OpenDocument({
         (bounds === null
           ? { col: 1, row: 1 }
           : { col: bounds.col, row: bounds.row + bounds.rows + 1 });
+      // SET-18: nothing is added in a locked section or on a locked sheet.
+      const lock = lockReasonAt(
+        gd,
+        activeSheetId,
+        'col' in origin ? origin.col : Math.floor(origin.x / LATTICE.col),
+      );
+      if (lock !== null) {
+        announce(
+          sentence(
+            translate(
+              activeLocale,
+              lock === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+            ),
+          ),
+        );
+        return;
+      }
       const id = addTableOfKind(gd, { sheetId: activeSheetId, at: origin, kind, pick });
       if (id === null) return;
       const record = tableById(gd, id);
@@ -680,12 +713,89 @@ function OpenDocument({
     },
     [gd, activeSheetId, editable, reveal, selectTable, activeLocale],
   );
+  // SET-17, SET-18: sections are named lanes; Rename section… is an inline field on the heading.
+  const [renamingSection, setRenamingSection] = useState<Id | null>(null);
+  const addSectionHere = useCallback(() => {
+    if (activeSheetId === null || !editable) return;
+    if (isSheetLocked(gd, activeSheetId)) {
+      announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
+      return;
+    }
+    const name = translate(activeLocale, 'section.defaultName', {
+      n: listSections(gd, activeSheetId).length + 1,
+    });
+    session.undo.stopCapturing();
+    const id = addSection(gd, activeSheetId, { name, ...nextSectionRange(gd, activeSheetId) });
+    session.undo.stopCapturing();
+    if (id !== null) announce(translate(activeLocale, 'section.added', { name }));
+  }, [gd, session, activeSheetId, editable, activeLocale]);
+  const commitSectionRename = useCallback(
+    (sectionId: Id, name: string): RenameResult => {
+      if (activeSheetId === null || !editable) return { ok: false, reason: '' };
+      const lock = sectionLockReason(gd, activeSheetId, sectionId);
+      if (lock !== null) {
+        const reason = sentence(
+          translate(
+            activeLocale,
+            lock === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+          ),
+        );
+        announce(reason);
+        return { ok: false, reason };
+      }
+      session.undo.stopCapturing();
+      const written = renameSection(gd, activeSheetId, sectionId, name);
+      session.undo.stopCapturing();
+      if (!written) return { ok: false, reason: translate(activeLocale, 'section.rename.empty') };
+      setRenamingSection(null);
+      announce(translate(activeLocale, 'section.renamed', { name: name.trim() }));
+      return { ok: true };
+    },
+    [gd, session, activeSheetId, editable, activeLocale],
+  );
+  // Lock and Unlock say what they did, once, in the live region (“Locked {name}”).
+  const lockSection = useCallback(
+    (sheetId: Id, sectionId: Id, locked: boolean) => {
+      const name = listSections(gd, sheetId).find((s) => s.id === sectionId)?.name ?? '';
+      session.undo.stopCapturing();
+      if (setSectionLocked(gd, sheetId, sectionId, locked)) {
+        announce(translate(activeLocale, locked ? 'lock.status' : 'lock.unlocked', { name }));
+      }
+      session.undo.stopCapturing();
+    },
+    [gd, session, activeLocale],
+  );
+  const lockSheet = useCallback(
+    (sheetId: Id, locked: boolean) => {
+      const name = listSheets(gd).find((s) => s.id === sheetId)?.label ?? '';
+      session.undo.stopCapturing();
+      if (setSheetLocked(gd, sheetId, locked)) {
+        announce(translate(activeLocale, locked ? 'lock.status' : 'lock.unlocked', { name }));
+      }
+      session.undo.stopCapturing();
+    },
+    [gd, session, activeLocale],
+  );
   const fillColumn = useCallback(
     (pick: SetPick) => {
       if (fillTarget === null) return;
       const { tableId, colId } = fillTarget;
       if (!editable) {
         setFillTarget(null);
+        return;
+      }
+      // SET-18: a lock set while the dialog was open stops the Fill.
+      const lock = lockReasonOfTable(gd, tableId);
+      if (lock !== null) {
+        setFillTarget(null);
+        announce(
+          sentence(
+            translate(
+              activeLocale,
+              lock === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+            ),
+          ),
+        );
         return;
       }
       const label = tableById(gd, tableId)?.columns.find((c) => c.id === colId)?.label ?? '';
@@ -1013,6 +1123,17 @@ function OpenDocument({
       },
     },
     sheets: { add: appendSheet, rename: setRenamingSheetId, remove: removeSheet },
+    sections: editable
+      ? {
+          sheetId: activeSheetId,
+          add: addSectionHere,
+          rename: (_sheetId, sectionId) => {
+            setRenamingSection(sectionId);
+          },
+          setLocked: lockSection,
+          setSheetLocked: lockSheet,
+        }
+      : undefined,
     // ADR-051: the pointer route to the inline name field on a title or a column header.
     rename: editable ? setRenamingTarget : undefined,
     selectTable,
@@ -1362,6 +1483,26 @@ function OpenDocument({
                     })
               }
             >
+              {/* SET-13..18: section lanes under the tables, the summaries and U beneath them. */}
+              {activeSheetId !== null && (
+                <SheetStructure
+                  gd={gd}
+                  sheetId={activeSheetId}
+                  editable={editable}
+                  renaming={renamingSection}
+                  commitRename={commitSectionRename}
+                  cancelRename={() => {
+                    setRenamingSection(null);
+                  }}
+                  menuEntries={(sectionId) =>
+                    menuEntriesFor(menuContext, {
+                      kind: 'section',
+                      sheetId: activeSheetId,
+                      sectionId,
+                    })
+                  }
+                />
+              )}
               {visibleTables.map((t) => {
                 const map = tableMap(gd, t.id);
                 if (map === null) return null;

@@ -51,11 +51,13 @@ export function useAppearanceScope(
   editable: boolean,
   commands: GridCommands,
   what: string,
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string,
 ): AppearanceScope {
   const [scope, setScope] = useState<AppearanceScopeKind>('column');
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
   const address = cell === null ? null : cellAddress(table, cell.rowId, cell.colId);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const disabledReason = viewOnly ?? (column === null ? 'select a cell first' : undefined);
   const override =
     cell === null || column === null ? null : cellAppearanceOverride(table, cell.rowId, column.id);
