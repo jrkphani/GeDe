@@ -909,7 +909,8 @@ export const TableView = memo(function TableView({
                           'gd-table__row--banded': rowInBand,
                           // SET-12: a row whose element left the result, kept for its typed values.
                           // Dimmed only while a computed column on screen says so in words.
-                          'gd-table__row--lost': rowMetaOf.lostFrom !== null && lostColumn !== null,
+                          'gd-table__row--lost':
+                            rowMetaOf.lostFrom !== null && lostColumn !== null && lostSets !== null,
                         })}
                         role="row"
                         data-lit={litRows.has(rowId) || undefined}

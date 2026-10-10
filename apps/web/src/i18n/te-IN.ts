@@ -121,6 +121,7 @@ export const messages: Messages = {
 
   'set.lost': 'ఇక {sets}లో లేదు',
   'set.readOnly.computed': 'ఈ నిలువు వరుస లెక్కించబడుతుంది',
+  'set.rowComputed': 'ఈ వరుస లెక్కించబడుతుంది',
   'cell.readOnly': 'చదవడానికి మాత్రమే: {reason}',
   'cell.readOnly.announce': '{cell} చదవడానికి మాత్రమే: {reason}',
   'cell.readOnly.announceUnaddressed': 'ఈ సెల్ చదవడానికి మాత్రమే: {reason}',

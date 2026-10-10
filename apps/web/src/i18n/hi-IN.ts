@@ -120,6 +120,7 @@ export const messages: Messages = {
 
   'set.lost': 'अब {sets} में नहीं',
   'set.readOnly.computed': 'यह स्तंभ परिकलित है',
+  'set.rowComputed': 'यह पंक्ति परिकलित है',
   'cell.readOnly': 'केवल पढ़ने के लिए: {reason}',
   'cell.readOnly.announce': '{cell} केवल पढ़ने के लिए है: {reason}',
   'cell.readOnly.announceUnaddressed': 'यह सेल केवल पढ़ने के लिए है: {reason}',

@@ -9,12 +9,17 @@
  * engine: after every batch of results the pieces of each table's split
  * column are read off the results and materialised as rows. Values are never
  * computed here; the engine's Worker did that. Computed tables are also kept
- * sound on every remote update (ADR-056 ruling d): a merge can refuse a Fill,
- * return a removed noted row or leave a row twice with no result changing.
+ * sound after every other update, remote or local (ADR-056 ruling d): a merge
+ * can refuse a Fill, return a removed noted row or leave a row twice, and a
+ * cleared note lets a lost row go (SET-12), with no result changing. That pass
+ * hands off no items: the cached result may still be the previous formula's (a
+ * Worker answers later), so removing and labelling rows by it would revert a
+ * peer's formula change; only a result batch fills rows.
  */
 import { useEffect } from 'react';
 import type * as Y from 'yjs';
 import {
+  COMPUTED_ORIGIN,
   computedItemsOf,
   observePulls,
   observeRefusedFills,
@@ -59,6 +64,12 @@ function install(doc: Y.Doc): () => void {
       reconcileComputed(gd, tableId, items, members);
     }
   };
+  // Ruling (d): the soundness pass, with no items (see the header).
+  const keepComputedSound = (): void => {
+    for (const { tableId } of computedItemsOf(gd, () => undefined)) {
+      reconcileComputed(gd, tableId, null);
+    }
+  };
   let running = false;
   const run = (): void => {
     if (running) return;
@@ -76,15 +87,17 @@ function install(doc: Y.Doc): () => void {
   };
   const stopResults = host.subscribeAll(run);
   run();
-  // Ruling (d): once per burst of remote updates, coalesced into one pass.
+  // Ruling (d): once per burst of updates other than its own, coalesced into one pass.
+  // ponytail: runs after every local edit too (a scan of each computed table's rows);
+  // gate on the transaction touching a computed table if keystrokes ever feel it.
   let queued = false;
   let stopped = false;
-  const onUpdate = (_update: Uint8Array, _origin: unknown, _doc: Y.Doc, tr: Y.Transaction) => {
-    if (tr.local || queued) return;
+  const onUpdate = (_update: Uint8Array, origin: unknown) => {
+    if (origin === COMPUTED_ORIGIN || queued) return;
     queued = true;
     queueMicrotask(() => {
       queued = false;
-      if (!stopped) fillComputed();
+      if (!stopped) keepComputedSound();
     });
   };
   doc.on('update', onUpdate);

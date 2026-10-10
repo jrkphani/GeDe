@@ -370,12 +370,12 @@ function settled(commands: GridCommands, settle: (() => void) | undefined): Grid
 
 /**
  * Why a row cannot be deleted, or undefined (ADR-056 ruling c): a computed row is the
- * formula's; changing the formula is how it goes. Inline English, as every menu reason is.
+ * formula's; changing the formula is how it goes. In the active locale.
  */
 export function rowDeleteReason(gd: GedeDoc, tableId: Id, rowId: Id): string | undefined {
   const table = tableMap(gd, tableId);
   return table !== null && rowMeta(table, rowId).computedKey !== null
-    ? 'the row is computed'
+    ? translate(activeLocale(), 'set.rowComputed')
     : undefined;
 }
 

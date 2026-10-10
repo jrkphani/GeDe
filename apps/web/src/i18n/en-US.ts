@@ -156,6 +156,8 @@ export const messages = {
   'set.lost': 'no longer in {sets}',
   // SET-08: the read-only reason of a computed column's cells.
   'set.readOnly.computed': 'the column is computed',
+  // SET-08 ruling (c): why Delete row is disabled on a computed row.
+  'set.rowComputed': 'the row is computed',
   // A read-only cell's accessible name; `{reason}` is one of the readOnly.* reasons below
   // or set.readOnly.computed.
   'cell.readOnly': 'Read-only: {reason}',
