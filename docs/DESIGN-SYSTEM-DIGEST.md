@@ -297,7 +297,7 @@ Not sent, because the PRD sends none: a welcome mail, a passkey-added notice, a 
 
 "Keyboard shortcuts — matches iCloud Numbers. Resolve every shortcut from `event.code`, not `event.key`, so they work on Tamil99, InScript and Remington layouts. No shortcut may be the only route to a command; each also appears beside its command in a menu or tooltip."
 
-**Document:** New workscape ⌘N · Open ⌘O · Print ⌘P · Close document ⌘W · Show shortcut sheet ?
+**Document:** Add workscape ⌘N · Open ⌘O · Print ⌘P · Close document ⌘W · Show shortcut sheet ?
 **Edit:** Undo / Redo ⌘Z · ⇧⌘Z · Cut / Copy / Paste ⌘X · ⌘C · ⌘V · Paste and match style ⌥⇧⌘V · Select all ⌘A · Delete contents ⌫
 **Find:** Find ⌘F · Find next / previous ⌘G · ⇧⌘G · Find and replace ⌥⌘F · Close find bar Esc
 **Format:** Bold / Italic / Underline ⌘B · ⌘I · ⌘U · Strikethrough ⇧⌘X · Superscript / Subscript ⌃⌘+ · ⌃⌘− · Format inspector ⌥⌘1 · Organize inspector ⌥⌘2

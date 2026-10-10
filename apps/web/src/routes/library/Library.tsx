@@ -983,7 +983,7 @@ function LibraryEmpty({
       <EmptyState
         label={VIEW_META[view].label.toLowerCase()}
         title="No workscapes yet"
-        description={`Tables, formulas and context graphs on one shared sheet. ${COPY.phone}: create one from a larger screen.`}
+        description={`Tables, formulas and context graphs on one shared sheet. ${COPY.phone}: add one from a larger screen.`}
       />
     );
   }

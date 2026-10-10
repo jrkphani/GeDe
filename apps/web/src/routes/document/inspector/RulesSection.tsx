@@ -34,6 +34,7 @@ import {
 } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
+import { useMessages } from '../../../i18n/index.js';
 import { ReasonedButton, Section } from './controls.js';
 
 export interface RulesSectionProps {
@@ -133,6 +134,7 @@ function styleWords(rule: ConditionalRule): string {
 }
 
 export function RulesSection({ tableId, column, disabledReason, commands }: RulesSectionProps) {
+  const t = useMessages();
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const condition = conditionOf(draft);
   const hasOutput =
@@ -157,7 +159,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
 
   return (
     <Section
-      label="conditional highlighting"
+      label={t('inspector.conditionalHighlighting')}
       hint={
         column === null
           ? 'Select a cell to add rules to its column.'
@@ -166,7 +168,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
     >
       <div className="gd-insp__stack">
         {rules.length > 0 && (
-          <ol className="gd-insp__rules" aria-label="Rules">
+          <ol className="gd-insp__rules" aria-label={t('inspector.rules')}>
             {rules.map((rule, i) => (
               <li key={rule.id} className="gd-insp__rule">
                 <span className="gd-mono gd-insp__rule-index">{i + 1}</span>
@@ -197,7 +199,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
                 </span>
                 <ReasonedButton
                   variant="ghost"
-                  label="Remove rule"
+                  label={t('inspector.removeRule')}
                   aria-label={`Remove rule ${String(i + 1)}: ${describeRule(rule)}`}
                   reason={disabledReason}
                   onClick={() => {
@@ -211,7 +213,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
           </ol>
         )}
         <Select
-          label="When the text"
+          label={t('inspector.whenTheText')}
           value={draft.trigger}
           disabledReason={disabledReason}
           onValueChange={(trigger) => {
@@ -221,7 +223,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
         />
         {textual && (
           <TextField
-            label="Text"
+            label={t('inspector.text')}
             value={draft.text}
             disabled={disabledReason !== undefined}
             onChange={(e) => {
@@ -231,7 +233,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
         )}
         {counted && (
           <TextField
-            label="Count"
+            label={t('inspector.count')}
             type="number"
             inputMode="numeric"
             min={0}
@@ -244,7 +246,7 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
         )}
         {!textual && !counted && (
           <Select
-            label="Chip"
+            label={t('inspector.chip')}
             value={draft.chip}
             disabledReason={disabledReason}
             onValueChange={(chip) => {
@@ -254,9 +256,9 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
           />
         )}
         <Select
-          label="Fill"
+          label={t('inspector.fill')}
           value={draft.fill}
-          placeholder="None"
+          placeholder={t('inspector.none')}
           clearLabel="None"
           disabledReason={disabledReason}
           onValueChange={(fill) => {
@@ -265,9 +267,9 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
           options={HIGHLIGHT_TOKENS.map((t) => ({ value: t, label: FILL_LABELS[t] }))}
         />
         <Select
-          label="Text colour"
+          label={t('inspector.textColour')}
           value={draft.textColour}
-          placeholder="Inherit"
+          placeholder={t('inspector.inherit')}
           clearLabel="Inherit"
           disabledReason={disabledReason}
           onValueChange={(textColour) => {
@@ -276,9 +278,9 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
           options={TEXT_COLOUR_TOKENS.map((t) => ({ value: t, label: TEXT_COLOUR_LABELS[t] }))}
         />
         <Select
-          label="Mark"
+          label={t('inspector.mark')}
           value={draft.mark}
-          placeholder="None"
+          placeholder={t('inspector.none')}
           clearLabel="None"
           disabledReason={disabledReason}
           onValueChange={(mark) => {
@@ -287,9 +289,9 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
           options={TOGGLE_MARKS.map((m) => ({ value: m, label: MARK_LABELS[m] }))}
         />
         <Select
-          label="Border"
+          label={t('inspector.border')}
           value={draft.border}
-          placeholder="None"
+          placeholder={t('inspector.none')}
           clearLabel="None"
           disabledReason={disabledReason}
           onValueChange={(border) => {
@@ -299,17 +301,17 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
         />
         {draft.border !== '' && (
           <Select
-            label="Border weight"
+            label={t('inspector.borderWeight')}
             value={draft.weight}
             disabledReason={disabledReason}
             onValueChange={(weight) => {
               set('weight', weight);
             }}
-            options={BORDER_WEIGHTS.map((w) => ({ value: w, label: WEIGHT_LABELS[w] }))}
+            options={BORDER_WEIGHTS.map((w) => ({ value: w, label: t(`inspector.${w}`) }))}
           />
         )}
         <ReasonedButton
-          label="Add a rule"
+          label={t('inspector.addARule')}
           reason={addReason}
           onClick={() => {
             if (column === null || condition === null) return;

@@ -191,12 +191,9 @@ export function TableTab({
 
   return (
     <>
-      <Section
-        label="table style"
-        hint="A header band and an alternating band from one ramp (the prototype's swatches)."
-      >
+      <Section label={t('inspector.tableStyle')} hint={t('inspector.aHeaderBandAnd')}>
         <SegmentedControl
-          label="Style"
+          label={t('inspector.style')}
           className="gd-insp__styles"
           value={look.style}
           disabled={viewOnly !== undefined}
@@ -215,13 +212,10 @@ export function TableTab({
           }))}
         />
       </Section>
-      <Section
-        label="title and caption"
-        hint="The title bar keeps its two lattice rows; the caption is one row at the foot. No address moves."
-      >
+      <Section label={t('inspector.titleAndCaption')} hint={t('inspector.theTitleBarKeeps')}>
         <div className="gd-insp__stack">
           <Switch
-            label="Title"
+            label={t('inspector.title')}
             checked={look.titleShown}
             disabled={!editable}
             onCheckedChange={(on) => {
@@ -233,7 +227,7 @@ export function TableTab({
               id-bound, so a rename breaks no formula (REF-01). */}
           <NameField
             key={record.id}
-            label="Title text"
+            label={t('inspector.titleText')}
             value={record.title}
             subject="the table"
             emptyReason={EMPTY_TABLE_TITLE_REASON}
@@ -265,7 +259,7 @@ export function TableTab({
           ) : (
             <>
               <Switch
-                label="Caption"
+                label={t('inspector.caption')}
                 checked={look.captionShown}
                 disabled={!editable}
                 onCheckedChange={(on) => {
@@ -275,8 +269,8 @@ export function TableTab({
               {look.captionShown && (
                 <CaptionField
                   gd={gd}
-                  label="Caption text"
-                  placeholder="What this table holds"
+                  label={t('inspector.captionText')}
+                  placeholder={t('inspector.whatThisTableHolds')}
                   tableId={record.id}
                   caption={look.caption}
                   editable={editable}
@@ -324,10 +318,10 @@ export function TableTab({
       {/* INSP-04 / GRID-11: header row, header column and footer row *counts* — 0 or 1 for the
           rows (the lattice has one header strip and one footer strip), any count short of every
           column for the frozen columns. This tab is their one home (DOC-02, ADR-041). */}
-      <Section label="headers and footer" hint="0 hides the strip, 1 shows it.">
+      <Section label={t('inspector.headersAndFooter')} hint={t('inspector.0HidesTheStrip')}>
         <div className="gd-insp__stack">
           <Stepper
-            label="Header rows"
+            label={t('inspector.headerRows')}
             unit={record.headerRows === 1 ? 'row' : 'rows'}
             name="header rows"
             value={record.headerRows}
@@ -340,8 +334,8 @@ export function TableTab({
             }}
           />
           <Select
-            label="Header columns"
-            hint="frozen"
+            label={t('inspector.headerColumns')}
+            hint={t('inspector.frozen')}
             value={String(record.frozenColumns)}
             disabledReason={viewOnly}
             onValueChange={(value) => {
@@ -349,11 +343,16 @@ export function TableTab({
             }}
             options={frozenOptions(columns).map((n) => ({
               value: String(n),
-              label: n === 0 ? 'None' : `${String(n)} ${n === 1 ? 'column' : 'columns'}`,
+              label:
+                n === 0
+                  ? t('inspector.none')
+                  : t(n === 1 ? 'inspector.columnCountOne' : 'inspector.columnCountOther', {
+                      count: n,
+                    }),
             }))}
           />
           <Stepper
-            label="Footer rows"
+            label={t('inspector.footerRows')}
             unit={record.footerRows === 1 ? 'row' : 'rows'}
             name="footer rows"
             value={record.footerRows}
@@ -367,10 +366,10 @@ export function TableTab({
           />
         </div>
       </Section>
-      <Section label="rows and columns" hint="− deletes the last row or column; + appends one.">
+      <Section label={t('inspector.rowsAndColumns')} hint={t('inspector.deletesTheLastRow')}>
         <div className="gd-insp__stack">
           <Stepper
-            label="Rows"
+            label={t('inspector.rows')}
             unit="rows"
             value={rows}
             min={lastRowReason === undefined ? 1 : rows}
@@ -382,7 +381,7 @@ export function TableTab({
             }}
           />
           <Stepper
-            label="Columns"
+            label={t('inspector.columns')}
             unit="columns"
             value={columns}
             min={1}
@@ -395,10 +394,10 @@ export function TableTab({
           />
         </div>
       </Section>
-      <Section label="outline and gridlines">
+      <Section label={t('inspector.outlineAndGridlines')}>
         <div className="gd-insp__stack">
           <Select
-            label="Table outline"
+            label={t('inspector.tableOutline')}
             value={look.outline}
             disabledReason={viewOnly}
             onValueChange={(outline) => {
@@ -407,8 +406,8 @@ export function TableTab({
             options={OUTLINE_WEIGHTS.map((w) => ({ value: w, label: OUTLINE_LABELS[w] }))}
           />
           <Select
-            label="Gridline density"
-            hint="this table"
+            label={t('inspector.gridlineDensity')}
+            hint={t('inspector.thisTable')}
             value={look.gridlines}
             disabledReason={viewOnly}
             onValueChange={(gridlines) => {
@@ -417,7 +416,7 @@ export function TableTab({
             options={GRIDLINE_DENSITIES.map((d) => ({ value: d, label: GRIDLINE_LABELS[d] }))}
           />
           <Switch
-            label="Alternating row colour"
+            label={t('inspector.alternatingRowColour')}
             checked={look.alternating}
             disabled={!editable}
             onCheckedChange={(on) => {
@@ -426,13 +425,10 @@ export function TableTab({
           />
         </div>
       </Section>
-      <Section
-        label="row and column size"
-        hint="Whole lattice units (22 px rows, 160 px columns at 100 %); addresses never move. Height and Width act on the selected rows and columns, or the whole table."
-      >
+      <Section label={t('inspector.rowAndColumnSize')} hint={t('inspector.wholeLatticeUnits22')}>
         <div className="gd-insp__stack">
           <SizeField
-            label="Height"
+            label={t('inspector.height')}
             value={rowUnits}
             unitPx={LATTICE.row}
             subject={rowSubject}
@@ -454,7 +450,7 @@ export function TableTab({
             }}
           />
           <SizeField
-            label="Width"
+            label={t('inspector.width')}
             value={columnUnits}
             unitPx={LATTICE.col}
             subject={columnSubject}
@@ -476,7 +472,7 @@ export function TableTab({
             }}
           />
           <Stepper
-            label="Table width"
+            label={t('inspector.tableWidth')}
             unit="units"
             value={visibleWidth}
             min={Math.max(1, record.columns.filter((c) => !c.hidden).length)}
@@ -489,14 +485,14 @@ export function TableTab({
           <div className="gd-insp__row">
             {/* Numbers N6 (ADR-049): the selected rows or columns, else every one, share their total. */}
             <ReasonedButton
-              label="Distribute rows evenly"
+              label={t('inspector.distributeRowsEvenly')}
               reason={viewOnly}
               onClick={() => {
                 commands.distributeEvenly(record.id, 'row', rowBand?.ids);
               }}
             />
             <ReasonedButton
-              label="Distribute columns evenly"
+              label={t('inspector.distributeColumnsEvenly')}
               reason={viewOnly}
               onClick={() => {
                 commands.distributeEvenly(record.id, 'column', columnBand?.ids);
@@ -505,12 +501,9 @@ export function TableTab({
           </div>
         </div>
       </Section>
-      <Section
-        label="wrap"
-        hint="The table's default: a cell, row or column can say otherwise (Text tab). Off, text clips at the cell; on, the row grows to show every line."
-      >
+      <Section label={t('inspector.wrap')} hint={t('inspector.theTableSDefault')}>
         <Switch
-          label="Wrap text in cells"
+          label={t('inspector.wrapTextInCells')}
           checked={look.wrap}
           disabled={!editable}
           onCheckedChange={(on) => {
@@ -521,7 +514,7 @@ export function TableTab({
       {/* ADR-051: the selected column's name — the home of Rename column (INSP-04, MENU-03);
           the header's inline field, F2, a double-click and the column menu are routes. */}
       <Section
-        label="column"
+        label={t('inspector.column2')}
         hint={
           namedColumn === null
             ? 'Select a column, or a cell in it, to rename it.'
@@ -531,7 +524,7 @@ export function TableTab({
         {/* Keyed by the column: a draft or a refusal for one column never shows for the next. */}
         <NameField
           key={namedColumn?.id ?? 'none'}
-          label="Name"
+          label={t('inspector.name')}
           value={namedColumn?.label ?? null}
           subject={namedColumn === null ? 'a column' : `column ${namedColumn.label}`}
           emptyReason={EMPTY_COLUMN_NAME_REASON}
@@ -544,19 +537,19 @@ export function TableTab({
         />
       </Section>
       {/* HIER-01: the selected row, its parent and depth, promote / nest, collapse. */}
-      <Section label="row">
+      <Section label={t('inspector.row2')}>
         {/* HIER-04 / ADR-052: the table's default outline column; a row nested from another
             column keeps its own. `first` is the sentinel for "no designation" (Radix refuses ''). */}
         <Select
-          label="Outline column"
-          hint="default"
+          label={t('inspector.outlineColumn')}
+          hint={t('inspector.default')}
           value={record.outlineColumn ?? OUTLINE_DEFAULT}
           disabledReason={viewOnly}
           onValueChange={(value) => {
             commands.setOutlineColumn(record.id, value === OUTLINE_DEFAULT ? null : value);
           }}
           options={[
-            { value: OUTLINE_DEFAULT, label: 'First visible column' },
+            { value: OUTLINE_DEFAULT, label: t('inspector.firstVisibleColumn') },
             ...record.columns
               .filter((c) => !c.hidden)
               .map((c) => ({ value: c.id, label: columnDisplayName(record, c.id) ?? c.label })),

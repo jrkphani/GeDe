@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { isEmptyQuery, parseQuery } from '@gede/core';
 import { describe, expect, test } from 'vitest';
 
@@ -11,7 +14,8 @@ const TRANSLATED_KEYS = MESSAGE_KEYS.filter(
     k.startsWith('tour.') ||
     k.startsWith('object.') ||
     k.startsWith('sheet.') ||
-    k.startsWith('auth.'),
+    k.startsWith('auth.') ||
+    k.startsWith('inspector.'),
 );
 
 const placeholders = (s: string): string[] =>
@@ -270,5 +274,30 @@ describe('message catalogue', () => {
     }
     expect(CATALOGUE['en-US']['menu.addRowAbove']).toBe('Add row above');
     expect(CATALOGUE['en-US']['menu.addColumnBefore']).toBe('Add column before');
+  });
+
+  test('SET-19 the inspector carries no literal English label, hint, title or placeholder', () => {
+    const dir = resolve(__dirname, '../routes/document/inspector');
+    const sources = readdirSync(dir)
+      .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+      .map((f) => resolve(dir, f));
+    const literal = /\b(label|aria-label|title|hint|placeholder|available)="[A-Za-z]/;
+    for (const file of sources) {
+      const hits = readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => literal.test(line));
+      expect(hits, file).toEqual([]);
+    }
+    for (const locale of LOCALES) {
+      expect(CATALOGUE[locale]['inspector.scope'], locale).not.toBe('');
+    }
+    expect(
+      Object.keys(CATALOGUE['ta-IN']).filter((k) => k.startsWith('inspector.')).length,
+    ).toBeGreaterThan(100);
+  });
+
+  test('SET-19 library phone copy says Add, not create', () => {
+    const src = readFileSync(resolve(__dirname, '../routes/library/Library.tsx'), 'utf8');
+    expect(src).not.toMatch(/\bcreate one\b/i);
   });
 });

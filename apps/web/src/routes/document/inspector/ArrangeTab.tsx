@@ -17,6 +17,7 @@ import {
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { useMessages } from '../../../i18n/index.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
@@ -43,6 +44,7 @@ export interface ArrangeTabProps {
  * their home and a command has one (ADR-041).
  */
 export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: ArrangeTabProps) {
+  const t = useMessages();
   // Stacking, edges and the sheet flag live outside this table's map.
   useYVersion(gd.tables);
   useYVersion(gd.sheets);
@@ -72,14 +74,14 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
   return (
     <>
       <Section
-        label="stacking order"
+        label={t('inspector.stackingOrder')}
         hint={
           stack === null
             ? undefined
             : `${record.title} is ${String(stack.index + 1)} of ${String(stack.count)}, back to front.`
         }
       >
-        <div className="gd-insp__row" role="group" aria-label="Stacking order">
+        <div className="gd-insp__row" role="group" aria-label={t('inspector.stackingOrder2')}>
           {STACKING_MOVES.map((m) => (
             <ReasonedButton
               key={m}
@@ -92,11 +94,8 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
           ))}
         </div>
       </Section>
-      <Section
-        label="canvas layout"
-        hint="Places every table on this sheet at once; positions stay on the lattice and every address follows its table."
-      >
-        <div className="gd-insp__row" role="group" aria-label="Canvas layout">
+      <Section label={t('inspector.canvasLayout')} hint={t('inspector.placesEveryTableOn')}>
+        <div className="gd-insp__row" role="group" aria-label={t('inspector.canvasLayout2')}>
           {CANVAS_LAYOUTS.map((layout) => (
             <ReasonedButton
               key={layout}
@@ -109,27 +108,24 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
           ))}
         </div>
       </Section>
-      <Section label="size" hint="Whole lattice units; change the width from the Table tab.">
+      <Section label={t('inspector.size')} hint={t('inspector.wholeLatticeUnitsChange')}>
         <dl className="gd-insp__facts">
           <div>
-            <dt>Width</dt>
+            <dt>{t('inspector.width')}</dt>
             <dd className="gd-mono">
               {formatNumber(locale, width)} units · {formatNumber(locale, width * LATTICE.col)} px
             </dd>
           </div>
           <div>
-            <dt>Rows</dt>
+            <dt>{t('inspector.rows')}</dt>
             <dd className="gd-mono">{formatNumber(locale, record.rows.length)}</dd>
           </div>
         </dl>
       </Section>
-      <Section
-        label="position"
-        hint="Tables snap to the 160 × 22 grid, so A1 addressing stays exact."
-      >
+      <Section label={t('inspector.position')} hint={t('inspector.tablesSnapToThe')}>
         <div className="gd-insp__stack">
           <Stepper
-            label="Column"
+            label={t('inspector.column')}
             unit="column"
             value={record.gridCol}
             min={0}
@@ -140,7 +136,7 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
             }}
           />
           <Stepper
-            label="Row"
+            label={t('inspector.row')}
             unit="row"
             value={record.gridRow + 1}
             min={1}
@@ -152,14 +148,14 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
           />
           <dl className="gd-insp__facts">
             <div>
-              <dt>Address</dt>
+              <dt>{t('inspector.address')}</dt>
               <dd className="gd-mono">
                 {columnLetter(record.gridCol)}
                 {record.gridRow + 1}
               </dd>
             </div>
             <div>
-              <dt>Pixels</dt>
+              <dt>{t('inspector.pixels')}</dt>
               <dd className="gd-mono">
                 {formatNumber(locale, record.gridCol * LATTICE.col)} ×{' '}
                 {formatNumber(locale, record.gridRow * LATTICE.row)}
@@ -168,41 +164,38 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
           </dl>
         </div>
       </Section>
-      <Section
-        label="viewport"
-        hint="A pinned table keeps its place on screen while the sheet pans; a ghost stays where it belongs. Pin and DAG edges toggle from the toolbar's Arrange cluster."
-      >
+      <Section label={t('inspector.viewport')} hint={t('inspector.aPinnedTableKeeps')}>
         <div className="gd-insp__stack">
-          <dl className="gd-insp__facts" aria-label="Viewport">
+          <dl className="gd-insp__facts" aria-label={t('inspector.viewport2')}>
             <div>
-              <dt>Pin to viewport</dt>
+              <dt>{t('inspector.pinToViewport')}</dt>
               <dd className="gd-mono" data-testid="arrange-pinned">
                 {record.pinned ? 'pinned' : 'not pinned'}
               </dd>
             </div>
             <div>
-              <dt>DAG edges</dt>
+              <dt>{t('inspector.dagEdges')}</dt>
               <dd className="gd-mono" data-testid="arrange-edges">
                 {edgesShown ? 'shown' : 'hidden'}
               </dd>
             </div>
           </dl>
-          <dl className="gd-insp__facts" aria-label="Lineage">
+          <dl className="gd-insp__facts" aria-label={t('inspector.lineage')}>
             <div>
-              <dt>Reads from</dt>
+              <dt>{t('inspector.readsFrom')}</dt>
               <dd className="gd-mono">
                 {formatNumber(locale, mine.in)} {mine.in === 1 ? 'table' : 'tables'}
               </dd>
             </div>
             <div>
-              <dt>Read by</dt>
+              <dt>{t('inspector.readBy')}</dt>
               <dd className="gd-mono">
                 {formatNumber(locale, mine.out)} {mine.out === 1 ? 'table' : 'tables'}
               </dd>
             </div>
             {mine.crossSheet > 0 && (
               <div>
-                <dt>Across sheets</dt>
+                <dt>{t('inspector.acrossSheets')}</dt>
                 <dd className="gd-mono">
                   {formatNumber(locale, mine.crossSheet)} — reported, not drawn
                 </dd>
