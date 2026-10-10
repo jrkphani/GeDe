@@ -79,8 +79,23 @@ const MEMBERS = 'computedMembers';
  */
 const FILLED = 'computedRows';
 
-/** Column key: set when a Fill column was refused after a merge (`observeRefusedFills`). */
+/**
+ * Column key: set when a Fill column was refused after a merge (`observeRefusedFills`):
+ * `true` when a cell of it held a typed value, `'formula'` when another Fill of the same
+ * table won (`FORMULA_FILL`).
+ */
 const REFUSED = 'fillRefused';
+
+/**
+ * Table key: the Fill column step whose formula the table holds (`fillColumns`). Written
+ * with the formula, in the same transaction, so two concurrent Fills of one table leave
+ * the formula and this key from the same step; the other step's columns are then refused
+ * after the merge (ADR-056 ruling a), never left following a formula they were not filled with.
+ */
+const FORMULA_FILL = 'computedFill';
+
+/** Why a Fill column was refused after a merge. */
+export type FillRefusal = 'typed' | 'formula';
 
 /**
  * Table key: every row id the reconciler has given a key, with that key. A row and its
@@ -298,8 +313,42 @@ export function setComputedColumns(
   tableId: Id,
   columns: readonly { readonly colId: Id; readonly spec: ComputedSpec }[],
 ): boolean {
+  return markComputed(gd, tableId, columns) !== null;
+}
+
+/**
+ * SET-10, ADR-056 ruling (a): Fill column with formula…, as one undo step — the columns
+ * made computed (`setComputedColumns`) and the table's one formula (`setTableFormula`),
+ * stamped with this step (`FORMULA_FILL`) so a concurrent Fill of another column of the
+ * same table is refused after the merge rather than silently following this formula.
+ * False, writing nothing, when a column holds a typed value or the formula is no set.
+ */
+export function fillColumns(
+  gd: GedeDoc,
+  tableId: Id,
+  columns: readonly { readonly colId: Id; readonly spec: ComputedSpec }[],
+  formula: string,
+): boolean {
   const table = gd.tables.get(tableId);
-  if (table === undefined || columns.length === 0) return false;
+  if (table === undefined || !isSetFormula(formula)) return false;
+  let ok = false;
+  gd.doc.transact(() => {
+    const fill = markComputed(gd, tableId, columns);
+    if (fill === null) return;
+    table.set(FORMULA_FILL, fill);
+    ok = setTableFormula(gd, tableId, formula);
+  }, gd.origin);
+  return ok;
+}
+
+/** `setComputedColumns`, returning the step's id, or null when refused (nothing written). */
+function markComputed(
+  gd: GedeDoc,
+  tableId: Id,
+  columns: readonly { readonly colId: Id; readonly spec: ComputedSpec }[],
+): string | null {
+  const table = gd.tables.get(tableId);
+  if (table === undefined || columns.length === 0) return null;
   const maps = columnsArray(table).toArray();
   const targets = columns.map(({ colId, spec }) => ({
     spec,
@@ -307,10 +356,10 @@ export function setComputedColumns(
   }));
   const rows = rowsArray(table).toArray();
   for (const { map } of targets) {
-    if (map === undefined) return false;
+    if (map === undefined) return null;
     const colId = readString(map, 'id');
     if (map.get('source') !== 'computed' && rows.some((r) => cellText(table, r, colId) !== '')) {
-      return false;
+      return null;
     }
   }
   // A spread is one unit, however many steps made it: a spread column joins the table's
@@ -331,7 +380,7 @@ export function setComputedColumns(
       map.delete('pull');
     }
   }, gd.origin);
-  return true;
+  return fill;
 }
 
 /** What the engine hands the main thread for one computed table (SPEC §2.4). */
@@ -479,6 +528,31 @@ export function reconcileComputed(
         if (refused.has(id)) map.set(REFUSED, true);
         writes += 1;
       }
+    }
+    // ADR-056 ruling (a) after a merge: two people filled different columns of this table at
+    // once. The formula is one step's (`FORMULA_FILL`); the other step's columns are refused —
+    // a column a person filled holds typed values again, one a re-fit added for it goes — so
+    // no column shows a formula it was not filled with.
+    const owner = table.get(FORMULA_FILL);
+    if (typeof owner === 'string') {
+      const losing = computedColumns(tableRecord(table).columns).filter(
+        (c) => c.computed.fill !== undefined && c.computed.fill !== owner,
+      );
+      const added = (c: (typeof losing)[number]): boolean =>
+        c.computed.shape === 'spread' &&
+        c.id === refitId(tableId, c.computed.fill ?? '', c.computed.spreadIndex ?? 0);
+      const reverted = new Set(losing.filter((c) => !added(c)).map((c) => c.id));
+      for (const c of losing) {
+        if (added(c)) writes += deleteColumn(gd, tableId, c.id) ? 1 : 0;
+      }
+      for (const map of columnsArray(table).toArray()) {
+        if (!reverted.has(readString(map, 'id')) || map.get('source') !== 'computed') continue;
+        map.set('source', 'entered');
+        map.delete('computed');
+        map.set(REFUSED, 'formula');
+        writes += 1;
+      }
+      if (losing.length > 0) record = tableRecord(table);
     }
     // SET-09 after a merge: two replicas re-fitting the spread at once leave a member twice,
     // or (a widen merged with a narrow) none at all.
@@ -644,21 +718,26 @@ export function computedOperandsLabel(displayFormula: string): string {
 }
 
 /**
- * SET-10 after a merge: `onRefused(tableId, colId)` once on each replica when a Fill
- * column is refused because a cell of the column holds a typed value (the reconciler
- * sets the column back to entered, here or on another replica). Returns the stop.
+ * SET-10 after a merge: `onRefused(tableId, colId, reason)` once on each replica when a
+ * Fill column is refused — `typed` when a cell of the column holds a typed value,
+ * `formula` when another person's concurrent Fill of the same table won (ADR-056 ruling
+ * a) — the reconciler sets the column back to entered, here or on another replica.
+ * Returns the stop.
  */
 export function observeRefusedFills(
   gd: GedeDoc,
-  onRefused: (tableId: Id, colId: Id) => void,
+  onRefused: (tableId: Id, colId: Id, reason: FillRefusal) => void,
 ): () => void {
   const observer = (events: Y.YEvent<Y.AbstractType<unknown>>[]): void => {
     for (const event of events) {
       const column = event.target;
+      // `add` only: a refused column is filled again only after `markComputed` clears the flag,
+      // and two replicas refusing it at once merge into an `update` already announced.
       if (!(column instanceof Y.Map) || event.changes.keys.get(REFUSED)?.action !== 'add') continue;
       const table = column.parent?.parent;
       if (!(table instanceof Y.Map) || table.parent !== gd.tables) continue;
-      onRefused(readString(table as Y.Map<unknown>, 'id'), readString(column, 'id'));
+      const reason: FillRefusal = column.get(REFUSED) === 'formula' ? 'formula' : 'typed';
+      onRefused(readString(table as Y.Map<unknown>, 'id'), readString(column, 'id'), reason);
     }
   };
   gd.tables.observeDeep(observer);

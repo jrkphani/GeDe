@@ -2,7 +2,7 @@
  * Add table's kind picker and Fill column's dialog (SET-01, SET-09, SET-10, DOC-02) over a
  * real Yjs document: the set tables offered are the sheet's own.
  */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
@@ -109,11 +109,11 @@ describe('SET-01 Add table asks the kind', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Add a computed table' });
     expect(within(dialog).queryByRole('radiogroup', { name: 'Operation' })).toBeNull();
     expect(within(dialog).getByTestId('set-picker-formula')).toHaveTextContent('= Cross(E, C)');
-    // Two sets is the least: no Remove until a third is added.
-    expect(within(dialog).queryByRole('button', { name: /^Remove set/ })).toBeNull();
+    // Two sets is the least: no Delete until a third is added (SET-19: Delete, not Remove).
+    expect(within(dialog).queryByRole('button', { name: /^(Remove|Delete) set/ })).toBeNull();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Add another set' }));
     expect(within(dialog).getByTestId('set-picker-formula')).toHaveTextContent('= Cross(E, C, C)');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove set 2' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete set 2' }));
     expect(within(dialog).getByTestId('set-picker-formula')).toHaveTextContent('= Cross(E, C)');
     const shape = within(dialog).getByRole('radiogroup', { name: 'Each tuple goes in' });
     expect(within(shape).getByRole('radio', { name: /^One column per set/ })).toBeChecked();
@@ -146,11 +146,13 @@ describe('SET-10 Fill column with formula…', () => {
   it('SET-10 SET-09 the dialog names the column, offers every set operation and confirms with Fill column', async () => {
     const e = set('E', 1);
     const c = set('C', 4);
+    const plain = createTable(gd, { sheetId, at: { col: 1, row: 10 }, columns: 2, rows: 0 });
     const onFill = vi.fn();
     render(
       <FillColumnDialog
         gd={gd}
         sheetId={sheetId}
+        tableId={plain}
         column="Column 1"
         open
         onOpenChange={vi.fn()}
@@ -163,5 +165,79 @@ describe('SET-10 Fill column with formula…', () => {
     expect(within(ops).getByRole('radio', { name: /^Cross/ })).toBeChecked();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Fill column' }));
     expect(onFill).toHaveBeenCalledWith({ op: 'Cross', sets: [e, c], shape: 'spread' });
+  });
+});
+
+describe('Phase 3 red-team regressions', () => {
+  it('SET-01 I18N-01 Enter with keyCode 229 (an IME commit) adds nothing', async () => {
+    const onAdd = vi.fn();
+    render(<AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={onAdd} />);
+    const plain = await screen.findByRole('radio', { name: /^Plain table/ });
+    fireEvent.keyDown(plain, { code: 'Enter', key: 'Enter', keyCode: 229 });
+    expect(onAdd).not.toHaveBeenCalled();
+    fireEvent.keyDown(plain, { code: 'Enter', key: 'Enter', keyCode: 13 });
+    expect(onAdd).toHaveBeenCalledWith('plain');
+  });
+
+  it('SET-09 SET-01 Pick sets moves focus to the checked operation card, named once', async () => {
+    set('E', 1);
+    set('C', 4);
+    render(
+      <AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByRole('radio', { name: /^Computed by formula/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Pick sets' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a computed table' });
+    const union = within(dialog).getByRole('radio', { name: /^Union/ });
+    await waitFor(() => {
+      expect(union).toHaveFocus();
+    });
+    // The operation is one radio group under a visible heading, not a group inside a group
+    // with the same name, so a screen reader says "Operation" once.
+    expect(within(dialog).getByRole('radiogroup', { name: 'Operation' })).toBeInTheDocument();
+    expect(within(dialog).queryAllByRole('group', { name: 'Operation' })).toHaveLength(0);
+  });
+
+  it('SET-10 SET-02 Fill column does not offer the table being filled as its own operand', async () => {
+    const e = set('E', 1);
+    const c = set('C', 4);
+    render(
+      <FillColumnDialog
+        gd={gd}
+        sheetId={sheetId}
+        tableId={e}
+        column="range"
+        open
+        onOpenChange={vi.fn()}
+        onFill={vi.fn()}
+      />,
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Fill range with a formula' });
+    // Only C is left on the sheet besides E, so the picker's first pick is C twice.
+    expect(within(dialog).getByTestId('set-picker-formula').textContent).toBe('= Cross(C, C)');
+    expect(c).not.toBe(e);
+  });
+
+  it('SET-10 a set a peer renames while the dialog is open shows its new title', async () => {
+    set('E', 1);
+    const c = set('C', 4);
+    const plain = createTable(gd, { sheetId, at: { col: 1, row: 10 }, columns: 2, rows: 0 });
+    render(
+      <FillColumnDialog
+        gd={gd}
+        sheetId={sheetId}
+        tableId={plain}
+        column="Column 1"
+        open
+        onOpenChange={vi.fn()}
+        onFill={vi.fn()}
+      />,
+    );
+    const formula = await screen.findByTestId('set-picker-formula');
+    expect(formula.textContent).toBe('= Cross(E, C)');
+    act(() => {
+      setTableTitle(gd, c, 'Colours');
+    });
+    expect(formula.textContent).toBe('= Cross(E, Colours)');
   });
 });

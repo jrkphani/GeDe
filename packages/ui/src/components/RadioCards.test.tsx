@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -47,5 +47,35 @@ describe('RadioCards', () => {
       'data-state',
       'checked',
     );
+  });
+
+  it('SET-01 I18N-01 Enter while an IME composes, or as keyCode 229, does not confirm', () => {
+    const onEnter = vi.fn();
+    render(<Harness onEnter={onEnter} />);
+    const plain = screen.getByRole('radio', { name: 'Plain table' });
+    fireEvent.keyDown(plain, { code: 'Enter', key: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(plain, { code: 'Enter', key: 'Enter', isComposing: true });
+    expect(onEnter).not.toHaveBeenCalled();
+    fireEvent.keyDown(plain, { code: 'Enter', key: 'Enter', keyCode: 13 });
+    expect(onEnter).toHaveBeenCalledTimes(1);
+  });
+
+  it('SET-09 A11Y-01 a group under a visible heading takes its name from it, once', () => {
+    render(
+      <>
+        <p id="shape-heading">Each tuple goes in</p>
+        <RadioCards<'a' | 'b'>
+          labelledBy="shape-heading"
+          value="a"
+          onChange={vi.fn()}
+          options={[
+            { value: 'a', label: 'One column' },
+            { value: 'b', label: 'One column per set' },
+          ]}
+        />
+      </>,
+    );
+    const group = screen.getByRole('radiogroup', { name: 'Each tuple goes in' });
+    expect(group).not.toHaveAttribute('aria-label');
   });
 });

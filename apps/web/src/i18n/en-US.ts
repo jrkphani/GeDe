@@ -167,6 +167,7 @@ export const messages = {
   'column.readOnly.announce': 'Column {column} is read-only: {reason}',
   // SET-10: Fill column refused after a merge, because another person typed into the column.
   'set.fillRefused': 'Column {column} is not filled: the column is not empty',
+  'set.fillSuperseded': 'Column {column} is not filled: the table follows another formula',
   'readOnly.derived': 'derived column',
   'readOnly.linked': 'linked column',
   'readOnly.pulled': 'pulled from another table',
@@ -206,12 +207,13 @@ export const messages = {
   'pick.secondSet': 'Second set',
   'pick.set': 'Set',
   'pick.factor': 'Set {n} of the product',
-  'pick.removeFactor': 'Remove set {n}',
+  'pick.removeFactor': 'Delete set {n}',
   'pick.addFactor': 'Add another set',
   'pick.order': 'Order matters: each row is an ordered tuple. A set may appear twice, as in E × E.',
   'pick.shape': 'Each tuple goes in',
   'pick.shape.column': 'One column',
-  'pick.shape.column.hint': 'Each cell holds a tuple, (a, b, x).',
+  'pick.shape.column.hint':
+    'Each cell holds a tuple, (a, b, x). Use it as one column of a larger table.',
   'pick.shape.spread': 'One column per set',
   'pick.shape.spread.hint':
     'x1, x2, x3 sit in adjacent cells of the row. Add your own columns beside them.',
@@ -225,6 +227,14 @@ export const messages = {
   'fill.confirm': 'Fill column',
   'fill.notEmpty': 'the column is not empty',
   'fill.filled': 'Filled {column} with {formula}',
+  'fill.hasFormula': 'the table already has a formula',
+  'fill.derived': 'the column is derived',
+  'fill.pulled': 'the column is pulled',
+  'fill.linked': 'the column is a mapping',
+  // SET-01: the kind changes in the Table tab while the table holds no typed value.
+  'kind.typed': 'the table holds typed values',
+  'kind.needsFormula': 'Fill a column with a formula first',
+  'kind.changed': '{table} is now a {kind}',
   // SET-01: the headings a set table starts with.
   'set.column.range': 'range',
   'set.column.description': 'description',

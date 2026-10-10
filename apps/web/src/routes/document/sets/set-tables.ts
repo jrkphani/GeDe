@@ -2,8 +2,8 @@
  * Add table's kinds and Fill column (SET-01, SET-08, SET-09, SET-10; ADR-056, SPEC §5).
  *
  * What the kind picker and the operand picker write, as one undo step each. Nothing here
- * evaluates: a computed table stores its one formula (`setTableFormula`) and the columns it
- * fills (`setComputedColumns`); the engine's Worker evaluates it and the reconciler fills the
+ * evaluates: a computed table stores its one formula and the columns it fills, in one
+ * Fill step (`fillColumns`); the engine's Worker evaluates it and the reconciler fills the
  * rows (`use-reconcile.ts`). An operand is a set table's range column, bound by id
  * (`{k:table:column}`), so the formula follows the set through moves, renames and new rows.
  */
@@ -11,13 +11,14 @@ import {
   cellText,
   createTable,
   encodeBound,
+  fillColumns,
   renameColumn,
   rowsArray,
-  setComputedColumns,
-  setTableFormula,
+  setTableKind,
   setTableTitle,
   spreadMemberLabel,
   tableById,
+  tableHoldsTyped,
   tableMap,
   tablesOnSheet,
   type ComputedSpec,
@@ -217,36 +218,57 @@ export function addTableOfKind(gd: GedeDoc, options: AddTableOptions): Id | null
     });
     const note = columns[members];
     if (note !== undefined) renameColumn(gd, id, note.id, t('set.column.note'));
-    setComputedColumns(gd, id, filled);
-    setTableFormula(gd, id, formula);
+    fillColumns(gd, id, filled, formula);
     setTableTitle(gd, id, pickName(gd, pick));
   }, gd.origin);
   return id;
 }
 
 /**
- * SET-10: why Fill column with formula… is unavailable on a column, or undefined. A
- * column is filled only while it is empty; a computed column already follows its table's
- * one formula (ADR-056 ruling a).
+ * SET-10: why Fill column with formula… is unavailable on a column, or undefined. Only an
+ * empty column with no other source is filled: a computed column already follows its
+ * table's one formula, and a derived, pulled or mapping column has its own source (ADR-051
+ * treats them alike for Rename). A table holds one formula (ADR-056 ruling a), so a table
+ * that already fills a column from one offers no second Fill: another would silently
+ * re-point every computed column, and a title such as `E ∪ C` would then misname it.
  */
 export function fillColumnReason(gd: GedeDoc, tableId: Id, colId: Id): string | undefined {
   const record = tableById(gd, tableId);
   const table = tableMap(gd, tableId);
   const column = record?.columns.find((c) => c.id === colId);
   if (record === null || table === null || column === undefined) return undefined;
-  if (column.source === 'computed') return t('set.readOnly.computed');
+  switch (column.source) {
+    case 'computed':
+      return t('set.readOnly.computed');
+    case 'derived':
+      return t('fill.derived');
+    case 'pulled':
+      return t('fill.pulled');
+    case 'linked':
+      return t('fill.linked');
+    case 'entered':
+      break;
+  }
+  if (record.columns.some((c) => c.source === 'computed')) return t('fill.hasFormula');
   return record.rows.some((rowId) => cellText(table, rowId, colId) !== '')
     ? t('fill.notEmpty')
     : undefined;
 }
 
+/** The sets Fill column offers for a column of `tableId`: every set on the sheet but its own. */
+export function fillOperands(gd: GedeDoc, sheetId: Id, tableId: Id): SheetSet[] {
+  return setsOnSheet(gd, sheetId).filter((s) => s.tableId !== tableId);
+}
+
 /**
  * SET-10: Fill column with formula…, as one undo step. In One column per set the column is
  * the first member, headed `x1 ∈ E`; the re-fit adds the others beside it, each headed by
- * its set. False — nothing written — when the column holds a typed value.
+ * its set. False — nothing written — when Fill is unavailable on the column
+ * (`fillColumnReason`) or the pick reads the table being filled (a cycle).
  */
 export function fillColumnWith(gd: GedeDoc, tableId: Id, colId: Id, pick: SetPick): boolean {
   if (fillColumnReason(gd, tableId, colId) !== undefined || !pickReady(gd, pick)) return false;
+  if (pick.sets.includes(tableId)) return false;
   const formula = pickFormula(gd, pick);
   if (formula === null) return false;
   let ok = false;
@@ -255,8 +277,36 @@ export function fillColumnWith(gd: GedeDoc, tableId: Id, colId: Id, pick: SetPic
     const spec: ComputedSpec = spreads(pick)
       ? { shape: 'spread', spreadIndex: 0 }
       : { shape: 'column' };
-    ok =
-      setComputedColumns(gd, tableId, [{ colId, spec }]) && setTableFormula(gd, tableId, formula);
+    ok = fillColumns(gd, tableId, [{ colId, spec }], formula);
   }, gd.origin);
   return ok;
+}
+
+/**
+ * SET-01: why the table's kind cannot change, or undefined. The kind changes while the
+ * table holds no typed value.
+ */
+export function tableKindReason(gd: GedeDoc, tableId: Id): string | undefined {
+  return tableHoldsTyped(gd, tableId) ? t('kind.typed') : undefined;
+}
+
+/**
+ * SET-01: the kinds a table can change to, each with the reason it cannot, if any. The
+ * computed kinds name a table that fills from a formula (Add table or Fill column).
+ */
+export function kindChoices(
+  gd: GedeDoc,
+  tableId: Id,
+): { readonly kind: TableKind; readonly reason: string | undefined }[] {
+  const computed = tableById(gd, tableId)?.columns.some((c) => c.source === 'computed') === true;
+  return TABLE_KINDS.map((kind) => ({
+    kind,
+    reason: isComputedKind(kind) && !computed ? t('kind.needsFormula') : undefined,
+  }));
+}
+
+/** SET-01: change the table's kind, as one undo step; false when refused. */
+export function changeTableKind(gd: GedeDoc, tableId: Id, kind: TableKind): boolean {
+  if (tableKindReason(gd, tableId) !== undefined) return false;
+  return setTableKind(gd, tableId, kind);
 }

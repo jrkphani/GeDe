@@ -6,6 +6,7 @@
  */
 import { Button, Icon, RadioCards, Select, type RadioCardOption } from '@gede/ui';
 import type { GedeDoc, Id } from '@gede/core';
+import { useEffect, useId, useRef } from 'react';
 
 import { useMessages, type MessageKey } from '../../../i18n/index.js';
 import {
@@ -64,10 +65,35 @@ export interface SetPickerProps {
   onChange: (pick: SetPick) => void;
   /** Enter on a card: the dialog's confirm. */
   onEnter: () => void;
+  /**
+   * Focus the first field when the picker mounts — the checked operation card, else the
+   * first set — for a dialog that reaches the picker as its second step, where the
+   * dialog's own focus would land on the dialog itself.
+   */
+  autoFocus?: boolean | undefined;
 }
 
-export function SetPicker({ gd, sets, operations, value, onChange, onEnter }: SetPickerProps) {
+export function SetPicker({
+  gd,
+  sets,
+  operations,
+  value,
+  onChange,
+  onEnter,
+  autoFocus = false,
+}: SetPickerProps) {
   const t = useMessages();
+  const root = useRef<HTMLDivElement>(null);
+  const operationId = useId();
+  const shapeId = useId();
+  useEffect(() => {
+    if (!autoFocus) return;
+    const first = root.current?.querySelector<HTMLElement>(
+      '[role="radio"][aria-checked="true"], button:not([disabled])',
+    );
+    first?.focus();
+    // On mount only: the step's first field, not on every pick.
+  }, []);
   if (sets.length === 0) {
     return <p className="gd-set-picker__empty">{t('pick.noSets')}</p>;
   }
@@ -88,12 +114,14 @@ export function SetPicker({ gd, sets, operations, value, onChange, onEnter }: Se
   const cross = value.op === 'Cross';
   const binaryLabels = [t('pick.firstSet'), t('pick.secondSet')];
   return (
-    <div className="gd-set-picker">
+    <div className="gd-set-picker" ref={root}>
       {operations.length > 1 && (
-        <fieldset className="gd-set-picker__group">
-          <legend className="gd-set-picker__legend">{t('pick.operation')}</legend>
+        <div className="gd-set-picker__group">
+          <p className="gd-set-picker__legend" id={operationId}>
+            {t('pick.operation')}
+          </p>
           <RadioCards<SetOperation>
-            label={t('pick.operation')}
+            labelledBy={operationId}
             layout="grid"
             options={opOptions}
             value={value.op}
@@ -102,7 +130,7 @@ export function SetPicker({ gd, sets, operations, value, onChange, onEnter }: Se
             }}
             onEnter={onEnter}
           />
-        </fieldset>
+        </div>
       )}
       <fieldset className="gd-set-picker__group">
         <legend className="gd-set-picker__legend">{t('pick.sets')}</legend>
@@ -164,10 +192,12 @@ export function SetPicker({ gd, sets, operations, value, onChange, onEnter }: Se
         )}
       </fieldset>
       {cross && (
-        <fieldset className="gd-set-picker__group">
-          <legend className="gd-set-picker__legend">{t('pick.shape')}</legend>
+        <div className="gd-set-picker__group">
+          <p className="gd-set-picker__legend" id={shapeId}>
+            {t('pick.shape')}
+          </p>
           <RadioCards<ProductShape>
-            label={t('pick.shape')}
+            labelledBy={shapeId}
             layout="grid"
             options={[
               {
@@ -187,7 +217,7 @@ export function SetPicker({ gd, sets, operations, value, onChange, onEnter }: Se
             }}
             onEnter={onEnter}
           />
-        </fieldset>
+        </div>
       )}
       <p className="gd-set-picker__formula">
         <span className="gd-set-picker__formula-label">{t('pick.formula')}</span>{' '}

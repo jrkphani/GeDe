@@ -17,6 +17,7 @@ import {
   rowMetaMap,
   rowsArray,
   setCellText,
+  setTableKind,
   tableById,
   tableMap,
   type GedeDoc,
@@ -28,6 +29,8 @@ import type { Id } from '../ids.js';
 import {
   computedItemsOf,
   computedRowId,
+  fillColumns,
+  observeRefusedFills,
   reconcileComputed,
   setComputedColumn,
   setComputedColumns,
@@ -519,5 +522,115 @@ describe('SET-09 a member column added by a re-fit is headed by its set', () => 
         ?.columns.slice(2)
         .map((col) => col.label),
     ).toEqual(['x3 ∈ B', 'x4']);
+  });
+});
+
+describe('ADR-056 ruling (a): concurrent Fills of two columns of one table', () => {
+  for (const [ca, cb] of [
+    [1, 2],
+    [2, 1],
+  ] as const) {
+    test(`SET-10 SET-09 a Union Fill and a Cross spread Fill of one table converge on one formula, no column following a formula it was not filled with (clients ${String(ca)},${String(cb)})`, () => {
+      const a = replica(ca);
+      const b = replica(cb);
+      const sheetId = createSheet(a.gd);
+      const plain = createTable(a.gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 0 });
+      send(a.doc, b.doc);
+      const [c1, c2] = tableById(a.gd, plain)!.columns;
+      const refusals: string[] = [];
+      observeRefusedFills(a.gd, (_t, colId, reason) => refusals.push(`${colId}:${reason}`));
+      // A fills column 1 with a Union; B, unaware, fills column 2 with a Cross spread.
+      expect(
+        fillColumns(
+          a.gd,
+          plain,
+          [{ colId: c1!.id, spec: { shape: 'column' } }],
+          '=Union("a, b", "x")',
+        ),
+      ).toBe(true);
+      expect(
+        fillColumns(
+          b.gd,
+          plain,
+          [{ colId: c2!.id, spec: { shape: 'spread', spreadIndex: 0 } }],
+          '=Cross("a, b", "x")',
+        ),
+      ).toBe(true);
+      settle(a, b);
+      expect(Y.encodeStateAsUpdate(a.doc)).toEqual(Y.encodeStateAsUpdate(b.doc));
+      expect(handOff(a) + handOff(b)).toBe(0);
+      const rec = tableById(a.gd, plain)!;
+      const formula = rec.computedFormula ?? '';
+      const computed = rec.columns.filter((c) => c.source === 'computed');
+      expect(computed.length).toBeGreaterThan(0);
+      if (formula.startsWith('=Union')) {
+        // The Union won: the spread's columns are refused (the one B filled is typed again,
+        // the member its re-fit added is gone) and column 1 shows the union.
+        expect(computed.map((c) => c.id)).toEqual([c1!.id]);
+        expect(rec.columns.some((c) => c.computed?.shape === 'spread')).toBe(false);
+        expect(rowsOf(a.gd, plain).map((r) => textAt(a.gd, plain, r, c1!.id))).toEqual([
+          'a',
+          'b',
+          'x',
+        ]);
+        expect(refusals).toEqual([`${c2!.id}:formula`]);
+      } else {
+        // The Cross won: column 1 is refused, the spread shows each member in its column.
+        expect(formula.startsWith('=Cross')).toBe(true);
+        expect(computed.every((c) => c.computed?.shape === 'spread')).toBe(true);
+        expect(computed).toHaveLength(2);
+        expect(sourcesOf(a.gd, plain)[0]).toBe('entered');
+        expect(refusals).toEqual([`${c1!.id}:formula`]);
+      }
+      // Whichever won, no computed cell is blank.
+      for (const c of computed) {
+        for (const r of rowsOf(a.gd, plain)) expect(textAt(a.gd, plain, r, c.id)).not.toBe('');
+      }
+    });
+  }
+});
+
+describe('SET-01 the kind changes while the table has no typed values', () => {
+  test('SET-01 a plain table becomes a simple set and back; a typed value stops it; nothing moves', () => {
+    const { gd } = replica(1);
+    const sheetId = createSheet(gd);
+    const id = createTable(gd, { sheetId, at: { col: 3, row: 4 }, columns: 2, rows: 2 });
+    const before = tableById(gd, id)!;
+    const undo = createUndoManager(gd);
+    expect(setTableKind(gd, id, 'simple')).toBe(true);
+    expect(tableById(gd, id)!.kind).toBe('simple');
+    expect(tableById(gd, id)).toMatchObject({
+      gridCol: before.gridCol,
+      gridRow: before.gridRow,
+      rows: before.rows,
+    });
+    undo.undo();
+    expect(tableById(gd, id)!.kind).toBe('plain');
+    expect(setTableKind(gd, id, 'family')).toBe(true);
+    // A computed kind names a table that fills from a formula; this one does not.
+    expect(setTableKind(gd, id, 'product')).toBe(false);
+    setCellText(gd, id, before.rows[0]!, before.columns[0]!.id, 'a');
+    expect(setTableKind(gd, id, 'plain')).toBe(false);
+    expect(tableById(gd, id)!.kind).toBe('family');
+  });
+
+  test('SET-01 a computed table changes between its kinds; a note typed beside a tuple stops it', () => {
+    const r = replica(1);
+    const sheetId = createSheet(r.gd);
+    const id = createTable(r.gd, {
+      sheetId,
+      at: { col: 1, row: 1 },
+      columns: 2,
+      rows: 0,
+      kind: 'computed',
+    });
+    const [range, note] = tableById(r.gd, id)!.columns;
+    fillColumns(r.gd, id, [{ colId: range!.id, spec: { shape: 'column' } }], '=Cross("a", "x")');
+    handOff(r);
+    expect(rowsOf(r.gd, id)).toHaveLength(1);
+    expect(setTableKind(r.gd, id, 'product')).toBe(true);
+    expect(tableById(r.gd, id)!.kind).toBe('product');
+    setCellText(r.gd, id, rowsOf(r.gd, id)[0]!, note!.id, 'typed note');
+    expect(setTableKind(r.gd, id, 'computed')).toBe(false);
   });
 });

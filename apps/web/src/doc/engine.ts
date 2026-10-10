@@ -77,6 +77,8 @@ export interface EngineHost {
   /**
    * A change posted is still unanswered, so a cached result may predate the document
    * (read inside a `subscribeAll` callback, the batch being delivered is already answered).
+   * The fill waits per table (`busyFor`); this whole-engine flag stays for the tests that
+   * hold a request outstanding on purpose (`ref.test.tsx`, SET-08) and for devtools.
    */
   readonly busy: boolean;
   /**

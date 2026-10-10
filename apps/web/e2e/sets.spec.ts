@@ -22,7 +22,7 @@ import {
   type GedeDoc,
   type Id,
 } from '@gede/core';
-import { asDesktop, expect, test, zoomed200 } from './fixtures/test.js';
+import { asDesktop, asPhone, expect, test, zoomed200 } from './fixtures/test.js';
 import { FAKE_SIGN_IN_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
@@ -335,5 +335,113 @@ test.describe('200 % zoom', () => {
     await signInTo(page, `/d/${DOC_ID}`);
     await expect(page.getByRole('tab', { name: /Sheet 1/ })).toBeVisible();
     await walkAddTable(page, room, '1024 200%', checkA11y, snapshot);
+  });
+});
+
+/** E, C and a plain two-column table P with no rows. */
+function seedTwoAndPlain(room: FakeRoom): void {
+  const seeded = openDocument(room.doc);
+  const sheetId = createSheet(seeded);
+  seedSet(seeded, sheetId, 'E', 1, ['a', 'b']);
+  seedSet(seeded, sheetId, 'C', 4, ['b', 'c']);
+  createTable(seeded, { sheetId, at: { col: 1, row: 8 }, columns: 2, rows: 0, title: 'P' });
+}
+
+test.describe('Phase 3 red-team regressions', () => {
+  test('RESP-02 SET-10 an open Fill column dialog goes when the window becomes a phone, and nothing is filled', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    seedTwoAndPlain(room);
+    await asDesktop(page, 1024, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    const plain = page.getByRole('grid', { name: 'P' });
+    await plain.getByRole('columnheader', { name: /^Column 1/ }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: /Fill column with formula…/ }).click();
+    const fill = page.getByRole('dialog', { name: /Fill Column 1 with a formula/ });
+    await expect(fill).toBeVisible();
+    await asPhone(page, 480, 900);
+    await expect(fill).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Fill column' })).toHaveCount(0);
+    expect(tableTitled(room, 'P')?.columns.map((c) => c.source)).toEqual(['entered', 'entered']);
+    // Back at desktop width the dialog does not come back on its own.
+    await asDesktop(page, 1024, 900);
+    await expect(page.getByRole('grid', { name: 'P' })).toBeVisible();
+    await expect(fill).toHaveCount(0);
+  });
+
+  test('RESP-02 SET-01 an open Add table dialog goes when the window becomes a phone', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    seedTwoAndPlain(room);
+    await asDesktop(page, 1024, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'P' })).toBeVisible();
+    await page.getByRole('button', { name: 'Add table' }).click();
+    const kindDialog = page.getByRole('dialog', { name: 'What kind of table is this?' });
+    await expect(kindDialog).toBeVisible();
+    await asPhone(page, 480, 900);
+    await expect(kindDialog).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Add table' })).toHaveCount(0);
+    expect(openDocument(room.doc).tables.size).toBe(3);
+  });
+
+  test('SET-10 SET-08 the note column of a computed E ∪ C offers no second formula: E ∪ C keeps showing E ∪ C', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    seedTwoAndPlain(room);
+    await asDesktop(page, 1440, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'P' })).toBeVisible();
+    await page.getByRole('button', { name: 'Add table' }).click();
+    const kindDialog = page.getByRole('dialog', { name: 'What kind of table is this?' });
+    await kindDialog.getByRole('radio', { name: /^Computed by formula/ }).click();
+    await kindDialog.getByRole('button', { name: 'Pick sets' }).click();
+    const pickDialog = page.getByRole('dialog', { name: 'Add a computed table' });
+    // Focus lands on the first field of the step, the checked operation.
+    await expect(pickDialog.getByRole('radio', { name: /^Union/ })).toBeFocused();
+    await expect(pickDialog.getByTestId('set-picker-formula')).toHaveText('= Union(E, C)');
+    await pickDialog.getByRole('button', { name: 'Add table' }).click();
+    const union = page.getByRole('grid', { name: 'E ∪ C' });
+    await expect(union).toBeVisible();
+    await expect.poll(() => tableTitled(room, 'E ∪ C')?.rows.length).toBe(3);
+    await union.getByRole('columnheader', { name: /^note/ }).click({ button: 'right' });
+    const menu = page.getByRole('menu', { name: 'Column menu' });
+    await expect(menu.getByRole('menuitem', { name: /Fill column with formula…/ })).toHaveAttribute(
+      'title',
+      'the table already has a formula',
+    );
+    await page.keyboard.press('Escape');
+    await checkA11y('computed table note column 1440');
+    expect(tableTitled(room, 'E ∪ C')?.computedFormula).toMatch(/^=Union\(/);
+    await expect(union.getByRole('row')).toHaveCount(4);
+  });
+
+  test('SET-01 MENU-01 Add table here on the canvas asks the kind, as the toolbar does', async ({
+    page,
+  }) => {
+    const room = await installFakes(page);
+    seedTwoAndPlain(room);
+    await asDesktop(page, 1024, 900);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('grid', { name: 'P' })).toBeVisible();
+    const plane = page.getByTestId('plane');
+    const box = (await plane.boundingBox())!;
+    await plane.click({
+      button: 'right',
+      position: { x: box.width - 120, y: box.height - 120 },
+    });
+    await page.getByRole('menuitem', { name: 'Add table here' }).click();
+    const kindDialog = page.getByRole('dialog', { name: 'What kind of table is this?' });
+    await expect(kindDialog.getByRole('radio', { name: /^Plain table/ })).toBeChecked();
+    await kindDialog.getByRole('radio', { name: /^Simple set/ }).click();
+    await kindDialog.getByRole('button', { name: 'Add table' }).click();
+    await expect(kindDialog).toHaveCount(0);
+    await expect.poll(() => openDocument(room.doc).tables.size).toBe(4);
+    const added = tableTitled(room, 'Table 4');
+    expect(added?.kind).toBe('simple');
   });
 });
