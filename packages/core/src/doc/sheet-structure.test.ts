@@ -9,7 +9,7 @@ import { nestRow } from '../hier/mutations.js';
 import { cellKey, type Id } from '../ids.js';
 import { tableAddresses } from './geometry.js';
 import { applyGuardedUpdate, lockedTablesEdited } from './lock-guard.js';
-import { computedRowId } from '../ref/computed.js';
+import { computedRowId, reconcileComputed, setComputedColumn } from '../ref/computed.js';
 import { reconcilePull, setPull } from '../ref/pull.js';
 import { deleteSheet } from './sheets.js';
 import {
@@ -709,6 +709,70 @@ describe('lock guard holes (SET-17, SET-18)', () => {
     const rewrite = sentBy((r) => setCellText(r, id, pulledRow, rangeOf(id), 'HACKED'));
     expect(applyGuardedUpdate(gd, rewrite, 'client')).toEqual([id]);
     expect(cellText(tableMap(gd, id)!, pulledRow, rangeOf(id))).toBe(stored);
+  });
+
+  /** A locked computed table already filled with `keys`. */
+  function lockedComputed(keys: string[]) {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', [], 1);
+    setComputedColumn(gd, id, rangeOf(id), { shape: 'column' });
+    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
+    reconcileComputed(gd, id, keys);
+    setSectionLocked(gd, sheetId, lane, true);
+    return id;
+  }
+  const metaOf = (r: GedeDoc, id: Id, row: Id) =>
+    (tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>>).get(row);
+
+  test('SET-18 a genuine reconcile that adds a key to an already-filled locked computed table lands', () => {
+    const id = lockedComputed(['k1']);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => void reconcileComputed(r, id, ['k1', 'k2'])),
+      ),
+    ).toEqual([]);
+  });
+
+  test('SET-18 a computedIds entry that does not match its row id is refused', () => {
+    const id = lockedComputed(['k1']);
+    const forged = sentBy((r) =>
+      (tableMap(r, id)?.get('computedIds') as Y.Map<unknown>).set('FORGEDROWID', 'k'),
+    );
+    expect(lockedTablesEdited(gd, forged)).toEqual([id]);
+  });
+
+  test('SET-18 a client cannot rewrite computedKey of an existing computed row', () => {
+    const id = lockedComputed(['k1']);
+    const row = computedRowId(id, 'k1');
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => metaOf(r, id, row)?.set('computedKey', 'HACKED')),
+      ),
+    ).toEqual([id]);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => metaOf(r, id, row)?.delete('computedKey')),
+      ),
+    ).toEqual([id]);
+  });
+
+  test('SET-18 a client cannot strip the pulledFrom tag of a pulled row', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    const src = setTable('S', ['x'], 8);
+    setPull(gd, id, rangeOf(id), { tableId: src, colId: rangeOf(src), filter: '' });
+    reconcilePull(gd, id);
+    setSectionLocked(gd, sheetId, lane, true);
+    const pulledRow = tableById(gd, id)?.rows[1] ?? '';
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => metaOf(r, id, pulledRow)?.delete('pulledFrom')),
+      ),
+    ).toEqual([id]);
   });
 
   test('SET-18 a client cannot move an unlocked table into a locked section', () => {

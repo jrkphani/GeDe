@@ -25,7 +25,8 @@
  * reconciler would derive, never by a voucher the update writes itself: a computed row has the id
  * its key gives it, a pulled row its source row's id, and the only cell a reconciler writes is the
  * pull column bound to the source cell, so a pulled row's other text and a computed row's text are
- * edits. shortcut: the key of a computed row (shown until the next reconcile drops it), and a
+ * edits. A row that stays keeps its tag: a pulled row its source, a computed row the key its id
+ * gives it; computedIds entries must match too. shortcut: the key of a computed row (shown until the next reconcile drops it), and a
  * split, followed or band tag with its cells, are trusted in a machine-driven table; the sync
  * service has no formula engine, so when rows carry a signed provenance, close them.
  * Row order alone is not an edit. A locked sheet is put back if deleted, with all its tables;
@@ -142,7 +143,34 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       if (table === null) return null;
       const meta = rowMeta(table, rowId);
       if (rowReadOnlyReason(meta) === null && meta.computedKey === null) return null;
-      return owned || tagBacked(tableId, meta, rowId) ? meta : null;
+      return (owned ? tagKept(tableId, rowId, meta) : tagBacked(tableId, meta, rowId))
+        ? meta
+        : null;
+    };
+    // A row that stays keeps its provenance: a pulled row its source, a computed row the key its
+    // id gives it (the reconciler drops the key only once the table has no computed column).
+    const tagKept = (tableId: Id, rowId: Id, meta: ReturnType<typeof rowMeta>): boolean => {
+      const now = tableMap(after, tableId);
+      if (now === null || !rowsOf(now).has(rowId)) return true;
+      const next = rowMeta(now, rowId);
+      if (
+        meta.pulledFrom !== null &&
+        (next.pulledFrom?.tableId !== meta.pulledFrom.tableId ||
+          next.pulledFrom.rowId !== meta.pulledFrom.rowId)
+      )
+        return false;
+      if (meta.computedKey === null) return true;
+      return next.computedKey === null
+        ? !machineTable(tableId)
+        : computedRowId(tableId, next.computedKey) === rowId;
+    };
+    // The reconciler's computedIds entries: each row id maps to the key that gives that id.
+    const idsBacked = (tableId: Id, ids: unknown, only?: readonly string[]): boolean => {
+      if (!(ids instanceof Y.Map)) return true;
+      return (only ?? [...ids.keys()]).every((id) => {
+        const key: unknown = ids.get(id);
+        return key === undefined || (typeof key === 'string' && computedRowId(tableId, key) === id);
+      });
     };
     const machineRow = (tableId: Id, rowId: Id): boolean => machineMeta(tableId, rowId) !== null;
     // A reconciler writes exactly one cell on a pulled row (the pull column, bound to its source
@@ -170,7 +198,17 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
         if (tableId === undefined) {
           for (const id of keys) edit(id);
         } else if (member === undefined) {
-          if (keys.some((k) => !(MACHINE_TABLE_KEYS.has(k) && machineTable(tableId))))
+          if (
+            keys.some(
+              (k) =>
+                !(
+                  MACHINE_TABLE_KEYS.has(k) &&
+                  machineTable(tableId) &&
+                  (k !== 'computedIds' ||
+                    idsBacked(tableId, tableMap(after, tableId)?.get('computedIds')))
+                ),
+            )
+          )
             edit(tableId);
         } else if (member === 'cells') {
           const changed = cellKey === undefined ? keys : [cellKey];
@@ -180,6 +218,8 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
         } else if (member === 'rowMeta') {
           const rows = cellKey === undefined ? keys : [cellKey];
           if (rows.some((r) => !machineRow(tableId, r))) edit(tableId);
+        } else if (member === 'computedIds' && machineTable(tableId)) {
+          if (!idsBacked(tableId, event.target, keys)) edit(tableId);
         } else {
           edit(tableId);
         }
