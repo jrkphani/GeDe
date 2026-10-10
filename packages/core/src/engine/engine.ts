@@ -154,7 +154,7 @@ class EngineResolver implements Resolver {
     const entry = this.engine.index.entityIndex().byKey.get(entityKey(path));
     if (entry !== undefined) return this.engine.valueOf(entry.cellId, this.blocked);
     // SET-06, REF-01: `@E` names a set table — the set its range column holds, as a list.
-    const ids = this.engine.setCellsNamed(path);
+    const ids = this.engine.setCellsNamed(path, this.sheet.sheetId);
     if (ids === undefined) return undefined;
     const elements = ids.flatMap((id) =>
       valueElements(this.engine.valueOf(id, this.blocked), () => []),
@@ -314,24 +314,35 @@ export class FormulaEngine {
    * (titles are unique, ADR-051), in row order; undefined when the path names none. A path
    * of a row or cell always wins: it has two segments at least.
    */
-  setCellsNamed(path: readonly string[]): WorkbookCellId[] | undefined {
+  setCellsNamed(path: readonly string[], sheetId?: Id): WorkbookCellId[] | undefined {
     if (path.length !== 1) return undefined;
     const name = setNameKey(path[0] ?? '');
     if (name === '') return undefined;
     const ids = [...this.tables.keys()].sort();
-    for (const tableId of ids) {
+    const rangeCells = (tableId: Id, leavesOnly: boolean): WorkbookCellId[] => {
       const table = this.tables.get(tableId);
       const range = table?.structure.setRange;
-      if (table === undefined || range === undefined) continue;
-      if (setNameKey(table.structure.title) !== name) continue;
+      if (table === undefined || range === undefined) return [];
+      const { rows, rowDepths } = table.structure;
       const out: WorkbookCellId[] = [];
-      for (const rowId of table.structure.rows) {
+      rows.forEach((rowId, i) => {
+        // SET-13: U lists elements, not the sets a family holds (a row with rows under it).
+        if (leavesOnly && (rowDepths[i + 1] ?? 0) > (rowDepths[i] ?? 0)) return;
         const key = cellKey(rowId, range);
         if (table.cells.has(key)) out.push(workbookCellId(tableId, key));
-      }
+      });
       return out;
+    };
+    for (const tableId of ids) {
+      const table = this.tables.get(tableId);
+      if (table?.structure.setRange === undefined) continue;
+      if (setNameKey(table.structure.title) === name) return rangeCells(tableId, false);
     }
-    return undefined;
+    // SET-13: no set is titled U, so `@U` is the sheet's universal set: every set's elements.
+    if (name !== setNameKey('U') || sheetId === undefined) return undefined;
+    return ids.flatMap((id) =>
+      this.tables.get(id)?.structure.sheetId === sheetId ? rangeCells(id, true) : [],
+    );
   }
 
   valueOf(cellId: WorkbookCellId, blocked: ReadonlySet<WorkbookCellId>): CellValue {
@@ -698,7 +709,10 @@ export class FormulaEngine {
         return {
           index,
           kind: 'entity',
-          cellIds: entry === undefined ? (this.setCellsNamed(ref.path) ?? []) : [entry.cellId],
+          cellIds:
+            entry === undefined
+              ? (this.setCellsNamed(ref.path, sheet.sheetId) ?? [])
+              : [entry.cellId],
           missing: false,
           anchored: false,
         };

@@ -28,6 +28,8 @@ export interface ArrangeTabProps {
   table: TableMap;
   editable: boolean;
   commands: GridCommands;
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string | undefined;
 }
 
 /**
@@ -40,13 +42,13 @@ export interface ArrangeTabProps {
  * are *stated* here and *toggled* in the toolbar: DOC-02 names the toolbar as
  * their home and a command has one (ADR-041).
  */
-export function ArrangeTab({ gd, table, editable, commands }: ArrangeTabProps) {
+export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: ArrangeTabProps) {
   // Stacking, edges and the sheet flag live outside this table's map.
   useYVersion(gd.tables);
   useYVersion(gd.sheets);
   const record = tableRecord(table);
   const locale = activeLocale();
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const width = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);
   const move = (col: number, row: number) => {
     setTablePosition(gd, record.id, { col, row });

@@ -19,6 +19,8 @@
  * elsewhere. Nothing here touches the DOM.
  */
 import {
+  isSheetLocked,
+  lockReasonOfTable,
   addColumn,
   addColumnRule,
   addRow,
@@ -359,6 +361,67 @@ export interface GridCommandDeps {
  */
 const MERGING_COMMANDS = new Set<keyof GridCommands>(['commitCell', 'commitRichCell']);
 
+/** Commands that answer a list, a rename result or `null` when refused; every other one answers `false`. */
+const REFUSES_WITH_LIST = new Set(['unhideAllColumns', 'collapseAll', 'expandAll']);
+const REFUSES_WITH_RENAME = new Set(['renameColumn', 'setTableTitle']);
+const REFUSES_WITH_NULL = new Set([
+  'insertRowBelow',
+  'insertRowAbove',
+  'appendRowWith',
+  'insertColumnAfter',
+  'insertColumnBefore',
+  'deleteTable',
+  'setColumnWidth',
+  'setColumnWidths',
+  'setRowHeights',
+  'scaleTable',
+  'distributeEvenly',
+  'setFrozenColumns',
+  'clearColumn',
+  'fillColumn',
+  'addRule',
+]);
+/** View settings stored in the document that a lock does not stop. */
+const NOT_EDITS = new Set(['readOnlyReason', 'setSheetEdgesShown']);
+
+/**
+ * SET-18: a command on a table whose section or sheet is locked (or on a locked sheet) is
+ * refused whole, with the reason said, before it reaches the document. Every command's first
+ * argument is a table id, a cell selection or a sheet id. The service refuses what a client
+ * that skips this sends (`lockedTablesEdited`).
+ */
+function guardedByLock(
+  commands: GridCommands,
+  gd: GedeDoc,
+  announce: (text: string) => void,
+): GridCommands {
+  const source = commands as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const out: Record<string, unknown> = { ...source };
+  for (const key of Object.keys(source)) {
+    const fn = source[key];
+    if (fn === undefined || NOT_EDITS.has(key)) continue;
+    out[key] = (...args: unknown[]) => {
+      const first = args[0];
+      const id =
+        typeof first === 'string' ? first : (first as { tableId?: Id } | undefined)?.tableId;
+      const reason =
+        id === undefined
+          ? null
+          : (lockReasonOfTable(gd, id) ?? (isSheetLocked(gd, id) ? 'sheet' : null));
+      if (reason === null) return fn(...args);
+      const said = translate(
+        activeLocale(),
+        reason === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+      );
+      announce(sentence(said));
+      if (REFUSES_WITH_LIST.has(key)) return [];
+      if (REFUSES_WITH_RENAME.has(key)) return { ok: false, reason: sentence(said) };
+      return REFUSES_WITH_NULL.has(key) ? null : false;
+    };
+  }
+  return out as unknown as GridCommands;
+}
+
 /**
  * Wrap every command so `settle` runs before and after it, whatever it
  * returned: one command is one undo step however close it lands to the
@@ -451,7 +514,7 @@ export type RenameResult = { readonly ok: true } | { readonly ok: false; readonl
 const OK: RenameResult = { ok: true };
 
 /** "a derived column is named by its signature" → "A derived column is named by its signature". */
-function sentence(reason: string): string {
+export function sentence(reason: string): string {
   return reason.charAt(0).toLocaleUpperCase() + reason.slice(1);
 }
 
@@ -1285,5 +1348,5 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       return ok;
     },
   };
-  return settled(commands, deps.settle);
+  return settled(guardedByLock(commands, gd, announce), deps.settle);
 }

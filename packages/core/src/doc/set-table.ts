@@ -181,6 +181,8 @@ export interface SetTableFacts {
   readonly cardinality: number;
   /** SET-05 / SET-06: every entry that is a leaf, at any depth, repeats included. */
   readonly bag: number;
+  /** The distinct top-level members behind `cardinality`, each `e\0element` or `s\0{…}` (a set). */
+  readonly members: readonly string[];
   /** SET-03. */
   readonly status: SpecialStatus | null;
   /** SET-03, from the caption (SET-04: the caption is the definition). */
@@ -341,6 +343,7 @@ export function setTableFacts(
   return {
     cardinality: topLevel.size,
     bag,
+    members: [...topLevel],
     status: specialStatus(topLevel.size),
     definition: readDefinition(record.look.caption),
     rows,

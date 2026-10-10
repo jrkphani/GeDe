@@ -44,6 +44,7 @@ import {
   type FormatOpts,
 } from '../format/types.js';
 import { isMethodName, type MethodName } from '../formula/ast.js';
+import { lockReasonOfTable } from './sections.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
 import { readRules, type ConditionalRule } from '../style/rules.js';
 import {
@@ -881,7 +882,13 @@ function readOutlineColumn(value: unknown): Id | null {
  * merely tint the cell (A11Y-04). Every write path — grid commit, find and
  * replace, paste — consults this (REF-05).
  */
-export type ReadOnlyReason = Exclude<ColumnSource, 'entered'> | 'group' | 'splitChild';
+export type ReadOnlyReason =
+  | Exclude<ColumnSource, 'entered'>
+  | 'group'
+  | 'splitChild'
+  // SET-18: the table's section or its sheet is locked; checked before any other reason.
+  | 'sectionLocked'
+  | 'sheetLocked';
 
 /** The row-level read-only reason, or null: a pulled row, else a category band, else a split child. */
 export function rowReadOnlyReason(
@@ -895,6 +902,9 @@ export function rowReadOnlyReason(
 }
 
 export function cellReadOnlyReason(table: TableMap, rowId: Id, colId: Id): ReadOnlyReason | null {
+  const locked =
+    table.doc === null ? null : lockReasonOfTable(openDocument(table.doc), readString(table, 'id'));
+  if (locked !== null) return locked === 'sheet' ? 'sheetLocked' : 'sectionLocked';
   const column = columnsArray(table)
     .toArray()
     .find((c) => readString(c, 'id') === colId);

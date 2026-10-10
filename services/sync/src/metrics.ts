@@ -40,6 +40,7 @@ export type RefusalReason =
   | MailEventReason
   | 'message_too_big'
   | 'document_too_large'
+  | 'locked'
   | 'slow_consumer'
   | 'too_many_rooms'
   | 'too_many_sockets'

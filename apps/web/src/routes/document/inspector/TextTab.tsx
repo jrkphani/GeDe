@@ -42,6 +42,8 @@ export interface TextTabProps {
   editing: boolean;
   editable: boolean;
   commands: GridCommands;
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string | undefined;
   /** KEYS-05: toggle a mark over the whole selected cell (the shell owns the write). */
   onToggleMark: (mark: ToggleMark) => void;
 }
@@ -92,17 +94,26 @@ export function TextTab({
   editing,
   editable,
   commands,
+  readOnlyReason,
   onToggleMark,
 }: TextTabProps) {
   const record = tableRecord(table);
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const needsCell = cell === null ? 'select a cell first' : undefined;
   const marksReason =
     viewOnly ?? needsCell ?? (editing ? 'finish editing to format the whole cell' : undefined);
   const marksReasonId = useId();
   const rich = cell === null ? null : cellRich(table, cell.rowId, cell.colId);
-  const look = useAppearanceScope(table, record, cell, editable, commands, 'the typography');
+  const look = useAppearanceScope(
+    table,
+    record,
+    cell,
+    editable,
+    commands,
+    'the typography',
+    readOnlyReason,
+  );
   const a = look.effective;
   const activeStyle = characterStyleOf(a);
   // ADR-049 (Numbers N8): one "Wrap text in cell" switch whose scope is the selection's —

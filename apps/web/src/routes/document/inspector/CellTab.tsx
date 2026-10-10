@@ -49,6 +49,8 @@ export interface CellTabProps {
   cell: CellSelection | null;
   editable: boolean;
   commands: GridCommands;
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string | undefined;
 }
 
 const FILLS: readonly { value: HighlightToken | 'none'; label: string }[] = [
@@ -103,12 +105,20 @@ const DECIMALS = [
  * states the scope before anything is applied; every change writes at once
  * (INSP-12), one undo step each.
  */
-export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
+export function CellTab({ gd, table, cell, editable, commands, readOnlyReason }: CellTabProps) {
   const record = tableRecord(table);
   const [scope, setScope] = useState<Scope>('column');
-  const look = useAppearanceScope(table, record, cell, editable, commands, 'the fill and border');
+  const look = useAppearanceScope(
+    table,
+    record,
+    cell,
+    editable,
+    commands,
+    'the fill and border',
+    readOnlyReason,
+  );
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const needsCell = column === null ? 'select a cell first' : undefined;
   const disabledReason = viewOnly ?? needsCell;
   const override = cell === null ? null : cellFormatOverride(table, cell.rowId, cell.colId);

@@ -41,6 +41,8 @@ export interface TableTabProps {
   selection: Selection | null;
   editable: boolean;
   commands: GridCommands;
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string | undefined;
 }
 
 const KIND_LABEL: Readonly<Record<TableKind, MessageKey>> = {
@@ -114,10 +116,17 @@ function CaptionField({
  * (INSP-12). Nothing here moves an address: the style is paint, the caption
  * is a strip at the foot, fit snaps to whole units (GRID-01).
  */
-export function TableTab({ gd, table, selection, editable, commands }: TableTabProps) {
+export function TableTab({
+  gd,
+  table,
+  selection,
+  editable,
+  commands,
+  readOnlyReason,
+}: TableTabProps) {
   const t = useMessages();
   const record = tableRecord(table);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const rows = record.rows.length;
   const columns = record.columns.length;
   const visibleWidth = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);

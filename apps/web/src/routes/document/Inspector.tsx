@@ -1,7 +1,9 @@
 import clsx from 'clsx';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  lockReasonOfTable,
   normaliseTableView,
+  readString,
   tableMap,
   tableRecord,
   type GedeDoc,
@@ -12,6 +14,8 @@ import { Button, Icon, Tabs, type TabItem } from '@gede/ui';
 
 import { ARIA_KEYS, LABELS } from '../../doc/shortcuts.js';
 import { useYVersion } from '../../doc/use-y.js';
+import { translate } from '../../i18n/index.js';
+import { activeLocale } from '../../locale.js';
 import { useTableView } from '../../doc/view-state.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { ResultList } from './find/FindBar.js';
@@ -90,6 +94,7 @@ export function Inspector({
   slots,
 }: InspectorProps) {
   useYVersion(gd.tables);
+  useYVersion(gd.sheets); // SET-18: a lock lives on the sheet
   // RESP-03: below lg the open rail is an overlay over the canvas, and an overlay
   // dismisses like every layered surface — Escape, or a press outside it. Escape is
   // taken in the capture phase and prevented, so the shell's Escape (clear the
@@ -199,20 +204,34 @@ export function Inspector({
   );
   const withTable = (pane: (t: NonNullable<typeof table>) => ReactNode) =>
     table === null ? noTable : pane(table);
+  // SET-18: a table in a locked section or sheet reads as view-only here, and says why.
+  const lockProps = (
+    t: NonNullable<typeof table>,
+  ): { editable: boolean; readOnlyReason?: string } => {
+    const reason = lockReasonOfTable(gd, readString(t, 'id'));
+    if (reason === null) return { editable };
+    return {
+      editable: false,
+      readOnlyReason: translate(
+        activeLocale(),
+        reason === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+      ),
+    };
+  };
 
   const formatItems: TabItem<FormatTab>[] = [
     {
       value: 'table',
       label: 'Table',
       content: withTable((t) => (
-        <TableTab gd={gd} table={t} selection={selection} editable={editable} commands={commands} />
+        <TableTab gd={gd} table={t} selection={selection} commands={commands} {...lockProps(t)} />
       )),
     },
     {
       value: 'cell',
       label: 'Cell',
       content: withTable((t) => (
-        <CellTab gd={gd} table={t} cell={cell} editable={editable} commands={commands} />
+        <CellTab gd={gd} table={t} cell={cell} commands={commands} {...lockProps(t)} />
       )),
     },
     {
@@ -224,9 +243,9 @@ export function Inspector({
           cell={cell}
           band={selection?.band ?? null}
           editing={editing}
-          editable={editable}
           commands={commands}
           onToggleMark={onToggleMark}
+          {...lockProps(t)}
         />
       )),
     },
@@ -234,7 +253,7 @@ export function Inspector({
       value: 'arrange',
       label: 'Arrange',
       content: withTable((t) => (
-        <ArrangeTab gd={gd} table={t} editable={editable} commands={commands} />
+        <ArrangeTab gd={gd} table={t} commands={commands} {...lockProps(t)} />
       )),
     },
     // INSP-08: only when a graph is selected — the graph release sets the slot.
