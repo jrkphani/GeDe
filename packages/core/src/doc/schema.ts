@@ -65,6 +65,8 @@ export const TABLE_TITLE_ROWS = 2;
 export const TABLE_HEADER_ROWS = 1;
 /** Default footer count-strip rows (GRID-11: 0 or 1; absent means none). */
 export const DEFAULT_FOOTER_ROWS = 0;
+/** A set table's footer strip when the key is absent (GRID-11 as amended by ADR-056, SET-05). */
+export const SET_FOOTER_ROWS = 1;
 /** Default column width in lattice units. */
 export const DEFAULT_COLUMN_WIDTH = 1;
 /** Default row height in lattice units (GRID-09, ADR-049): a row is any whole number of units ≥ 1. */
@@ -645,7 +647,12 @@ export function tableRecord(map: TableMap): TableRecord {
       Math.max(0, Math.round(readNumber(map, 'frozenColumns', 0))),
     ),
     headerRows: readStripCount(map, 'headerRows', TABLE_HEADER_ROWS),
-    footerRows: readStripCount(map, 'footerRows', DEFAULT_FOOTER_ROWS),
+    // GRID-11 as amended by ADR-056: a set table shows its count strip unless it was hidden.
+    footerRows: readStripCount(
+      map,
+      'footerRows',
+      readTableKind(map.get('kind')) === 'plain' ? DEFAULT_FOOTER_ROWS : SET_FOOTER_ROWS,
+    ),
     outlineColumn: readColumnRef(map, 'outlineColumn', columns),
     look: tableLook(map),
     z: Math.round(readNumber(map, 'z', 0)),

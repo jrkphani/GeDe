@@ -28,6 +28,9 @@ import {
   rowHeights as effectiveRowHeights,
   rowMeta,
   rowReadOnlyReason,
+  setRangeColumn,
+  setTableFacts,
+  SET_DEGREE,
   spanIndex,
   TABLE_TITLE_ROWS,
   tableAddresses,
@@ -106,6 +109,13 @@ import {
 import { useGraphLitRows } from './graph/store.js'; // wave4/graphs: GRAPH-09 lit rows
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ComputedFormulaError } from './sets/ComputedFormulaError.js';
+import {
+  rangeCellNote,
+  SetCounts,
+  SetDegree,
+  SetMetaRow,
+  SetTitleRow,
+} from './sets/SetTableParts.js';
 import { ColumnDivider, CornerHandle, RowDivider } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
 import {
@@ -249,6 +259,11 @@ export const TableView = memo(function TableView({
   // One record per document change: its `rows` and `columns` keep identity between
   // renders that change nothing, so what derives from them can be memoised.
   const record = useMemo(() => tableRecord(table), [table, version]);
+  // SET-02..07: what a set table states about itself — counts, status, definition, each
+  // row's degree, repeat and kind. Null for a plain table. Presentation only.
+  const setFacts = useMemo(() => setTableFacts(table, record), [table, record]);
+  const rangeColId = setFacts === null ? null : setRangeColumn(record);
+  const t = useMessages();
   // SET-12: the words a lost row shows, from the table's one computed formula as displayed.
   // The stored formula holds bound ids, so a move or rename of an operand re-projects it.
   const indexVersion = useWorkbookIndexVersion(record.computedFormula === null ? null : table.doc);
@@ -654,6 +669,23 @@ export const TableView = memo(function TableView({
       ),
     }));
 
+  // SET-03 / SET-04: a set table's bar holds its meta row and title row; below the macro
+  // tier, where the table is a block, it keeps the plain bar.
+  const setBar = setFacts !== null && tier !== 'macro';
+  const titleContent = (
+    <>
+      {/* INSP-04: a hidden title leaves its two-row bar (no address moves); the section's name stays. */}
+      {renaming?.kind === 'table'
+        ? renameField(renaming, record.title)
+        : record.look.titleShown && <span className="gd-table__title-text">{record.title}</span>}
+      {formulaError(false)}
+      <span className="gd-mono gd-table__degree" aria-hidden="true">
+        {columnLetter(record.gridCol)}
+        {record.gridRow + 1}
+      </span>
+    </>
+  );
+
   return (
     <section
       ref={ref}
@@ -674,6 +706,7 @@ export const TableView = memo(function TableView({
       <header
         className={clsx('gd-table__title', {
           'gd-table__title--renaming': renaming?.kind === 'table',
+          'gd-table__title--set': setBar,
         })}
         style={{ height: `${String(TITLE_PX)}px` }}
         // ADR-051: focusable by script and pointer only (as a column header is), so a press on
@@ -702,15 +735,15 @@ export const TableView = memo(function TableView({
           renamer.start({ kind: 'table', tableId: record.id });
         }}
       >
-        {/* INSP-04: a hidden title leaves its two-row bar (no address moves); the section's name stays. */}
-        {renaming?.kind === 'table'
-          ? renameField(renaming, record.title)
-          : record.look.titleShown && <span className="gd-table__title-text">{record.title}</span>}
-        {formulaError(false)}
-        <span className="gd-mono gd-table__degree" aria-hidden="true">
-          {columnLetter(record.gridCol)}
-          {record.gridRow + 1}
-        </span>
+        {setBar ? (
+          <>
+            {/* SET-03 / SET-04: the meta row and the title row fill the bar's two lattice rows. */}
+            <SetMetaRow record={record} facts={setFacts} />
+            <SetTitleRow caption={record.look.caption}>{titleContent}</SetTitleRow>
+          </>
+        ) : (
+          titleContent
+        )}
         {tier !== 'macro' && <LineageHeader record={record} />}
       </header>
 
@@ -766,6 +799,7 @@ export const TableView = memo(function TableView({
                 role="row"
                 style={{ height: `${String(HEADER_PX)}px` }}
               >
+                {setFacts !== null && <SetDegree label={SET_DEGREE.header} />}
                 {visible.map((col, ci) => {
                   const units = columnUnits[ci] ?? 1;
                   const letter = columnLetter(record.gridCol + (columnStarts[ci] ?? 0));
@@ -949,6 +983,9 @@ export const TableView = memo(function TableView({
                           showOutline && outlineRow !== undefined ? outlineRow.depth : undefined
                         }
                       >
+                        {setFacts !== null && (
+                          <SetDegree label={setFacts.rows.get(rowId)?.degree ?? ''} />
+                        )}
                         {visible.map((col, ci) => {
                           const isSelected =
                             selectedCell !== null &&
@@ -990,6 +1027,15 @@ export const TableView = memo(function TableView({
                               outlineLocked={outlineLocked}
                               column={col}
                               lostSets={col.id === lostColumn ? lostSets : null}
+                              note={
+                                col.id === rangeColId && setFacts !== null
+                                  ? rangeCellNote(
+                                      setFacts.rows.get(rowId),
+                                      record.kind === 'family',
+                                      t,
+                                    )
+                                  : null
+                              }
                               rowMeta={rowMetaOf}
                               locale={locale}
                               undo={undo ?? null}
@@ -1070,24 +1116,32 @@ export const TableView = memo(function TableView({
               aria-label={`${record.title} footer`}
               data-testid="table-footer"
             >
-              <span>
-                {projection.hidden > 0 ? (
-                  <>
-                    <span className="gd-table__footer-hidden">
-                      {formatNumber(activeLocale, rowCount - projection.hidden)}
-                    </span>
-                    {' of '}
-                    {formatNumber(activeLocale, rowCount)} rows
-                  </>
-                ) : (
-                  <>
-                    {formatNumber(activeLocale, rowCount)} {rowCount === 1 ? 'row' : 'rows'}
-                  </>
-                )}
-              </span>
-              <span>
-                {columnCount} {columnCount === 1 ? 'column' : 'columns'}
-              </span>
+              {setFacts !== null && (
+                <SetCounts title={record.title} facts={setFacts} locale={activeLocale} />
+              )}
+              {/* SET-05: a set's strip states its counts; the rows only while a filter hides some. */}
+              {(setFacts === null || projection.hidden > 0) && (
+                <span>
+                  {projection.hidden > 0 ? (
+                    <>
+                      <span className="gd-table__footer-hidden">
+                        {formatNumber(activeLocale, rowCount - projection.hidden)}
+                      </span>
+                      {' of '}
+                      {formatNumber(activeLocale, rowCount)} rows
+                    </>
+                  ) : (
+                    <>
+                      {formatNumber(activeLocale, rowCount)} {rowCount === 1 ? 'row' : 'rows'}
+                    </>
+                  )}
+                </span>
+              )}
+              {setFacts === null && (
+                <span>
+                  {columnCount} {columnCount === 1 ? 'column' : 'columns'}
+                </span>
+              )}
             </div>
           )}
           {record.look.captionShown && (
@@ -1446,6 +1500,11 @@ interface CellProps {
    * column a lost row's words are drawn in; null elsewhere and when the table has none.
    */
   lostSets: string | null;
+  /**
+   * SET-02 / SET-06: the words a set's range cell carries beside its element — a repeat's
+   * flag, a family row's kind — or null.
+   */
+  note: string | null;
   /** The row's meta, resolved once per row render (REF-02 provenance, HIER-07 children). */
   rowMeta: RowMeta;
   locale: FormatLocale;
@@ -1622,6 +1681,7 @@ const COMPARED_CELL_PROPS = {
   outlineLocked: true,
   column: true,
   lostSets: true,
+  note: true,
   rowMeta: true,
   locale: true,
   undo: true,
@@ -1658,6 +1718,7 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
     a.editable !== b.editable ||
     a.readOnly !== b.readOnly ||
     a.lostSets !== b.lostSets ||
+    a.note !== b.note ||
     a.outlineLocked !== b.outlineLocked ||
     !outlineRowsEqual(a.outline, b.outline) ||
     a.locale !== b.locale ||
@@ -1708,6 +1769,7 @@ const Cell = memo(function Cell({
   outlineLocked,
   column,
   lostSets,
+  note,
   rowMeta: row,
   locale,
   undo,
@@ -1972,7 +2034,7 @@ const Cell = memo(function Cell({
       aria-label={
         address === undefined
           ? undefined
-          : `${address}${text === '' ? '' : `, ${text}`}${lostLabel === null ? '' : `, ${lostLabel}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
+          : `${address}${text === '' ? '' : `, ${text}`}${note === null ? '' : `, ${note}`}${lostLabel === null ? '' : `, ${lostLabel}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
       }
       aria-keyshortcuts={
         outline === null || !editable
@@ -2082,6 +2144,11 @@ const Cell = memo(function Cell({
         tier === 'micro' && (
           <CellContent content={rich} layout={layout} format={format} locale={locale} />
         )
+      )}
+      {note !== null && (
+        <span className="gd-cell__note" aria-hidden="true" data-testid="set-note">
+          {note}
+        </span>
       )}
       {lostLabel !== null && (
         <span className="gd-cell__lost" aria-hidden="true">

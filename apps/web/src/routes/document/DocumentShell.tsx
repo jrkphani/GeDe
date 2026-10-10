@@ -67,7 +67,7 @@ import {
 } from '../../doc/viewport.js';
 import { peekEngine } from '../../doc/engine.js';
 import { LABELS } from '../../doc/shortcuts.js';
-import { translate } from '../../i18n/index.js';
+import { translate, useMessages } from '../../i18n/index.js';
 import { formatNumber } from '../../intl.js';
 import { activeLocale, useLocale } from '../../locale.js';
 import { usePhone } from '../../breakpoint.js';
@@ -298,7 +298,17 @@ function OpenDocument({
   // ADR-049: this replica measures wrapped rows and stores their heights (R-B).
   const fitter = useFitter(gd.doc);
   // Selection, editing and traversal (GRID-03..06) live in the grid state machine.
-  const grid = useGrid(gd, editable, { undo: session.undo, fit: fitter.fit });
+  // SET-02: a comma value typed or pasted into a set's range cell offers Split into rows.
+  const [splitOffer, setSplitOffer] = useState<{
+    cell: CellSelection;
+    elements: number;
+    address: string;
+  } | null>(null);
+  const offerSplit = useCallback((cell: CellSelection, elements: number, address: string) => {
+    setSplitOffer({ cell, elements, address });
+  }, []);
+  const grid = useGrid(gd, editable, { undo: session.undo, fit: fitter.fit, offerSplit });
+  const t = useMessages();
   // SORT-01..06 (ADR-026): the viewer's own sort, filter and grouping per table, from the
   // store the shell mounted above; never document state.
   const sort = useSortCommands(gd, useViewStore());
@@ -1549,6 +1559,30 @@ function OpenDocument({
           sheetNotice === null
             ? undefined
             : { onUndo: sheetNotice.undo, altText: 'Undo deleting the sheet' }
+        }
+      />
+      {/* SET-02: the offer is the toast's action; dismissing it keeps the value as typed. */}
+      <Toast
+        open={splitOffer !== null && editable}
+        onOpenChange={(open) => {
+          if (!open) setSplitOffer(null);
+        }}
+        title={
+          splitOffer === null
+            ? ''
+            : t('set.split.offer', { cell: splitOffer.address, count: splitOffer.elements })
+        }
+        undo={
+          splitOffer === null
+            ? undefined
+            : {
+                label: t('set.split.action'),
+                altText: t('set.split.alt', { cell: splitOffer.address }),
+                onUndo: () => {
+                  grid.commands.splitIntoRows(splitOffer.cell);
+                  setSplitOffer(null);
+                },
+              }
         }
       />
       <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />

@@ -76,6 +76,8 @@ import {
   setTableTitle as setTableTitleMutation,
   spanAt,
   spanCovering,
+  splitIntoRows as splitIntoRowsMutation,
+  splitOffer,
   STACKING_LABELS,
   tableById,
   tableMap,
@@ -244,6 +246,12 @@ export interface GridCommands {
   commitCell(cell: CellSelection, text: string): boolean;
   /** GRID-06: write the editor's rich text (marks included); read-only cells refuse. */
   commitRichCell(cell: CellSelection, doc: RichDoc): boolean;
+  /**
+   * SET-02: Split into rows — a set's range cell holding a comma value keeps its first
+   * element and each other element gets a row of its own, as one undo step. False when the
+   * cell is not on offer (another column, a single element, a formula).
+   */
+  splitIntoRows(cell: CellSelection): boolean;
   /** GRID-04: why a cell will not take typing, or null when it will. */
   readOnlyReason(cell: CellSelection): ReadOnlyReason | null;
   /**
@@ -332,6 +340,11 @@ export interface GridCommandDeps {
    * the row it appended, or two divider presses.
    */
   settle?: (() => void) | undefined;
+  /**
+   * SET-02: called after a typed or pasted value lands in a set's range cell as two or more
+   * elements, so the shell can offer Split into rows; `address` is the cell's A1 address.
+   */
+  offerSplit?: ((cell: CellSelection, elements: number, address: string) => void) | undefined;
 }
 
 /**
@@ -527,6 +540,12 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
   const readOnlyReason = (cell: CellSelection): ReadOnlyReason | null => {
     const t = map(cell.tableId);
     return t === null ? null : cellReadOnlyReason(t, cell.rowId, cell.colId);
+  };
+  /** SET-02: a comma value in a set's range cell is offered for Split into rows. */
+  const offerSplit = (cell: CellSelection) => {
+    if (deps.offerSplit === undefined) return;
+    const pieces = splitOffer(gd, cell.tableId, cell.rowId, cell.colId);
+    if (pieces !== null) deps.offerSplit(cell, pieces.length, addressOf(cell));
   };
   const refuseReadOnly = (cell: CellSelection): boolean => {
     const reason = readOnlyReason(cell);
@@ -990,16 +1009,30 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       // False when the row or column went while the editor was open: the draft is dropped
       // rather than written as a cell keyed to nothing (GRID-02). A formula's references
       // are bound to ids here, once, against today's geometry (PRD §20).
-      return commitCellText(gd, cell.tableId, cell.rowId, cell.colId, text, {
+      const written = commitCellText(gd, cell.tableId, cell.rowId, cell.colId, text, {
         index: workbookIndexFor(gd.doc),
       });
+      if (written) offerSplit(cell);
+      return written;
     },
     commitRichCell(cell, doc) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
       // A formula is a plain string bound to ids (PRD §20), never a fragment: the `commitCell`
       // that follows from the same editor finish writes it through commitCellText.
       if (isFormulaInput(plainText(doc))) return true;
-      return setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
+      const written = setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
+      if (written) offerSplit(cell);
+      return written;
+    },
+    splitIntoRows(cell) {
+      if (!editable()) return false;
+      const address = addressOf(cell);
+      const added = splitIntoRowsMutation(gd, cell.tableId, cell.rowId, cell.colId);
+      if (added === null) return false;
+      announce(
+        translate(activeLocale(), 'set.split.done', { cell: address, count: added.length + 1 }),
+      );
+      return true;
     },
     readOnlyReason,
     nestRow(tableId, rowId, colId) {

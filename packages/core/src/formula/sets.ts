@@ -32,6 +32,15 @@ export const MAX_CROSS_TUPLES = 10_000;
  * collapsed on first occurrence.
  */
 export function splitSetElements(text: string): string[] {
+  return dedupe(splitSetPieces(text));
+}
+
+/**
+ * The elements a text contributes, in order of appearance, repeats kept: what Split into
+ * rows writes one row per (SET-02), so a repeat typed in a comma value survives as a
+ * flagged bag entry rather than vanishing.
+ */
+export function splitSetPieces(text: string): string[] {
   const pieces: string[] = [];
   let depth = 0;
   let start = 0;
@@ -47,7 +56,7 @@ export function splitSetElements(text: string): string[] {
     }
   }
   pieces.push(text.slice(start));
-  return dedupe(pieces.map(normaliseElement).filter((p) => p !== ''));
+  return pieces.map(normaliseElement).filter((p) => p !== '');
 }
 
 /** One element as the algebra compares it: trimmed, NFC. */
