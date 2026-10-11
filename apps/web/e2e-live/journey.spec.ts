@@ -63,6 +63,7 @@ test('AUTH-01 LIB-01 ONB-01 ONB-08 ONB-07 DOC-01 GRID-04 LOAD-05 FIND-01 SHARE-0
 
   await test.step('type in a cell; the edit renders at once and syncs behind it', async () => {
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Add table asks the kind; Plain table is preselected
     await firstCell(page).click();
     await page.keyboard.type(CELL_TEXT);
     await expect(page.getByLabel('Edit B5')).toHaveText(CELL_TEXT);
