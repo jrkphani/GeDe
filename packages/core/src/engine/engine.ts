@@ -40,7 +40,13 @@ import { AUTO_FORMAT, isFormatLocale, type CellFormat } from '../format/types.js
 import { cellValueOf } from '../format/value.js';
 import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { cellMayRelabel } from './entities.js';
-import { cellsInColumnOn, entityKey, positionKey, type SheetIndex } from './sheet-index.js';
+import {
+  cellsInColumnOn,
+  cellsInRangeOn,
+  entityKey,
+  positionKey,
+  type SheetIndex,
+} from './sheet-index.js';
 import {
   COMPUTED_FORMULA_ROW,
   computedFormulaKey,
@@ -900,18 +906,30 @@ export class FormulaEngine {
    * FX-06: a set table's formula that names a structure table of its own sheet (`@U`) is read
    * by that table, which counts the formula's value (SET-02): a loop with no fixed point,
    * since the graph cannot see the edge (the tables are projected between rounds).
-   * shortcut: found by name or bound token only; a bare A1 address into a structure table
-   * is not, and may still oscillate (the host cuts after a few rounds), when it bites resolve
-   * addresses against the structure bounds.
+   * Found by name, bound token, or an A1 address, range or column that lands on one.
    */
   private readsStructure(cell: CellState): boolean {
     const own = this.tables.get(cell.tableId)?.structure;
     if (own === undefined || own.structure === true || own.setRange === undefined) return false;
-    for (const id of this.tablesRead(cell)) {
+    const isStructure = (id: Id): boolean => {
       const read = this.tables.get(id)?.structure;
-      if (read?.structure === true && read.sheetId === own.sheetId) return true;
-    }
-    return false;
+      return read?.structure === true && read.sheetId === own.sheetId;
+    };
+    for (const id of this.tablesRead(cell)) if (isStructure(id)) return true;
+    const ast = cell.formula?.ast;
+    if (ast == null) return false;
+    const sheet = this.index.sheetIndex(own.sheetId);
+    return references(ast).some((ref) => {
+      const hit =
+        ref.kind === 'address'
+          ? [sheet.byPosition.get(positionKey(ref.ref))]
+          : ref.kind === 'range'
+            ? cellsInRangeOn(sheet, ref.range)
+            : ref.kind === 'column'
+              ? cellsInColumnOn(sheet, ref.col)
+              : [];
+      return hit.some((c) => c !== undefined && isStructure(c.tableId));
+    });
   }
 
   /** The synthetic cell holding a computed table's formula, or null for any other table. */

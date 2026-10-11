@@ -196,7 +196,7 @@ function summaryCells(row: SummaryRow, labels: StructureLabels): string[] {
 
 /**
  * Every structure table of one sheet, stacked from the sheet's pinned structure row (a clear band
- * under its own tables until `structureSync` pins it), at the first section's first column (or column 0): a summary per section, the
+ * under its own tables until `structureSync` pins it), at column 0: a summary per section, the
  * sheet summary, U and the super set array. Empty for a sheet with neither a set nor a
  * section. `valueOf` answers a formula range cell with the value the engine evaluated
  * (SET-02), as `summarySets` takes it.
@@ -211,7 +211,8 @@ export function structureTables(
   const sets: readonly SummarySet[] = summarySets(gd, sheetId, valueOf);
   if (sections.length === 0 && sets.length === 0) return [];
   const bounds = sheetBounds(gd, sheetId);
-  const col = sections[0]?.firstColumn ?? 0;
+  // Column 0, like the pinned row: a section added or reordered never moves an address (SET-13).
+  const col = 0;
   let row =
     structureRowOf(gd, sheetId) ??
     (bounds === null ? 1 : bounds.row + bounds.rows + 1) + PIN_HEADROOM_ROWS;

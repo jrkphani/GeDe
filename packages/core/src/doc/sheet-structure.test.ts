@@ -581,6 +581,31 @@ describe('structure tables are read-only tables on the lattice (SET-13..16)', ()
     expect(textOf(results, read)).toBe('b');
   });
 
+  test('SET-13 adding a section never moves the structure tables sideways', () => {
+    const { sync, settle } = liveEngine(gd);
+    setTable('E', ['a', 'b']);
+    settle();
+    const at = () => sync.tables(sheetId).findIndex((t) => t.kind === 'universe');
+    const column = (): string => addressIn(sync.tables(sheetId), at(), 0).replace(/\d+$/, '');
+    expect(column()).toBe('A');
+    section('Lane', 20, 40);
+    settle();
+    expect(column()).toBe('A');
+  });
+
+  test('FX-06 a range cell that reads U by A1 address is circular and the structure settles', () => {
+    const { results, sync, settle } = liveEngine(gd);
+    const e = setTable('E', ['b']);
+    const row = addRow(gd, e);
+    settle();
+    const u = sync.tables(sheetId).findIndex((t) => t.kind === 'universe');
+    commitCellText(gd, e, row, rangeOf(e), `=Diff("a", ${addressIn(sync.tables(sheetId), u, 0)})`);
+    settle();
+    expect(results.get(workbookCellId(e, cellKey(row, rangeOf(e))))?.error).toEqual({
+      kind: 'circular',
+    });
+  });
+
   test('SET-14 the super set array lists U’s elements then every set’s name, each kind in words', () => {
     const { sync } = liveEngine(gd);
     setTable('E', ['a', 'b']);
@@ -940,6 +965,39 @@ describe('lock guard holes (SET-17, SET-18)', () => {
       });
     });
     expect(lockedTablesEdited(gd, noColumn)).toEqual([other.id]);
+  });
+
+  test('SET-18 a locked split table refuses phantom children beyond the pieces and the removal of a genuine one', () => {
+    const { id, parent } = lockedSplitTable(true);
+    const splitCol = tableById(gd, id)?.columns.find((c) => c.derive)?.id ?? '';
+    const phantom = sentBy((r) => {
+      for (const i of [5, 6]) {
+        const child = splitChildId(parent, i);
+        (tableMap(r, id)?.get('rows') as Y.Array<string>).push([child]);
+        const m = new Y.Map<unknown>();
+        m.set('splitChild', true);
+        m.set('splitOf', { rowId: parent, index: i });
+        (tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>>).set(child, m);
+        setCellText(r, id, child, splitCol, '');
+      }
+    });
+    expect(applyGuardedUpdate(gd, phantom, 'client')).toEqual([id]);
+    expect(tableById(gd, id)?.rows).toHaveLength(1);
+  });
+
+  test('SET-18 a split child removed from a locked table is put back', () => {
+    const lane = section('Lane', 0, 12);
+    const id = setTable('E', ['a, b'], 1);
+    addDerivedColumn(gd, id, { sourceColId: rangeOf(id), method: 'Split', args: [', '] });
+    const parent = rowOf(gd, id);
+    reconcileSplitChildren(gd, id, new Map([[parent, ['a', 'b']]]));
+    setSectionLocked(gd, sheetId, lane, true);
+    const rows = tableById(gd, id)?.rows.length;
+    const sent = sentBy((r) => {
+      (tableMap(r, id)?.get('rows') as Y.Array<string>).delete(1);
+    });
+    expect(applyGuardedUpdate(gd, sent, 'client')).toEqual([id]);
+    expect(tableById(gd, id)?.rows).toHaveLength(rows ?? 0);
   });
 
   test('SET-18 text a client writes on a split child or a followed row is refused in a locked table', () => {

@@ -87,6 +87,25 @@ const MACHINE_TABLE_KEYS: ReadonlySet<string> = new Set(['computedRows', 'comput
 /** Origin of the write that puts locked tables back (never an undo step on any replica). */
 export const LOCK_RESTORE_ORIGIN = 'lock-restore';
 
+/**
+ * The pieces a split parent's source cell divides into, or null when they cannot be re-derived
+ * here (no Split column, or a formula source: the service has no engine).
+ */
+function splitPieces(
+  table: TableMap,
+  parentRow: Id,
+): readonly { kind: string; text?: string }[] | null {
+  const spec = tableRecord(table).columns.find((c) => c.derive?.method === 'Split')?.derive;
+  if (spec == null || isFormula(cellsMap(table).get(cellKey(parentRow, spec.sourceColId))))
+    return null;
+  const pieces = applyMethod(
+    'Split',
+    deriveArgValues(spec),
+    cellRich(table, parentRow, spec.sourceColId),
+  );
+  return pieces.ok && pieces.value.kind === 'list' ? pieces.value.items : null;
+}
+
 function rowsOf(table: TableMap | null): Set<Id> {
   return new Set(table === null ? [] : rowsArray(table).toArray());
 }
@@ -160,7 +179,9 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
           splitOf === null ||
           splitColumnOf(tableRecord(before)) === null ||
           !rowsOf(before).has(splitOf.rowId) ||
-          splitChildId(splitOf.rowId, splitOf.index) !== rowId
+          splitChildId(splitOf.rowId, splitOf.index) !== rowId ||
+          // No phantom child: its index must be a piece the parent's source cell makes.
+          splitOf.index >= (splitPieces(before, splitOf.rowId)?.length ?? 0)
         )
           return false;
       }
@@ -262,14 +283,7 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       if (spec?.method !== 'Split' || parent === null) return false;
       // shortcut: a Split over a formula cell cannot be re-derived without the engine, so
       // its children are refused in a locked table; when that bites, ship the engine's pieces.
-      if (isFormula(cellsMap(now).get(cellKey(parent.rowId, spec.sourceColId)))) return false;
-      const pieces = applyMethod(
-        'Split',
-        deriveArgValues(spec),
-        cellRich(now, parent.rowId, spec.sourceColId),
-      );
-      const piece =
-        pieces.ok && pieces.value.kind === 'list' ? pieces.value.items[parent.index] : null;
+      const piece = splitPieces(now, parent.rowId)?.[parent.index];
       return (
         piece?.kind === 'text' &&
         !isFormula(cellsMap(now).get(cellKey(rowId, colId))) &&
@@ -319,6 +333,17 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       const now = rowsOf(tableMap(after, tableId));
       for (const id of [...was, ...now]) {
         if (was.has(id) !== now.has(id) && !machineRow(tableId, id)) edit(tableId);
+        // A genuine split child stays while its piece exists: removing it shifts the rows below.
+        const gone = tableMap(gd, tableId);
+        const split =
+          was.has(id) && !now.has(id) && gone !== null ? rowMeta(gone, id).splitOf : null;
+        const left = tableMap(after, tableId);
+        if (
+          split !== null &&
+          left !== null &&
+          split.index < (splitPieces(left, split.rowId)?.length ?? 0)
+        )
+          edit(tableId);
       }
     }
     return [...offending];
