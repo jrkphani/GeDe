@@ -13,6 +13,7 @@ import {
   isLastSheet,
   isSheetLocked,
   LATTICE,
+  snapPoint,
   listSections,
   listSheets,
   lockReasonAt,
@@ -692,28 +693,22 @@ function OpenDocument({
     (at?: { x: number; y: number }) => {
       if (activeSheetId === null) return { col: 1, row: 1 };
       const bounds = sheetBounds(gd, activeSheetId);
-      return (
-        at ??
-        (bounds === null
-          ? { col: 1, row: 1 }
-          : { col: bounds.col, row: bounds.row + bounds.rows + 1 })
-      );
+      // One snap (as createTable's) for the dialog's section, the lock check and the table.
+      if (at !== undefined) return snapPoint(at);
+      return bounds === null
+        ? { col: 1, row: 1 }
+        : { col: bounds.col, row: bounds.row + bounds.rows + 1 };
     },
     [gd, activeSheetId],
   );
   const addTableOrigin = addTableOpen ? tableOrigin(addTableAt) : { col: 1, row: 1 };
-  const addTableCol =
-    'col' in addTableOrigin ? addTableOrigin.col : Math.floor(addTableOrigin.x / LATTICE.col);
+  const addTableCol = addTableOrigin.col;
   const addTable = useCallback(
     (at?: { x: number; y: number }, kind: TableKind = 'plain', pick?: SetPick) => {
       if (activeSheetId === null || !editable) return;
       const origin = tableOrigin(at);
       // SET-18: nothing is added in a locked section or on a locked sheet.
-      const lock = lockReasonAt(
-        gd,
-        activeSheetId,
-        'col' in origin ? origin.col : Math.floor(origin.x / LATTICE.col),
-      );
+      const lock = lockReasonAt(gd, activeSheetId, origin.col);
       if (lock !== null) {
         announce(
           sentence(

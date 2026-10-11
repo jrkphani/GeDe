@@ -281,7 +281,8 @@ describe('message catalogue', () => {
     const sources = readdirSync(dir)
       .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
       .map((f) => resolve(dir, f));
-    const literal = /\b(label|aria-label|title|hint|placeholder|available)="[A-Za-z]/;
+    const literal =
+      /\b(label|aria-label|title|hint|placeholder|available|decrementReason|disabledReason)="[A-Za-z]/;
     for (const file of sources) {
       const hits = readFileSync(file, 'utf8')
         .split('\n')
@@ -345,8 +346,13 @@ describe('message catalogue', () => {
       const src = readFileSync(resolve(docDir, file), 'utf8');
       for (const phrase of phrases) {
         expect(src, `${file}: ${phrase}`).not.toContain(`'${phrase}'`);
+        expect(src, `${file}: ${phrase}`).not.toContain(`"${phrase}"`);
       }
     }
+    // A reason built by joining English to a key's text is still English.
+    expect(readFileSync(resolve(docDir, 'menus/entries.ts'), 'utf8')).not.toContain(
+      'cells are read-only',
+    );
     for (const locale of LOCALES) {
       for (const key of ['reason.viewOnly', 'menuLabel.cell', 'forms.sum.hint'] as const) {
         expect(CATALOGUE[locale][key], `${locale} ${key}`).not.toBe('');

@@ -176,17 +176,17 @@ export const messages: Messages = {
   'addTable.rows.family.title': 'தலைப்பு: பெயரும் வரையறையும்',
   'addTable.rows.family.header': 'தலைப்பு: வீச்சு · விளக்கம்',
   'addTable.rows.family.first': 'உறுப்பு, எளிய கணம் அல்லது குடும்பம்',
-  'addTable.rows.family.member': 'அதன் முதல் உறுப்பினர், உள்தள்ளப்பட்டது',
   'addTable.rows.computed.meta':
     'மெட்டா வரிசை, கணக்கிடப்பட்டது எனக் குறிக்கப்பட்டு, அதன் செயலுறுப்புகளைக் கூறும்',
   'addTable.rows.computed.title': 'தலைப்பு: பெயரும் கோவையும், எ.கா. A ∩ B',
-  'addTable.rows.computed.header': 'தலைப்பு: வீச்சு · மூலம்',
+  'addTable.rows.computed.header': 'தலைப்பு: வீச்சு · குறிப்பு',
   'addTable.rows.computed.first': 'உறுப்புகள், கணக்கிடப்பட்டவை, தட்டச்சு செய்தவை அல்ல',
   'addTable.rows.product.meta':
     'மெட்டா வரிசை, கணக்கிடப்பட்டது எனக் குறிக்கப்பட்டு, கணங்களை வரிசையாகப் பட்டியலிடும்',
   'addTable.rows.product.title':
     'தலைப்பு: A × B × C மற்றும் { (x₁, x₂, x₃) | x₁ ∈ A மற்றும் x₂ ∈ B மற்றும் x₃ ∈ C }',
-  'addTable.rows.product.header': 'தலைப்பு: வீச்சு · விளக்கம்',
+  'addTable.rows.product.header':
+    'தலைப்பு: வீச்சு · குறிப்பு, அல்லது ஒவ்வொரு தொகுப்புக்கும் ஒரு நெடுவரிசை',
   'addTable.rows.product.first': 'முதல் வரிசைப்படுத்திய தொகுப்பு (x₁, x₂, x₃)',
   'addTable.preview': 'முன்னோட்டம்',
   'addTable.preview.empty':
@@ -609,6 +609,14 @@ export const messages: Messages = {
   'reason.onlyHalfLeft': 'இதுவே மீதமுள்ள ஒரே பாதி',
   'reason.theCell': 'கலம்',
   'reason.onlyTable': 'இந்தத் தாளில் உள்ள ஒரே அட்டவணை இதுவே',
+  'reason.atColumnA': 'ஏற்கெனவே A நெடுவரிசையில் உள்ளது',
+  'reason.atRow1': 'ஏற்கெனவே 1வது வரிசையில் உள்ளது',
+  'reason.spanColumnIsCell': 'ஒரு நெடுவரிசை என்பது கலமே',
+  'reason.spanRowIsCell': 'ஒரு வரிசை என்பது கலமே',
+  'reason.headerHidden': 'தலைப்பு வரிசை மறைக்கப்பட்டுள்ளது',
+  'reason.footerHidden': 'அடிக்குறிப்பு மறைக்கப்பட்டுள்ளது',
+  'reason.oneColumnMin': 'அட்டவணையில் குறைந்தது ஒரு நெடுவரிசை இருக்கும்',
+  'reason.columnsOneWide': 'தெரியும் ஒவ்வொரு நெடுவரிசையும் ஏற்கெனவே ஒரு அலகு அகலம்',
   'reason.alreadyBack': 'ஏற்கெனவே பின்னால் உள்ளது',
   'reason.alreadyFront': 'ஏற்கெனவே முன்னால் உள்ளது',
   'reason.alreadyFirst': 'ஏற்கெனவே முதலாவது',

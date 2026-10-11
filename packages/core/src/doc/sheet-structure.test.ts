@@ -14,8 +14,9 @@ import { computedRowId, reconcileComputed, setComputedColumn } from '../ref/comp
 import { addDerivedColumn } from '../ref/derive.js';
 import { reconcilePull, setPull } from '../ref/pull.js';
 import { reconcileSplitChildren, splitChildId } from '../ref/split.js';
-import { reconcileSetRefs } from './set-table.js';
+import { followedRowId, reconcileSetRefs } from './set-table.js';
 import { deleteSheet } from './sheets.js';
+import { layoutSheet } from '../style/arrange.js';
 import {
   addRow,
   createSheet,
@@ -567,6 +568,19 @@ describe('structure tables are read-only tables on the lattice (SET-13..16)', ()
     expect(textOf(results, fourth)).toBe('y');
   });
 
+  test('SET-13 moving a table leaves a structure cell at the address a formula reads', () => {
+    const { results, sync } = liveEngine(gd);
+    const e = setTable('E', ['a', 'b']);
+    const at = sync.tables(sheetId).findIndex((t) => t.kind === 'universe');
+    const read = probeCell(`=${addressIn(sync.tables(sheetId), at, 1)}`);
+    expect(textOf(results, read)).toBe('b');
+    const address = addressIn(sync.tables(sheetId), at, 1);
+    gd.tables.get(e)?.set('gridRow', 60);
+    setTablePosition(gd, e, { col: 0, row: 90 });
+    expect(addressIn(sync.tables(sheetId), at, 1)).toBe(address);
+    expect(textOf(results, read)).toBe('b');
+  });
+
   test('SET-14 the super set array lists U’s elements then every set’s name, each kind in words', () => {
     const { sync } = liveEngine(gd);
     setTable('E', ['a', 'b']);
@@ -928,6 +942,54 @@ describe('lock guard holes (SET-17, SET-18)', () => {
     expect(lockedTablesEdited(gd, noColumn)).toEqual([other.id]);
   });
 
+  test('SET-18 text a client writes on a split child or a followed row is refused in a locked table', () => {
+    const lane = section('Lane', 0, 12);
+    const split = setTable('E', ['a, b'], 1);
+    addDerivedColumn(gd, split, { sourceColId: rangeOf(split), method: 'Split', args: [', '] });
+    const parent = rowOf(gd, split);
+    reconcileSplitChildren(gd, split, new Map([[parent, ['a', 'b']]]));
+    const src = setTable('Src', ['p'], 8);
+    const fam = setTable('Fam', ['x'], 1, 'family');
+    const ref = rowOf(gd, fam);
+    setCellText(gd, fam, ref, rangeOf(fam), '=@Src');
+    reconcileSetRefs(gd, fam);
+    setSectionLocked(gd, sheetId, lane, true);
+    const splitCol = tableById(gd, split)?.columns.find((c) => c.derive)?.id ?? '';
+    // An existing child rewritten.
+    const rewrite = sentBy((r) =>
+      setCellText(r, split, splitChildId(parent, 0), splitCol, 'HACKED'),
+    );
+    expect(lockedTablesEdited(gd, rewrite)).toEqual([split]);
+    // A new child with the derived id and tags, but text that is not the piece.
+    const forged = sentBy((r) => {
+      const child = splitChildId(parent, 3);
+      addRow(r, split);
+      const rows = tableMap(r, split)?.get('rows') as Y.Array<string>;
+      rows.delete(rows.length - 1);
+      rows.push([child]);
+      tag(r, split, child, 'splitChild', true);
+      tag(r, split, child, 'splitOf', { rowId: parent, index: 3 });
+      setCellText(r, split, child, splitCol, 'HACKED');
+    });
+    expect(lockedTablesEdited(gd, forged)).toEqual([split]);
+    // A followed row's text rewritten, and one forged with its derived id.
+    const followed = tableById(gd, fam)?.rows[1] ?? '';
+    const range = rangeOf(fam);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => setCellText(r, fam, followed, range, 'HACKED')),
+      ),
+    ).toEqual([fam]);
+    const phantom = followedRowId(ref, 'NOSRC');
+    const forgedFollow = sentBy((r) => {
+      (tableMap(r, fam)?.get('rows') as Y.Array<string>).push([phantom]);
+      tag(r, fam, phantom, 'setRefOf', { rowId: ref, tableId: src });
+      setCellText(r, fam, phantom, range, 'HACKED');
+    });
+    expect(lockedTablesEdited(gd, forgedFollow)).toEqual([fam]);
+  });
+
   test('SET-18 a category band tag on an added row is refused in a locked machine-driven table', () => {
     const { id } = lockedSplitTable(true);
     const sent = sentBy((r) => {
@@ -1141,5 +1203,33 @@ describe('moving a table across a lock (SET-18)', () => {
     expect(tableById(gd, out)?.gridCol).toBe(20);
     setTablePosition(gd, inside, { col: 30, row: 2 });
     expect(tableById(gd, inside)?.gridCol).toBe(1);
+  });
+});
+
+describe('structure tables hold still (SET-13, FX-06)', () => {
+  test('SET-13 a range cell that reads @U is circular and the structure settles', () => {
+    const { results, settle } = liveEngine(gd);
+    const e = setTable('E', []);
+    const row = addRow(gd, e);
+    commitCellText(gd, e, row, rangeOf(e), '=Diff("a", @U)');
+    settle();
+    const cell = results.get(workbookCellId(e, cellKey(row, rangeOf(e))));
+    expect(cell?.error).toEqual({ kind: 'circular' });
+  });
+});
+
+describe('layouts on a locked sheet (SET-18)', () => {
+  test('SET-18 Pipeline lanes moves no table on a locked sheet or out of a locked section', () => {
+    const a = setTable('A', ['x'], 0);
+    const b = setTable('B', ['y'], 20);
+    setSheetLocked(gd, sheetId, true);
+    expect(layoutSheet(gd, sheetId, 'lanes')).toEqual([]);
+    expect([tableById(gd, a)?.gridCol, tableById(gd, b)?.gridCol]).toEqual([0, 20]);
+    expect(listSections(gd, sheetId)).toEqual([]);
+    setSheetLocked(gd, sheetId, false);
+    const lane = section('Lane', 0, 25);
+    setSectionLocked(gd, sheetId, lane, true);
+    expect(layoutSheet(gd, sheetId, 'stacked')).toEqual([]);
+    expect([tableById(gd, a)?.gridCol, tableById(gd, b)?.gridCol]).toEqual([0, 20]);
   });
 });

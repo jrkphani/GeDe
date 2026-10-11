@@ -328,7 +328,7 @@ export function TableTab({
             min={0}
             max={1}
             disabledReason={viewOnly}
-            decrementReason="the header row is hidden"
+            decrementReason={t('reason.headerHidden')}
             onChange={(next) => {
               commands.setHeaderRows(record.id, next === 0 ? 0 : 1);
             }}
@@ -359,7 +359,7 @@ export function TableTab({
             min={0}
             max={1}
             disabledReason={viewOnly}
-            decrementReason="the footer is hidden"
+            decrementReason={t('reason.footerHidden')}
             onChange={(next) => {
               commands.setFooterRows(record.id, next === 0 ? 0 : 1);
             }}
@@ -386,7 +386,7 @@ export function TableTab({
             value={columns}
             min={1}
             disabledReason={viewOnly}
-            decrementReason="a table keeps at least one column"
+            decrementReason={t('reason.oneColumnMin')}
             onChange={(next) => {
               if (next > columns) commands.insertColumnAfter(record.id);
               else if (lastColumn !== undefined) commands.deleteColumn(record.id, lastColumn.id);
@@ -477,7 +477,7 @@ export function TableTab({
             value={visibleWidth}
             min={Math.max(1, record.columns.filter((c) => !c.hidden).length)}
             disabledReason={viewOnly}
-            decrementReason="every visible column is already one unit wide"
+            decrementReason={t('reason.columnsOneWide')}
             onChange={(next) => {
               commands.scaleTable(record.id, { widthUnits: next });
             }}

@@ -35,9 +35,12 @@
  * The only cell a reconciler writes on a pulled row is the pull column bound to the source cell,
  * so a pulled row's other text and a computed row's text are edits.
  *
+ * A split child's text must be the piece its parent's source cell divides into, and a followed
+ * row's text what its set holds, both re-derived here; any other text on them is an edit.
+ *
  * shortcut: the service has no formula engine, so it cannot check a computed row's key against
- * the result (it shows until the next reconcile drops it), nor a split or followed row's text;
- * when rows carry a signed provenance, close them.
+ * the result (it shows until the next reconcile drops it); when rows carry a signed
+ * provenance, close it.
  *
  * A locked sheet is put back if deleted, with all its tables; a locked section's name and
  * columns are put back.
@@ -48,8 +51,10 @@ import type { Id } from '../ids.js';
 import { computedRowId } from '../ref/computed.js';
 import { pulledCellSource, pullOf } from '../ref/pull.js';
 import { splitChildId, splitColumnOf } from '../ref/split.js';
-import { followedRowId } from './set-table.js';
-import { isCellKey, splitCellKey } from '../ids.js';
+import { applyMethod } from '../formula/methods.js';
+import { cellRich } from '../text/mutations.js';
+import { followedCellDerived, followedRowId } from './set-table.js';
+import { cellKey, isCellKey, splitCellKey } from '../ids.js';
 import {
   anyLock,
   listSections,
@@ -60,7 +65,10 @@ import {
 } from './sections.js';
 import {
   cellsMap,
+  cellText,
   columnsArray,
+  deriveArgValues,
+  isFormula,
   readColumnSource,
   openDocument,
   readString,
@@ -224,7 +232,16 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       const { rowId, colId } = splitCellKey(key);
       const meta = machineMeta(tableId, rowId);
       if (meta?.computedKey !== null) return false;
-      if (meta.pulledFrom === null) return true;
+      if (meta.pulledFrom === null) {
+        // A split child holds the piece its parent's source cell divides into; a followed
+        // row holds its set's source text. Any other text there is an edit.
+        const now = tableMap(after, tableId);
+        if (now === null || !rowsOf(now).has(rowId)) return true;
+        if (meta.splitChild || meta.splitOf !== null)
+          return splitCellDerived(now, rowId, colId, meta);
+        if (meta.setRefOf !== null) return followedCellDerived(after, tableId, rowId, colId);
+        return true;
+      }
       const before = tableMap(gd, tableId);
       const pull = before === null ? null : pullOf(before);
       const now = tableMap(after, tableId);
@@ -233,6 +250,31 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       return value === undefined
         ? !rowsOf(now).has(rowId)
         : value === pulledCellSource(pull.spec, rowId);
+    };
+    const splitCellDerived = (
+      now: TableMap,
+      rowId: Id,
+      colId: Id,
+      meta: ReturnType<typeof rowMeta>,
+    ): boolean => {
+      const spec = tableRecord(now).columns.find((c) => c.id === colId)?.derive;
+      const parent = meta.splitOf;
+      if (spec?.method !== 'Split' || parent === null) return false;
+      // shortcut: a Split over a formula cell cannot be re-derived without the engine, so
+      // its children are refused in a locked table; when that bites, ship the engine's pieces.
+      if (isFormula(cellsMap(now).get(cellKey(parent.rowId, spec.sourceColId)))) return false;
+      const pieces = applyMethod(
+        'Split',
+        deriveArgValues(spec),
+        cellRich(now, parent.rowId, spec.sourceColId),
+      );
+      const piece =
+        pieces.ok && pieces.value.kind === 'list' ? pieces.value.items[parent.index] : null;
+      return (
+        piece?.kind === 'text' &&
+        !isFormula(cellsMap(now).get(cellKey(rowId, colId))) &&
+        cellText(now, rowId, colId) === piece.text
+      );
     };
     const rowsMoved = new Set<Id>();
     after.tables.observeDeep((events) => {

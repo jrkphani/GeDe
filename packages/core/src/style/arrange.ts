@@ -15,6 +15,7 @@ import {
   isFormula,
   readBoolean,
   readString,
+  sheetLockReason,
   tableMap,
   tableUnitBounds,
   tablesOnSheet,
@@ -120,13 +121,14 @@ export const LAYOUT_GAP = { cols: 1, rows: 4, stagger: 6 } as const;
  * right with every second table dropped by `stagger` rows, as the prototype
  * does. Lanes also add a section per lane, named for its table and as wide (SET-17); a lane
  * that would overlap a section already there gets none. Returns the tables moved (their new
- * origins).
+ * origins); none on a sheet with a lock, which a layout would move tables across (SET-18).
  */
 export function layoutSheet(
   gd: GedeDoc,
   sheetId: Id,
   layout: CanvasLayout,
 ): { id: Id; col: number; row: number }[] {
+  if (sheetLockReason(gd, sheetId) !== null) return [];
   return transact(gd, () => {
     const order = stackingOrder(tablesOnSheet(gd, sheetId));
     const first = order[0];

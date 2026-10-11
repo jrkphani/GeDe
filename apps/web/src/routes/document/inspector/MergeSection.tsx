@@ -50,7 +50,7 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
           min={1}
           max={room?.cols ?? 1}
           disabledReason={reason}
-          decrementReason="one column is the cell itself"
+          decrementReason={t('reason.spanColumnIsCell')}
           onChange={(next) => {
             if (cell !== null) commands.mergeCells(cell, { rows, cols: next });
           }}
@@ -62,7 +62,7 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
           min={1}
           max={room?.rows ?? 1}
           disabledReason={reason}
-          decrementReason="one row is the cell itself"
+          decrementReason={t('reason.spanRowIsCell')}
           onChange={(next) => {
             if (cell !== null) commands.mergeCells(cell, { rows: next, cols });
           }}

@@ -44,6 +44,7 @@ export {
   powerCardinality,
   splitSetElements,
   splitSetPieces,
+  unenclosableElement,
   union,
 } from './sets.js';
 export {

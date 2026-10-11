@@ -832,7 +832,12 @@ export class FormulaEngine {
         kind: 'parse',
         error: formula.parseError ?? { message: 'invalid formula', span: { start: 0, end: 0 } },
       };
-    } else if (blocked.has(id) || cycleMembers.has(id) || this.readsOwnRows(cell)) {
+    } else if (
+      blocked.has(id) ||
+      cycleMembers.has(id) ||
+      this.readsOwnRows(cell) ||
+      this.readsStructure(cell)
+    ) {
       error = { kind: 'circular' };
     } else {
       const sheetId = this.tables.get(cell.tableId)?.structure.sheetId ?? '';
@@ -889,6 +894,24 @@ export class FormulaEngine {
       }
     }
     return tables;
+  }
+
+  /**
+   * FX-06: a set table's formula that names a structure table of its own sheet (`@U`) is read
+   * by that table, which counts the formula's value (SET-02): a loop with no fixed point,
+   * since the graph cannot see the edge (the tables are projected between rounds).
+   * shortcut: found by name or bound token only; a bare A1 address into a structure table
+   * is not, and may still oscillate (the host cuts after a few rounds), when it bites resolve
+   * addresses against the structure bounds.
+   */
+  private readsStructure(cell: CellState): boolean {
+    const own = this.tables.get(cell.tableId)?.structure;
+    if (own === undefined || own.structure === true || own.setRange === undefined) return false;
+    for (const id of this.tablesRead(cell)) {
+      const read = this.tables.get(id)?.structure;
+      if (read?.structure === true && read.sheetId === own.sheetId) return true;
+    }
+    return false;
   }
 
   /** The synthetic cell holding a computed table's formula, or null for any other table. */

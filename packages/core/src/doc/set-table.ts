@@ -678,6 +678,27 @@ export function followedRowId(rowId: Id, sourceRowId: Id): Id {
   return deterministicId(`set-ref~${rowId}~${sourceRowId}`);
 }
 
+/**
+ * SET-18: whether the cell `colId` of followed row `rowId` holds what the reconciler writes
+ * there: its set's source text (or bound formula), in the range column, under a row that
+ * references that set. The sync service uses it to tell a reconcile from a client's edit.
+ */
+export function followedCellDerived(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): boolean {
+  const table = tableMap(gd, tableId);
+  const ref = table === null ? null : rowMeta(table, rowId).setRefOf;
+  if (table === null || ref === null) return false;
+  if (colId !== setRangeColumn(tableRecord(table))) return false;
+  if (setReferenceOf(gd, tableId, ref.rowId) !== ref.tableId) return false;
+  const row = followedRows(gd, ref.tableId).find(
+    (r) => followedRowId(ref.rowId, r.sourceRowId) === rowId,
+  );
+  if (row === undefined) return false;
+  const stored = cellsMap(table).get(cellKey(rowId, colId));
+  return row.content.kind === 'formula'
+    ? stored === row.content.source
+    : !isFormula(stored) && cellText(table, rowId, colId) === row.content.text;
+}
+
 function reconcileRefsInTransaction(gd: GedeDoc, tableId: Id): number {
   const table = tableMap(gd, tableId);
   if (table === null) return 0;

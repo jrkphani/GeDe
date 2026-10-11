@@ -21,6 +21,7 @@ import {
 
 import { AddTableDialog } from './AddTableDialog.js';
 import { FillColumnDialog } from './FillColumnDialog.js';
+import { translate } from '../../../i18n/index.js';
 import { addTableOfKind } from './set-tables.js';
 
 let gd: GedeDoc;
@@ -206,8 +207,34 @@ describe('SET-01 Add table asks the kind', () => {
     ).toEqual(['±0°Header row', '+1°First row']);
     await userEvent.click(within(dialog).getByRole('radio', { name: /^Family of sets/ }));
     const items = within(starts).getAllByRole('listitem');
-    expect(items).toHaveLength(5);
-    expect(items[4]).toHaveTextContent('+1.1°Its first member, indented');
+    // The preview promises what Add makes: a family starts like a simple set, with no member row.
+    expect(items).toHaveLength(4);
+    expect(starts).not.toHaveTextContent('first member');
+    const made = tableById(
+      gd,
+      addTableOfKind(gd, { sheetId, at: { col: 0, row: 1 }, kind: 'family' })!,
+    );
+    expect(made?.rows).toHaveLength(1);
+  });
+
+  it('SET-01 the computed and product previews name the column headers Add makes', () => {
+    const a = set('E', 0);
+    const b = set('C', 4);
+    const made = tableById(
+      gd,
+      addTableOfKind(gd, {
+        sheetId,
+        at: { col: 8, row: 1 },
+        kind: 'computed',
+        pick: { op: 'Union', sets: [a, b], shape: 'column' },
+      })!,
+    );
+    const labels = made?.columns.map((c) => c.label) ?? [];
+    for (const key of ['computed', 'product'] as const) {
+      const header = translate('en-US', `addTable.rows.${key}.header`);
+      for (const label of labels) expect(header).toContain(label);
+    }
+    expect(labels).toEqual(['range', 'note']);
   });
 
   it('SET-01 the dialog names the section the table lands in, only when sections exist', async () => {

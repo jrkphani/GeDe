@@ -198,7 +198,10 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
   const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   const table = tableMap(ctx.gd, cell.tableId);
   const readOnly = table === null ? null : ctx.commands.readOnlyReason(cell);
-  const locked = readOnly === null ? undefined : `${readOnly} cells are read-only`;
+  const locked =
+    readOnly === null
+      ? undefined
+      : translate(activeLocale(), 'cell.readOnly', { reason: readOnlyLabel(readOnly) });
   return [
     {
       kind: 'item',

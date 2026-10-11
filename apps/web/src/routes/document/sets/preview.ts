@@ -8,7 +8,6 @@
  * request if a preview ever needs a formula the picker cannot write.
  */
 import {
-  cellText,
   cross,
   crossCardinality,
   crossTuples,
@@ -18,12 +17,11 @@ import {
   MAX_CROSS_TUPLES,
   power,
   powerCardinality,
-  rowsArray,
   spreadMemberLabel,
   tableMap,
   union,
-  setRangeColumn,
-  tableById,
+  setTableFacts,
+  unenclosableElement,
   type GedeDoc,
   type Id,
 } from '@gede/core';
@@ -42,16 +40,16 @@ export interface ResultPreview {
   readonly total: number;
 }
 
+/**
+ * A set table's elements as the formulas read them: split on FX-09's separators, NFC, a typed
+ * number, date or currency in its canonical spelling, a lost row left out (`setTableFacts`).
+ */
 function elementsOf(gd: GedeDoc, tableId: Id): string[] {
-  const record = tableById(gd, tableId);
   const table = tableMap(gd, tableId);
-  const colId = record === null ? null : setRangeColumn(record);
-  if (table === null || colId === null) return [];
+  const facts = table === null ? null : setTableFacts(table);
+  if (facts === null) return [];
   return dedupe(
-    rowsArray(table)
-      .toArray()
-      .map((rowId) => cellText(table, rowId, colId).trim())
-      .filter((text) => text !== ''),
+    [...facts.rows.values()].flatMap((row) => (row.kind === 'element' ? row.elements : [])),
   );
 }
 
@@ -71,7 +69,9 @@ export function previewPick(gd: GedeDoc, pick: SetPick, rangeHead: string): Resu
     case 'Diff':
       return single(difference(sets));
     case 'Power':
-      return powerCardinality(sets[0] ?? []) > MAX_CROSS_TUPLES
+      // The evaluator refuses an element that would read as two once braced (Add reports it).
+      return unenclosableElement(sets[0] ?? []) !== undefined ||
+        powerCardinality(sets[0] ?? []) > MAX_CROSS_TUPLES
         ? null
         : single(power(sets[0] ?? []));
     case 'Cross': {

@@ -49,7 +49,6 @@ const LABEL: Readonly<Record<TableKind, readonly [MessageKey, MessageKey]>> = {
 };
 
 const FIRST = '+1\u00B0';
-const FIRST_MEMBER = '+1.1\u00B0';
 const { meta: META, title: TITLE, header: HEADER } = SET_DEGREE;
 
 /** The rows each kind starts with: their degree (SET-07) and what the row holds. */
@@ -69,7 +68,6 @@ const STARTS: Readonly<Record<TableKind, readonly (readonly [string, MessageKey]
     [TITLE, 'addTable.rows.family.title'],
     [HEADER, 'addTable.rows.family.header'],
     [FIRST, 'addTable.rows.family.first'],
-    [FIRST_MEMBER, 'addTable.rows.family.member'],
   ],
   computed: [
     [META, 'addTable.rows.computed.meta'],

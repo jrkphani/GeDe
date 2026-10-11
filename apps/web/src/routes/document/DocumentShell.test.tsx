@@ -7,13 +7,16 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Y from 'yjs';
 import {
+  addSection,
   createSheet,
   createTable,
   LATTICE,
   listSheets,
   openDocument,
   setCellText,
+  setSectionLocked,
   tableById,
+  tablesOnSheet,
   type GedeDoc,
 } from '@gede/core';
 import type * as DocumentsApi from '../../api/documents.js';
@@ -470,6 +473,25 @@ describe('DocumentShell', () => {
     const table = grid.closest<HTMLElement>('.gd-table')!;
     expect(Number.parseFloat(table.style.top)).toBeGreaterThan(LATTICE.row * 3);
     expect(within(table).getByTestId('set-kind-badge')).toHaveTextContent('Simple set');
+  });
+
+  it('SET-18 SET-01 a table placed at the right half of the column before a locked section is refused, not added inside it', async () => {
+    const other = openDocument(roomDoc());
+    const sheet = createSheet(other);
+    addSection(other, sheet, { name: 'Open', firstColumn: 0, lastColumn: 5 });
+    const locked = addSection(other, sheet, { name: 'Sealed', firstColumn: 7, lastColumn: 12 })!;
+    setSectionLocked(other, sheet, locked, true);
+    await openShell();
+    // 6.6 columns across: the lattice snaps to column 7, which is inside the locked section.
+    fireEvent.doubleClick(screen.getByTestId('plane'), {
+      clientX: 6.6 * LATTICE.col,
+      clientY: 500,
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'What kind of table is this?' });
+    expect(dialog).toHaveTextContent('Sealed');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add table' }));
+    expect(screen.queryAllByRole('grid')).toHaveLength(0);
+    expect(tablesOnSheet(openDocument(roomDoc()), sheet)).toHaveLength(0);
   });
 
   it('SET-01 the empty sheet’s Add first table button asks the kind first', async () => {

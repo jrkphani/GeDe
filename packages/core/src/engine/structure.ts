@@ -12,7 +12,7 @@
  */
 import type { UnitBounds } from '../doc/geometry.js';
 import { sheetBounds } from '../doc/geometry.js';
-import { listSections } from '../doc/sections.js';
+import { listSections, pinStructureRow, structureRowOf } from '../doc/sections.js';
 import { listSheets, TABLE_HEADER_ROWS, TABLE_TITLE_ROWS, type GedeDoc } from '../doc/schema.js';
 import {
   sectionSummary,
@@ -102,6 +102,12 @@ export interface StructureTable {
   readonly table: TableSnapshot;
 }
 
+/**
+ * Rows left clear under the sheet's tables when the structure rows are pinned, so tables added
+ * below them later do not land on the pinned rows (the pin is a stored row, SET-13).
+ */
+const PIN_HEADROOM_ROWS = 24;
+
 /** Rows a table is separated from the next by. */
 const GAP_ROWS = 1;
 
@@ -189,8 +195,8 @@ function summaryCells(row: SummaryRow, labels: StructureLabels): string[] {
 }
 
 /**
- * Every structure table of one sheet, stacked from the first row under the sheet's own
- * tables, at the first section's first column (or column 0): a summary per section, the
+ * Every structure table of one sheet, stacked from the sheet's pinned structure row (a clear band
+ * under its own tables until `structureSync` pins it), at the first section's first column (or column 0): a summary per section, the
  * sheet summary, U and the super set array. Empty for a sheet with neither a set nor a
  * section. `valueOf` answers a formula range cell with the value the engine evaluated
  * (SET-02), as `summarySets` takes it.
@@ -206,7 +212,9 @@ export function structureTables(
   if (sections.length === 0 && sets.length === 0) return [];
   const bounds = sheetBounds(gd, sheetId);
   const col = sections[0]?.firstColumn ?? 0;
-  let row = bounds === null ? 1 : bounds.row + bounds.rows + 1;
+  let row =
+    structureRowOf(gd, sheetId) ??
+    (bounds === null ? 1 : bounds.row + bounds.rows + 1) + PIN_HEADROOM_ROWS;
   const universe = universalSet(sets);
   const out: StructureTable[] = [];
   const add = (
@@ -335,7 +343,12 @@ export function structureSync(gd: GedeDoc, labels: () => StructureLabels): Struc
       const now = new Map<Id, StructureTable[]>();
       for (const sheet of listSheets(gd)) {
         const tables = structureTables(gd, sheet.id, words, valueOf);
-        if (tables.length > 0) now.set(sheet.id, tables);
+        const first = tables[0];
+        if (first === undefined) continue;
+        // shortcut: pinned by whichever replica sees the tables first, a viewer's write is
+        // refused by the service; when that shows, pin on the sheet's creation instead.
+        if (structureRowOf(gd, sheet.id) === null) pinStructureRow(gd, sheet.id, first.bounds.row);
+        now.set(sheet.id, tables);
       }
       current = now;
       const changes: WorkbookChange[] = [];

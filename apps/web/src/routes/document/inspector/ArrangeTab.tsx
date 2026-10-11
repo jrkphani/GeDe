@@ -7,6 +7,7 @@ import {
   LATTICE,
   setTablePosition,
   sheetEdgesShown,
+  sheetLockReason,
   STACKING_LABELS,
   STACKING_MOVES,
   stackingPosition,
@@ -73,8 +74,13 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
       return t('reason.alreadyFront');
     return undefined;
   };
+  const lock = sheetLockReason(gd, record.sheetId);
   const layoutReason =
-    viewOnly ?? (stack === null || stack.count < 2 ? t('reason.onlyTable') : undefined);
+    viewOnly ??
+    (lock === null
+      ? undefined
+      : t(lock === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked')) ??
+    (stack === null || stack.count < 2 ? t('reason.onlyTable') : undefined);
 
   return (
     <>
@@ -135,7 +141,7 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
             value={record.gridCol}
             min={0}
             disabledReason={viewOnly}
-            decrementReason="already at column A"
+            decrementReason={t('reason.atColumnA')}
             onChange={(next) => {
               move(next, record.gridRow);
             }}
@@ -146,7 +152,7 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
             value={record.gridRow + 1}
             min={1}
             disabledReason={viewOnly}
-            decrementReason="already at row 1"
+            decrementReason={t('reason.atRow1')}
             onChange={(next) => {
               move(record.gridCol, next - 1);
             }}
