@@ -5,8 +5,10 @@
  */
 import * as Y from 'yjs';
 
+import { parse } from '../formula/parser.js';
 import { effectiveDepths, hasDescendants } from '../hier/outline.js';
-import { rowHidden } from './geometry.js';
+import { rowHidden, tableWidthUnits } from './geometry.js';
+import { clampToSection, lockReasonAt, lockReasonOfTable } from './sections.js';
 import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
 import { snapPoint, snapSizeToUnits, type LatticeUnits, type Pixels } from '../lattice.js';
 import {
@@ -33,6 +35,7 @@ import {
   type RowMetaMap,
   type SheetMap,
   type StripCount,
+  type TableKind,
   type TableMap,
 } from './schema.js';
 import { duplicateTableTitle, refreshLineageLabelsInTransaction } from './labels.js';
@@ -186,6 +189,8 @@ export interface CreateTableOptions {
   columns?: number;
   rows?: number;
   title?: string;
+  /** SET-01: the kind picked at Add table; `plain` (the default) writes nothing. */
+  kind?: TableKind;
 }
 
 function isPixels(at: LatticeUnits | Pixels): at is Pixels {
@@ -201,8 +206,7 @@ function snapUnits(at: LatticeUnits): LatticeUnits {
 }
 
 /** A prelim column map cannot be read back until integrated, so the id is returned alongside it. */
-export function newColumn(label: string): { id: Id; map: ColumnMap } {
-  const id = newId();
+export function newColumn(label: string, id: Id = newId()): { id: Id; map: ColumnMap } {
   const map: ColumnMap = new Y.Map<unknown>();
   map.set('id', id);
   map.set('label', label);
@@ -224,8 +228,11 @@ export function createTable(gd: GedeDoc, options: CreateTableOptions): Id {
       'title',
       options.title ?? `Table ${String(tablesOnSheet(gd, options.sheetId).length + 1)}`,
     );
-    map.set('gridCol', origin.col);
+    // SET-17: a table put inside a section snaps within it.
+    const width = columnCount + (options.kind === 'family' ? 1 : 0);
+    map.set('gridCol', clampToSection(gd, options.sheetId, origin.col, width));
     map.set('gridRow', origin.row);
+    if (options.kind !== undefined && options.kind !== 'plain') map.set('kind', options.kind);
     const columns = new Y.Array<ColumnMap>();
     columns.push(
       Array.from({ length: columnCount }, (_, i) => newColumn(`Column ${String(i + 1)}`).map),
@@ -265,12 +272,98 @@ export function setTableTitle(gd: GedeDoc, tableId: Id, title: string): boolean 
   });
 }
 
+/**
+ * SET-01: whether any cell of the table holds something a person typed or picked: an
+ * entered value (text or a formula) or a mapping pick. Derived, pulled and computed
+ * columns hold nothing typed.
+ */
+export function tableHoldsTyped(gd: GedeDoc, tableId: Id): boolean {
+  const table = tableMap(gd, tableId);
+  if (table === null) return false;
+  const record = tableRecord(table);
+  const cells = cellsMap(table);
+  const typedColumns = record.columns.filter(
+    (c) => c.source === 'entered' || c.source === 'linked',
+  );
+  return record.rows.some((rowId) =>
+    typedColumns.some((c) => {
+      const value = cells.get(cellKey(rowId, c.id));
+      if (value === undefined) return false;
+      return (isFormula(value) ? value : fragmentText(value)) !== '';
+    }),
+  );
+}
+
+/**
+ * Why a table cannot take `kind` (SET-01), or null when it can:
+ * - `typed`: a cell holds a typed value; the kind is fixed once the table holds data.
+ * - `needsFormula`: a computed kind names a table that fills from a formula (Add table or
+ *   Fill column), and this one has no computed column.
+ * - `needsCross`: a Cartesian product is a table whose formula is a `Cross`.
+ * - `isCross`: a table whose formula is a `Cross` is a Cartesian product, not Computed by formula.
+ * - `computedColumns`: a table whose columns fill from a formula stays a computed kind. Read
+ *   as a set or a family, its first column would be taken for its range: a One column per
+ *   set product's `x1 ∈ E` column alone, a wrong set for every formula that picks it.
+ * The table's current kind is never refused for its formula: it is what it already is.
+ */
+export type TableKindRefusal =
+  'typed' | 'needsFormula' | 'needsCross' | 'isCross' | 'computedColumns';
+
+/** SET-01: why `tableId` cannot take `kind`, or null (see `TableKindRefusal`). */
+export function tableKindRefusal(
+  gd: GedeDoc,
+  tableId: Id,
+  kind: TableKind,
+): TableKindRefusal | null {
+  const table = tableMap(gd, tableId);
+  if (table === null) return null;
+  if (tableHoldsTyped(gd, tableId)) return 'typed';
+  const record = tableRecord(table);
+  if (record.kind === kind) return null;
+  const computed = record.columns.some((c) => c.source === 'computed');
+  const computedKind = kind === 'computed' || kind === 'product';
+  if (!computed) return computedKind ? 'needsFormula' : null;
+  if (!computedKind) return 'computedColumns';
+  const cross = topLevelCall(record.computedFormula) === 'Cross';
+  if (kind === 'product' && !cross) return 'needsCross';
+  if (kind === 'computed' && cross) return 'isCross';
+  return null;
+}
+
+/** The name of a formula's top-level call, or null. */
+function topLevelCall(formula: string | null): string | null {
+  if (formula === null) return null;
+  const parsed = parse(formula);
+  return parsed.ok && parsed.value.kind === 'call' ? parsed.value.name : null;
+}
+
+/**
+ * SET-01: change a table's kind, as one undo step. Kind is what the table is read as (a
+ * plain table, a set, a family); it moves no row, column or address. False, writing
+ * nothing, when refused (`tableKindRefusal`).
+ */
+export function setTableKind(gd: GedeDoc, tableId: Id, kind: TableKind): boolean {
+  const table = tableMap(gd, tableId);
+  if (table === null || tableKindRefusal(gd, tableId, kind) !== null) return false;
+  if (tableRecord(table).kind === kind) return true;
+  transact(gd, () => {
+    if (kind === 'plain') table.delete('kind');
+    else table.set('kind', kind);
+  });
+  return true;
+}
+
 /** Move a table; pixels snap to the lattice, units clamp at A1 (GRID-01, DOC-04). */
 export function setTablePosition(gd: GedeDoc, tableId: Id, at: LatticeUnits | Pixels): void {
   const origin = isPixels(at) ? snapPoint(at) : snapUnits(at);
   transact(gd, () => {
     const table = requireTable(gd, tableId);
-    table.set('gridCol', origin.col);
+    // SET-17: a table put inside a section snaps within it.
+    const sheetId = readString(table, 'sheetId');
+    const col = clampToSection(gd, sheetId, origin.col, tableWidthUnits(tableRecord(table)));
+    // SET-18: a table does not leave a locked lane, and none moves into one.
+    if (lockReasonOfTable(gd, tableId) !== null || lockReasonAt(gd, sheetId, col) !== null) return;
+    table.set('gridCol', col);
     table.set('gridRow', origin.row);
   });
 }
@@ -359,11 +452,16 @@ export function addColumn(
     label?: string | undefined;
     afterColId?: Id | undefined;
     beforeColId?: Id | undefined;
+    /** A deterministic id, so two replicas adding the same column name it alike (SET-09). */
+    id?: Id | undefined;
   } = {},
 ): Id {
   return transact(gd, () => {
     const columns = columnsArray(requireTable(gd, tableId));
-    const { id, map: column } = newColumn(options.label ?? `Column ${String(columns.length + 1)}`);
+    const { id, map: column } = newColumn(
+      options.label ?? `Column ${String(columns.length + 1)}`,
+      options.id,
+    );
     let index = columns.length;
     if (options.beforeColId !== undefined) {
       const before = columnIndexOf(columns, options.beforeColId);
@@ -390,14 +488,16 @@ function deleteCells(table: TableMap, predicate: (key: string) => boolean): void
 /**
  * Delete a row with its cells and meta; the rows below recompute their
  * addresses (GRID-02). Returns false when the row is not in the table — a
- * concurrent delete already removed it, which is not an error.
+ * concurrent delete already removed it, which is not an error. A computed
+ * row (one with a `computedKey`, lost or not) is refused: it is the formula's,
+ * and changing the formula is how it goes (SET-08, ADR-056 ruling c).
  */
 export function deleteRow(gd: GedeDoc, tableId: Id, rowId: Id): boolean {
   return transact(gd, () => {
     const table = requireTable(gd, tableId);
     const rows = rowsArray(table);
     const index = rows.toArray().indexOf(rowId);
-    if (index < 0) return false;
+    if (index < 0 || rowMeta(table, rowId).computedKey !== null) return false;
     rows.delete(index, 1);
     rowMetaMap(table).delete(rowId);
     deleteCells(table, (key) => key.startsWith(`${rowId}:`));

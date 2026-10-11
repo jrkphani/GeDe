@@ -7,7 +7,7 @@ command; each also appears beside its command in a menu or tooltip.
 ## Document
 | Action | Keys |
 | --- | --- |
-| New workscape | ⌘N |
+| Add workscape | ⌘N |
 | Open | ⌘O |
 | Print | ⌘P |
 | Close document | ⌘W |

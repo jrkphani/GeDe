@@ -20,7 +20,7 @@ test('AUTH-01 LIB-01 ONB-01 ONB-08 ONB-07 DOC-01 GRID-04 LOAD-05 FIND-01 SHARE-0
   await test.step('the library loads for the signed-in account, with the guided sample pinned first', async () => {
     await signIn(page, '/');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Recents');
-    await expect(page.getByRole('button', { name: 'New workscape' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add workscape' })).toBeVisible();
     // ONB-01: the service seeded the sample for this account; it leads the list and cannot be deleted.
     const sample = page.getByRole('row').filter({ hasText: 'Q3 Delivery — Guided sample' });
     await expect(sample).toContainText('Sample');
@@ -52,7 +52,7 @@ test('AUTH-01 LIB-01 ONB-01 ONB-08 ONB-07 DOC-01 GRID-04 LOAD-05 FIND-01 SHARE-0
 
   let docPath = '';
   await test.step('create a workscape and name it after this run', async () => {
-    await page.getByRole('button', { name: 'New workscape' }).click();
+    await page.getByRole('button', { name: 'Add workscape' }).click();
     await expect(page).toHaveURL(/\/d\/[0-9a-f-]{36}\?new=1$/);
     docPath = new URL(page.url()).pathname;
     const title = page.getByLabel('Workscape title');

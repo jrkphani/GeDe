@@ -3,17 +3,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
+  addSection,
   cellAddress,
   cellRich,
   createSheet,
-  createTable,
   deleteSheet,
   graphById,
   graphsOnSheet,
   isLastSheet,
+  isSheetLocked,
   LATTICE,
+  listSections,
   listSheets,
+  lockReasonAt,
+  lockReasonOfTable,
+  nextSectionRange,
+  renameSection,
   renameSheet,
+  sectionLockReason,
+  setSectionLocked,
+  setSheetLocked,
   sheetBounds,
   sheetEdgesShown,
   tableById,
@@ -25,6 +34,7 @@ import {
   unitBoundsToPx,
   type GedeDoc,
   type Id,
+  type TableKind,
   type PresenceState,
   type SheetRecord,
   type ToggleMark,
@@ -67,7 +77,7 @@ import {
 } from '../../doc/viewport.js';
 import { peekEngine } from '../../doc/engine.js';
 import { LABELS } from '../../doc/shortcuts.js';
-import { translate } from '../../i18n/index.js';
+import { translate, useMessages } from '../../i18n/index.js';
 import { formatNumber } from '../../intl.js';
 import { activeLocale, useLocale } from '../../locale.js';
 import { usePhone } from '../../breakpoint.js';
@@ -79,6 +89,7 @@ import { MatchHighlights } from './find/MatchHighlights.js';
 import { matchBounds } from './find/match-geometry.js';
 import { useFind, type FindNavigation } from './find/useFind.js';
 import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2/formulas mount points
+import { sentence } from './grid/commands.js';
 import { pinnedPanelOffset } from './grid/pinned.js';
 import type { RenameResult, RenameTarget, TableRenaming } from './grid/rename.js';
 import { DocumentMenu } from './grid/DocumentMenu.js';
@@ -111,9 +122,13 @@ import {
 import { setTourDocument } from '../tour/store.js';
 import { useTourGraphSubstep } from '../tour/use-tour.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
+import { AddTableDialog } from './sets/AddTableDialog.js';
+import { FillColumnDialog } from './sets/FillColumnDialog.js';
+import { addTableOfKind, fillColumnWith, pickDisplay, type SetPick } from './sets/set-tables.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
-import type { MenuContext } from './menus/entries.js';
+import { menuEntriesFor, type MenuContext } from './menus/entries.js';
 import { SheetTabs, type SheetEditing } from './SheetTabs.js';
+import { SheetStructure } from './sets/SheetStructure.js';
 import {
   deletedSheetAnnouncement,
   deletedSheetTitle,
@@ -295,7 +310,38 @@ function OpenDocument({
   // ADR-049: this replica measures wrapped rows and stores their heights (R-B).
   const fitter = useFitter(gd.doc);
   // Selection, editing and traversal (GRID-03..06) live in the grid state machine.
-  const grid = useGrid(gd, editable, { undo: session.undo, fit: fitter.fit });
+  // SET-02: a comma value typed or pasted into a set's range cell offers Split into rows.
+  const [splitOffer, setSplitOffer] = useState<{
+    cell: CellSelection;
+    elements: number;
+    address: string;
+  } | null>(null);
+  const offerSplit = useCallback((cell: CellSelection, elements: number, address: string) => {
+    setSplitOffer({ cell, elements, address });
+  }, []);
+  // RESP-02: an offer left open when the document turns read-only (phone width, view-only)
+  // is withdrawn, not parked: widening the window again must not bring back a stale one.
+  useEffect(() => {
+    if (!editable) setSplitOffer(null);
+  }, [editable]);
+  // SET-02: a split made from any route withdraws an offer still open for that cell.
+  const withdrawSplit = useCallback((cell: CellSelection) => {
+    setSplitOffer((open) =>
+      open !== null &&
+      open.cell.tableId === cell.tableId &&
+      open.cell.rowId === cell.rowId &&
+      open.cell.colId === cell.colId
+        ? null
+        : open,
+    );
+  }, []);
+  const grid = useGrid(gd, editable, {
+    undo: session.undo,
+    fit: fitter.fit,
+    offerSplit,
+    withdrawSplit,
+  });
+  const t = useMessages();
   // SORT-01..06 (ADR-026): the viewer's own sort, filter and grouping per table, from the
   // store the shell mounted above; never document state.
   const sort = useSortCommands(gd, useViewStore());
@@ -310,6 +356,15 @@ function OpenDocument({
   const [inspectorOpen, setInspectorOpen] = useState(() => wide);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // SET-01: Add table asks the kind first; SET-10: Fill column with formula… on one column.
+  const [addTableOpen, setAddTableOpen] = useState(false);
+  const [fillTarget, setFillTarget] = useState<{ tableId: Id; colId: Id } | null>(null);
+  // RESP-02, non-negotiable 5: a dialog that edits goes when editing does — the window
+  // narrows to a phone, access drops to view-only, or sync turns read-only.
+  if (!editable && (addTableOpen || fillTarget !== null)) {
+    setAddTableOpen(false);
+    setFillTarget(null);
+  }
   const [renameError, setRenameError] = useState<string | null>(null);
   const [activeLocale] = useLocale();
   const locale = toFormatLocale(activeLocale);
@@ -419,6 +474,10 @@ function OpenDocument({
         return;
       }
       if (listSheets(gd).every((s) => s.id !== sheetId)) return; // already gone
+      if (isSheetLocked(gd, sheetId)) {
+        announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
+        return;
+      }
       const wasActive = sheetId === activeSheetId;
       session.undo.stopCapturing();
       const result = deleteSheet(gd, sheetId);
@@ -620,7 +679,7 @@ function OpenDocument({
 
   // -- structure --------------------------------------------------------------
   const addTable = useCallback(
-    (at?: { x: number; y: number }) => {
+    (at?: { x: number; y: number }, kind: TableKind = 'plain', pick?: SetPick) => {
       if (activeSheetId === null || !editable) return;
       const bounds = sheetBounds(gd, activeSheetId);
       const origin =
@@ -628,13 +687,128 @@ function OpenDocument({
         (bounds === null
           ? { col: 1, row: 1 }
           : { col: bounds.col, row: bounds.row + bounds.rows + 1 });
-      const id = createTable(gd, { sheetId: activeSheetId, at: origin, columns: 3, rows: 5 });
+      // SET-18: nothing is added in a locked section or on a locked sheet.
+      const lock = lockReasonAt(
+        gd,
+        activeSheetId,
+        'col' in origin ? origin.col : Math.floor(origin.x / LATTICE.col),
+      );
+      if (lock !== null) {
+        announce(
+          sentence(
+            translate(
+              activeLocale,
+              lock === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+            ),
+          ),
+        );
+        return;
+      }
+      const id = addTableOfKind(gd, { sheetId: activeSheetId, at: origin, kind, pick });
+      if (id === null) return;
       const record = tableById(gd, id);
       if (record !== null) reveal(record.gridCol, record.gridRow);
       selectTable(id);
-      announce(`Added ${record?.title ?? 'a table'}`);
+      announce(translate(activeLocale, 'addTable.added', { table: record?.title ?? '' }));
     },
-    [gd, activeSheetId, editable, reveal, selectTable],
+    [gd, activeSheetId, editable, reveal, selectTable, activeLocale],
+  );
+  // SET-17, SET-18: sections are named lanes; Rename section… is an inline field on the heading.
+  const [renamingSection, setRenamingSection] = useState<Id | null>(null);
+  const addSectionHere = useCallback(() => {
+    if (activeSheetId === null || !editable) return;
+    if (isSheetLocked(gd, activeSheetId)) {
+      announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
+      return;
+    }
+    const name = translate(activeLocale, 'section.defaultName', {
+      n: listSections(gd, activeSheetId).length + 1,
+    });
+    session.undo.stopCapturing();
+    const id = addSection(gd, activeSheetId, { name, ...nextSectionRange(gd, activeSheetId) });
+    session.undo.stopCapturing();
+    if (id !== null) announce(translate(activeLocale, 'section.added', { name }));
+  }, [gd, session, activeSheetId, editable, activeLocale]);
+  const commitSectionRename = useCallback(
+    (sectionId: Id, name: string): RenameResult => {
+      if (activeSheetId === null || !editable) return { ok: false, reason: '' };
+      const lock = sectionLockReason(gd, activeSheetId, sectionId);
+      if (lock !== null) {
+        const reason = sentence(
+          translate(
+            activeLocale,
+            lock === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+          ),
+        );
+        announce(reason);
+        return { ok: false, reason };
+      }
+      session.undo.stopCapturing();
+      const written = renameSection(gd, activeSheetId, sectionId, name);
+      session.undo.stopCapturing();
+      if (!written) return { ok: false, reason: translate(activeLocale, 'section.rename.empty') };
+      setRenamingSection(null);
+      announce(translate(activeLocale, 'section.renamed', { name: name.trim() }));
+      return { ok: true };
+    },
+    [gd, session, activeSheetId, editable, activeLocale],
+  );
+  // Lock and Unlock say what they did, once, in the live region (“Locked {name}”).
+  const lockSection = useCallback(
+    (sheetId: Id, sectionId: Id, locked: boolean) => {
+      const name = listSections(gd, sheetId).find((s) => s.id === sectionId)?.name ?? '';
+      session.undo.stopCapturing();
+      if (setSectionLocked(gd, sheetId, sectionId, locked)) {
+        announce(translate(activeLocale, locked ? 'lock.status' : 'lock.unlocked', { name }));
+      }
+      session.undo.stopCapturing();
+    },
+    [gd, session, activeLocale],
+  );
+  const lockSheet = useCallback(
+    (sheetId: Id, locked: boolean) => {
+      const name = listSheets(gd).find((s) => s.id === sheetId)?.label ?? '';
+      session.undo.stopCapturing();
+      if (setSheetLocked(gd, sheetId, locked)) {
+        announce(translate(activeLocale, locked ? 'lock.status' : 'lock.unlocked', { name }));
+      }
+      session.undo.stopCapturing();
+    },
+    [gd, session, activeLocale],
+  );
+  const fillColumn = useCallback(
+    (pick: SetPick) => {
+      if (fillTarget === null) return;
+      const { tableId, colId } = fillTarget;
+      if (!editable) {
+        setFillTarget(null);
+        return;
+      }
+      // SET-18: a lock set while the dialog was open stops the Fill.
+      const lock = lockReasonOfTable(gd, tableId);
+      if (lock !== null) {
+        setFillTarget(null);
+        announce(
+          sentence(
+            translate(
+              activeLocale,
+              lock === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+            ),
+          ),
+        );
+        return;
+      }
+      const label = tableById(gd, tableId)?.columns.find((c) => c.id === colId)?.label ?? '';
+      setFillTarget(null);
+      if (!fillColumnWith(gd, tableId, colId, pick)) return;
+      announce(
+        translate(activeLocale, 'fill.filled', {
+          column: label,
+          formula: pickDisplay(gd, pick),
+        }),
+      );
+    },
+    [gd, fillTarget, editable, activeLocale],
   );
   const addRowToSelected = useCallback(() => {
     if (selection === null) return;
@@ -852,7 +1026,7 @@ function OpenDocument({
           window.print();
         },
       },
-      layerOpen: shortcutsOpen || menuOpen,
+      layerOpen: shortcutsOpen || menuOpen || addTableOpen || fillTarget !== null,
       view: {
         zoomIn: () => {
           zoomStep(ZOOM_STEP);
@@ -930,9 +1104,14 @@ function OpenDocument({
     commands: grid.commands,
     clipboard,
     selectedCell: cell,
+    fillColumn: editable
+      ? (tableId, colId) => {
+          setFillTarget({ tableId, colId });
+        }
+      : undefined,
     canvas: {
       addTable: () => {
-        addTable();
+        setAddTableOpen(true);
       },
       addGraph: graphs.actions.startPointing,
       addShapedTable: () => {
@@ -944,6 +1123,17 @@ function OpenDocument({
       },
     },
     sheets: { add: appendSheet, rename: setRenamingSheetId, remove: removeSheet },
+    sections: editable
+      ? {
+          sheetId: activeSheetId,
+          add: addSectionHere,
+          rename: (_sheetId, sectionId) => {
+            setRenamingSection(sectionId);
+          },
+          setLocked: lockSection,
+          setSheetLocked: lockSheet,
+        }
+      : undefined,
     // ADR-051: the pointer route to the inline name field on a title or a column header.
     rename: editable ? setRenamingTarget : undefined,
     selectTable,
@@ -1049,7 +1239,7 @@ function OpenDocument({
           editable={editable}
           inspector={inspectorOpen ? inspectorMode : null}
           onAddTable={() => {
-            addTable();
+            setAddTableOpen(true);
           }}
           onAddGraph={graphs.actions.startPointing}
           onAddRow={addRowToSelected}
@@ -1293,6 +1483,26 @@ function OpenDocument({
                     })
               }
             >
+              {/* SET-13..18: section lanes under the tables, the summaries and U beneath them. */}
+              {activeSheetId !== null && (
+                <SheetStructure
+                  gd={gd}
+                  sheetId={activeSheetId}
+                  editable={editable}
+                  renaming={renamingSection}
+                  commitRename={commitSectionRename}
+                  cancelRename={() => {
+                    setRenamingSection(null);
+                  }}
+                  menuEntries={(sectionId) =>
+                    menuEntriesFor(menuContext, {
+                      kind: 'section',
+                      sheetId: activeSheetId,
+                      sectionId,
+                    })
+                  }
+                />
+              )}
               {visibleTables.map((t) => {
                 const map = tableMap(gd, t.id);
                 if (map === null) return null;
@@ -1382,7 +1592,7 @@ function OpenDocument({
                             addTable();
                           }}
                         >
-                          Place first table
+                          Add first table
                         </Button>
                         {/* PRD §19: the empty-sheet menu is Table / Shaped table / Graph. */}
                         <Button
@@ -1513,7 +1723,62 @@ function OpenDocument({
             : { onUndo: sheetNotice.undo, altText: 'Undo deleting the sheet' }
         }
       />
+      {/* SET-02: the offer is the toast's action; dismissing it keeps the value as typed. */}
+      <Toast
+        open={splitOffer !== null && editable}
+        onOpenChange={(open) => {
+          if (!open) setSplitOffer(null);
+        }}
+        title={
+          splitOffer === null
+            ? ''
+            : t('set.split.offer', {
+                cell: splitOffer.address,
+                count: formatNumber(activeLocale, splitOffer.elements),
+              })
+        }
+        undo={
+          splitOffer === null
+            ? undefined
+            : {
+                label: t('set.split.action'),
+                altText: t('set.split.alt', { cell: splitOffer.address }),
+                onUndo: () => {
+                  grid.commands.splitIntoRows(splitOffer.cell);
+                  setSplitOffer(null);
+                },
+              }
+        }
+      />
       <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      {editable && activeSheetId !== null && (
+        <AddTableDialog
+          gd={gd}
+          sheetId={activeSheetId}
+          open={addTableOpen}
+          onOpenChange={setAddTableOpen}
+          onAdd={(kind, pick) => {
+            setAddTableOpen(false);
+            addTable(undefined, kind, pick);
+          }}
+        />
+      )}
+      {editable && fillTarget !== null && activeSheetId !== null && (
+        <FillColumnDialog
+          gd={gd}
+          sheetId={activeSheetId}
+          tableId={fillTarget.tableId}
+          column={
+            tableById(gd, fillTarget.tableId)?.columns.find((c) => c.id === fillTarget.colId)
+              ?.label ?? ''
+          }
+          open
+          onOpenChange={(open) => {
+            if (!open) setFillTarget(null);
+          }}
+          onFill={fillColumn}
+        />
+      )}
       {selectedTable !== null && (
         <span className="gd-visually-hidden" data-testid="selected-table">
           {selectedTable.title}

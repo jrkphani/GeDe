@@ -19,6 +19,7 @@ import {
   hideColumn,
   isGraphDimensionCandidate,
   openDocument,
+  reconcileComputed,
   rowMeta,
   setCellText,
   setComputedColumn,
@@ -33,7 +34,7 @@ import {
 } from '@gede/core';
 
 import { LiveRegion } from '../../../announce.js';
-import { engineFor } from '../../../doc/engine.js';
+import { engineFor, inlineTransport, setEngineTransportForTests } from '../../../doc/engine.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
 import { resetLocaleForTests, setLocale } from '../../../locale.js';
 import { useYVersion } from '../../../doc/use-y.js';
@@ -320,7 +321,7 @@ describe('REF-04 derived columns', () => {
     expect(within(panel).getByTestId('derive-signature')).toHaveTextContent(
       '@"Column 1".Concat(" ✓")',
     );
-    await userEvent.click(within(panel).getByRole('button', { name: 'Create derived column' }));
+    await userEvent.click(within(panel).getByRole('button', { name: 'Derive column' }));
     const after = tableById(gd, notes)!;
     expect(after.columns[1]).toMatchObject({
       source: 'derived',
@@ -657,6 +658,360 @@ describe('SET-08 computed columns', () => {
       });
     } finally {
       resetLocaleForTests();
+    }
+  });
+
+  it('SET-12 a note merged onto a removed row brings it back on the remote update, with no result to wait for', async () => {
+    const sets = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      columns: 2,
+      rows: 0,
+      title: 'Sets',
+    });
+    const [range, note] = tableById(gd, sets)!.columns;
+    render(<Mount gd={gd} tableId={sets} />);
+    act(() => {
+      setTableFormula(gd, sets, '=Union("a", "b")');
+      setComputedColumn(gd, sets, range!.id, { shape: 'column' });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(2);
+    });
+    const [, b] = tableById(gd, sets)!.rows;
+    // A peer, still seeing b, types a note on it while b leaves here.
+    const peer = openDocument(new Y.Doc());
+    Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+    act(() => {
+      setTableFormula(gd, sets, '=Union("a", "")');
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).not.toContain(b);
+    });
+    setCellText(peer, sets, b!, note!.id, 'remote note');
+    act(() => {
+      Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+    });
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toContain(b);
+      expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range!.id);
+    });
+  });
+
+  /** A table `Sets` filled by `=Union("a", "b")` in its first column, with a note column. */
+  async function unionTable() {
+    const sets = createTable(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      columns: 2,
+      rows: 0,
+      title: 'Sets',
+    });
+    const [range, note] = tableById(gd, sets)!.columns;
+    render(<Mount gd={gd} tableId={sets} />);
+    act(() => {
+      setTableFormula(gd, sets, '=Union("a", "b")');
+      setComputedColumn(gd, sets, range!.id, { shape: 'column' });
+    });
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(2);
+    });
+    return { sets, range: range!.id, note: note!.id };
+  }
+
+  it('SET-12 a lost row leaves once its typed value is cleared in the app', async () => {
+    const { sets, range, note } = await unionTable();
+    const [a, b] = tableById(gd, sets)!.rows;
+    act(() => {
+      setCellText(gd, sets, b!, note, 'kept');
+      setTableFormula(gd, sets, '=Union("a", "")');
+    });
+    await settled();
+    await waitFor(() => {
+      expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range);
+    });
+    // Clearing a note is a plain entered cell: the engine answers nothing for it.
+    act(() => {
+      setCellText(gd, sets, b!, note, '');
+    });
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toEqual([a]);
+    });
+  });
+
+  it('SET-08 a remote formula change is not reverted by a reconcile against the stale result', async () => {
+    // A labelled fake: the real inline engine, answering 40 ms late as a Worker may.
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        post: (request) => {
+          setTimeout(() => {
+            inner.post(request);
+          }, 40);
+        },
+      };
+    });
+    try {
+      const { sets } = await unionTable();
+      const peer = openDocument(new Y.Doc());
+      Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+      setTableFormula(peer, sets, '=Union("a", "c")');
+      reconcileComputed(peer, sets, ['a', 'c']);
+      const peerRows = tableById(peer, sets)!.rows;
+      let staleWrites = 0;
+      gd.doc.on('update', (_u: Uint8Array, origin: unknown) => {
+        if (origin === 'ref-computed') staleWrites += 1;
+      });
+      act(() => {
+        Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+      });
+      await act(() => new Promise((r) => setTimeout(r, 5)));
+      expect({ rows: tableById(gd, sets)!.rows, staleWrites }).toEqual({
+        rows: peerRows,
+        staleWrites: 0,
+      });
+      await settled();
+      await act(() => new Promise((r) => setTimeout(r, 60)));
+      expect(tableById(gd, sets)!.rows).toEqual(peerRows);
+    } finally {
+      setEngineTransportForTests(null);
+    }
+  });
+
+  /** A labelled fake: the real inline engine, answering 40 ms late as a Worker may. */
+  const slowEngine = () => {
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        post: (request) => {
+          setTimeout(() => {
+            inner.post(request);
+          }, 40);
+        },
+      };
+    });
+  };
+
+  it('SET-08 a result batch answering an earlier request does not reconcile a remote formula change against the stale result', async () => {
+    slowEngine();
+    try {
+      const { sets } = await unionTable();
+      const other = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 20, row: 30 },
+        columns: 1,
+        rows: 1,
+        title: 'Other',
+      });
+      const o = tableById(gd, other)!;
+      const peer = openDocument(new Y.Doc());
+      Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+      setTableFormula(peer, sets, '=Union("a", "c")');
+      reconcileComputed(peer, sets, ['a', 'c']);
+      const peerRows = tableById(peer, sets)!.rows;
+      const seen: string[][] = [];
+      gd.doc.on('update', (_u: Uint8Array, origin: unknown) => {
+        if (origin === 'ref-computed') seen.push([...tableById(gd, sets)!.rows]);
+      });
+      // A formula cell edited here is in flight when the peer's formula change merges.
+      act(() => {
+        setCellText(gd, other, o.rows[0]!, o.columns[0]!.id, '=1+1');
+      });
+      await act(() => new Promise((r) => setTimeout(r, 2)));
+      act(() => {
+        Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+      });
+      await settled();
+      await act(() => new Promise((r) => setTimeout(r, 60)));
+      expect(tableById(gd, sets)!.rows).toEqual(peerRows);
+      expect(seen.filter((rows) => !rows.includes(peerRows[1]!))).toEqual([]);
+    } finally {
+      setEngineTransportForTests(null);
+    }
+  });
+
+  it('SET-08 an edit in a table with no computed column runs no computed reconcile', async () => {
+    slowEngine();
+    try {
+      await unionTable();
+      const other = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 20, row: 30 },
+        columns: 1,
+        rows: 1,
+        title: 'Other',
+      });
+      await settled();
+      await act(() => new Promise((r) => setTimeout(r, 60)));
+      const o = tableById(gd, other)!;
+      let passes = 0;
+      gd.doc.on('afterTransaction', (tr: Y.Transaction) => {
+        if (tr.origin === 'ref-computed') passes += 1;
+      });
+      act(() => {
+        setCellText(gd, other, o.rows[0]!, o.columns[0]!.id, 'plain');
+      });
+      await act(() => new Promise((r) => setTimeout(r, 5)));
+      expect(passes).toBe(0);
+    } finally {
+      setEngineTransportForTests(null);
+    }
+  });
+
+  it('SET-12 a lost row is not dimmed without its words when the table has no formula', async () => {
+    const { sets, range, note } = await unionTable();
+    const [, b] = tableById(gd, sets)!.rows;
+    act(() => {
+      setCellText(gd, sets, b!, note, 'kept');
+      setTableFormula(gd, sets, '=Union("a", "")');
+    });
+    await settled();
+    await waitFor(() => {
+      expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range);
+    });
+    // A computed column whose table holds no formula (as a document may arrive).
+    act(() => {
+      tableMap(gd, sets)!.delete('computedFormula');
+    });
+    await waitFor(() => {
+      const row = gridOf('Sets').querySelector(`[data-row-id="${b!}"][role="row"]`)!;
+      expect(row).not.toHaveClass('gd-table__row--lost');
+      expect(within(row as HTMLElement).getByText('kept')).toBeInTheDocument();
+    });
+    expect(rowMeta(tableMap(gd, sets)!, b!).lostFrom).toBe(range);
+  });
+});
+
+describe('SET-08 computed rows follow their own table, not the whole engine', () => {
+  /** A labelled fake: the real inline engine, answering `delay` ms late as a Worker may. */
+  const lateEngine = (delay: number) => {
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        post: (request) => {
+          setTimeout(() => {
+            inner.post(request);
+          }, delay);
+        },
+      };
+    });
+  };
+
+  it('SET-08 a computed table fills while formula traffic in another table never stops', async () => {
+    lateEngine(30);
+    let typing: ReturnType<typeof setInterval> | undefined;
+    try {
+      const sets = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 1, row: 12 },
+        columns: 2,
+        rows: 0,
+        title: 'Sets',
+      });
+      const other = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 20, row: 30 },
+        columns: 1,
+        rows: 1,
+        title: 'Other',
+      });
+      const o = tableById(gd, other)!;
+      render(<Mount gd={gd} tableId={sets} />);
+      await settled();
+      // A formula elsewhere edited every 10 ms: the engine always has a request outstanding.
+      let n = 0;
+      typing = setInterval(() => {
+        n += 1;
+        setCellText(gd, other, o.rows[0]!, o.columns[0]!.id, `=1+${String(n)}`);
+      }, 10);
+      act(() => {
+        setTableFormula(gd, sets, '=Union("a, b", "c")');
+        setComputedColumn(gd, sets, tableById(gd, sets)!.columns[0]!.id, { shape: 'column' });
+      });
+      await waitFor(
+        () => {
+          expect(engineFor(gd.doc).busy).toBe(true);
+          expect(tableById(gd, sets)!.rows).toHaveLength(3);
+        },
+        { timeout: 2000 },
+      );
+    } finally {
+      clearInterval(typing);
+      setEngineTransportForTests(null);
+    }
+  });
+
+  it('SET-08 a Worker that gave up fills nothing from its stale results', async () => {
+    // A labelled fake: the real inline engine until `dead`, then a Worker that never answers;
+    // `fail` raises its error event as a crashing Worker does.
+    let dead = false;
+    let fail: ((error: unknown) => void) | undefined;
+    setEngineTransportForTests(() => {
+      const inner = inlineTransport();
+      return {
+        ...inner,
+        mode: 'worker' as const,
+        post: (request) => {
+          if (!dead) inner.post(request);
+        },
+        onError: (handler) => {
+          fail = handler;
+        },
+      };
+    });
+    try {
+      const sets = createTable(gd, {
+        sheetId: sheet,
+        at: { col: 1, row: 12 },
+        columns: 2,
+        rows: 0,
+        title: 'Sets',
+      });
+      render(<Mount gd={gd} tableId={sets} />);
+      act(() => {
+        setTableFormula(gd, sets, '=Union("a", "b")');
+        setComputedColumn(gd, sets, tableById(gd, sets)!.columns[0]!.id, { shape: 'column' });
+      });
+      await settled();
+      await waitFor(() => {
+        expect(tableById(gd, sets)!.rows).toHaveLength(2);
+      });
+      // A peer's formula change and the rows its replica filled arrive while an edit here is
+      // still being answered, and from then on nothing answers.
+      const peer = openDocument(new Y.Doc());
+      Y.applyUpdate(peer.doc, Y.encodeStateAsUpdate(gd.doc));
+      setTableFormula(peer, sets, '=Union("a", "c")');
+      reconcileComputed(peer, sets, ['a', 'c']);
+      const peerRows = tableById(peer, sets)!.rows;
+      const p = tableById(gd, peaks)!;
+      await act(async () => {
+        setCellText(gd, peaks, p.rows[0]!, p.columns[0]!.id, '=1+1');
+        dead = true;
+        Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(peer.doc, Y.encodeStateVector(gd.doc)));
+        await new Promise((r) => setTimeout(r, 5));
+      });
+      expect(engineFor(gd.doc).busy).toBe(true);
+      let writes = 0;
+      gd.doc.on('afterTransaction', (tr: Y.Transaction) => {
+        if (tr.origin === 'ref-computed' && tr.changed.size > 0) writes += 1;
+      });
+      const host = engineFor(gd.doc);
+      for (let i = 0; i <= 3; i += 1) {
+        act(() => {
+          fail?.(new Error('formula worker crashed'));
+        });
+      }
+      expect(host.status.failed).toBe(true);
+      await act(() => new Promise((r) => setTimeout(r, 20)));
+      expect({ rows: tableById(gd, sets)!.rows, writes }).toEqual({ rows: peerRows, writes: 0 });
+    } finally {
+      setEngineTransportForTests(null);
     }
   });
 });

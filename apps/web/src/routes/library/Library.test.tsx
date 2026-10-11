@@ -177,19 +177,19 @@ describe('Library', () => {
     serve({});
     renderRoutes(routes, ['/']);
     expect(
-      await screen.findByRole('heading', { name: 'Create your first workscape' }),
+      await screen.findByRole('heading', { name: 'Add your first workscape' }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create workscape' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add first workscape' })).toBeInTheDocument();
     expect(docs.listDocuments).toHaveBeenCalledWith('recents');
   });
 
   it('AUTH-10 the first-run view has exactly one primary action, and a library with rows has none above the rows', async () => {
     serve({});
     const { unmount } = renderRoutes(routes, ['/']);
-    await screen.findByRole('button', { name: 'Create workscape' });
+    await screen.findByRole('button', { name: 'Add first workscape' });
     const primaries = () =>
       screen.getAllByRole('button').filter((b) => b.classList.contains('gd-btn--primary'));
-    expect(primaries().map((b) => b.textContent)).toEqual(['Create workscape']);
+    expect(primaries().map((b) => b.textContent)).toEqual(['Add first workscape']);
     unmount();
     serve(live);
     renderRoutes(routes, ['/']);
@@ -206,9 +206,9 @@ describe('Library', () => {
     vi.mocked(docs.getDocument).mockResolvedValue({ ...everest, title: 'Untitled' });
     const { router } = renderRoutes(routes, ['/']);
     await screen.findByText('Everest trek');
-    await u.click(screen.getByRole('button', { name: 'New workscape' }));
+    await u.click(screen.getByRole('button', { name: 'Add workscape' }));
     const banner = await screen.findByRole('alert');
-    expect(banner).toHaveTextContent('Could not create a workscape');
+    expect(banner).toHaveTextContent('Could not add a workscape');
     expect(banner).toHaveTextContent('503 after 4 attempts (ref req-3)');
     expect(screen.getByText('Everest trek')).toBeInTheDocument(); // the library is still there
     await u.click(within(banner).getByRole('button', { name: 'Retry' }));
@@ -223,7 +223,7 @@ describe('Library', () => {
     vi.mocked(docs.createDocument).mockResolvedValue({ ...everest, title: 'Untitled' });
     vi.mocked(docs.getDocument).mockResolvedValue({ ...everest, title: 'Untitled' });
     const { router } = renderRoutes(routes, ['/']);
-    await u.click(await screen.findByRole('button', { name: 'New workscape' }));
+    await u.click(await screen.findByRole('button', { name: 'Add workscape' }));
     await waitFor(() => {
       expect(router.state.location.pathname).toBe(`/d/${everest.id}`);
     });
@@ -918,7 +918,7 @@ describe('Library', () => {
     expect(screen.queryByRole('button', { name: /^(Delete|Archive)$/ })).not.toBeInTheDocument();
     expect(screen.getByText('View only on phone')).toBeInTheDocument();
     // LIB-06 / RESP-02 (#134): creating is an edit affordance; the + control is absent.
-    expect(screen.queryByRole('button', { name: 'New workscape' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add workscape' })).not.toBeInTheDocument();
     expect(docs.createDocument).not.toHaveBeenCalled();
     await u.click(screen.getByRole('button', { name: 'More actions for Everest trek' }));
     const menu = await screen.findByRole('menu');

@@ -7,6 +7,7 @@
 import * as Y from 'yjs';
 
 import { rowHeights } from '../doc/geometry.js';
+import { setRangeColumn } from '../doc/set-range.js';
 import { effectiveDepths, rowOutlineColumns } from '../hier/outline.js';
 import {
   cellFormatMap,
@@ -63,6 +64,7 @@ export function tableStructure(table: TableMap): TableStructure {
   const overrides = cellFormats(table);
   const metas = record.rows.map((rowId) => rowMeta(table, rowId));
   const depths = effectiveDepths(metas.map((m) => m.depth));
+  const range = setRangeColumn(record);
   return {
     id: record.id,
     sheetId: record.sheetId,
@@ -80,6 +82,7 @@ export function tableStructure(table: TableMap): TableStructure {
       format: columnFormat(c),
     })),
     ...(record.computedFormula === null ? {} : { computedFormula: record.computedFormula }),
+    ...(range === null ? {} : { setRange: range }),
     rows: record.rows,
     rowHeights: rowHeights(table, record),
     // Effective depths (HIER-02): a merge can leave a stored depth deeper than the

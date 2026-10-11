@@ -9,6 +9,7 @@ import {
   useOperandsOf,
 } from '../formula/index.js';
 import type { CellSelection } from '../selection.js';
+import { useMessages } from '../../../i18n/index.js';
 import { Section } from './controls.js';
 
 /**
@@ -19,24 +20,25 @@ import { Section } from './controls.js';
  * Text cells get the one-line note instead of an empty block.
  */
 export function FormulaSection({ table, cell }: { table: TableMap; cell: CellSelection }) {
+  const t = useMessages();
   const display = useCellDisplay(table, cellKey(cell.rowId, cell.colId));
   const operands = useOperandsOf(docOf(table), sheetOfTable(table), display.formula, true);
   if (!display.isFormula) {
     return (
-      <Section label="formula">
-        <p className="gd-insp__hint">Not a formula. Start the cell with = to write one.</p>
+      <Section label={t('inspector.formula')}>
+        <p className="gd-insp__hint">{t('inspector.notAFormulaStart')}</p>
       </Section>
     );
   }
   return (
-    <Section label="formula">
+    <Section label={t('inspector.formula')}>
       <dl className="gd-insp__facts" data-testid="inspector-formula">
         <div>
-          <dt>Expression</dt>
+          <dt>{t('inspector.expression')}</dt>
           <dd className="gd-mono">{display.formula}</dd>
         </div>
         <div>
-          <dt>Value</dt>
+          <dt>{t('inspector.value')}</dt>
           <dd className="gd-mono">
             {display.error !== null ? (
               <span className="gd-insp__formula-error">
@@ -51,7 +53,7 @@ export function FormulaSection({ table, cell }: { table: TableMap; cell: CellSel
         </div>
         {display.badge !== null && (
           <div>
-            <dt>References</dt>
+            <dt>{t('inspector.references')}</dt>
             <dd className="gd-mono">
               <span
                 className="gd-insp__formula-badge"
@@ -66,7 +68,7 @@ export function FormulaSection({ table, cell }: { table: TableMap; cell: CellSel
       </dl>
       {display.error !== null && <p className="gd-insp__reason">{display.error.message}</p>}
       {operands.length > 0 && (
-        <ol className="gd-insp__operands" aria-label="Operands">
+        <ol className="gd-insp__operands" aria-label={t('inspector.operands')}>
           {operands.map((op) => (
             <li key={op.index} className="gd-insp__operand">
               <span
@@ -79,7 +81,7 @@ export function FormulaSection({ table, cell }: { table: TableMap; cell: CellSel
               <span className="gd-mono gd-insp__operand-label">{op.label}</span>
               <span className="gd-insp__operand-kind">{op.kind}</span>
               {!op.anchored && (
-                <span className="gd-insp__operand-note" title="Follows the address, not a cell">
+                <span className="gd-insp__operand-note" title={t('inspector.followsTheAddressNot')}>
                   not anchored
                 </span>
               )}

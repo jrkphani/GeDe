@@ -131,6 +131,7 @@ test.describe('document shell', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     const grid = page.getByRole('grid').first();
     await expect(grid).toBeVisible();
     const table = page.locator('.gd-table').first();
@@ -164,6 +165,7 @@ test.describe('document shell', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     const grid = page.getByRole('grid').first();
     const cell = grid.getByRole('gridcell').first();
     await cell.click();
@@ -202,6 +204,7 @@ test.describe('document shell', () => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     const plane = page.getByTestId('plane');
     const box = await plane.boundingBox();
     if (!box) throw new Error('plane has no box');
@@ -252,6 +255,7 @@ test.describe('document shell', () => {
       } else {
         await expect(page.getByRole('toolbar', { name: 'Document tools' })).toBeVisible();
         await page.getByRole('button', { name: 'Add table' }).click();
+        await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
         const table = page.locator('.gd-table').first();
         await expect(table).toHaveCSS('left', '160px');
         await expect(table).toHaveCSS('width', '480px');
@@ -342,6 +346,7 @@ test.describe('document shell', () => {
     await signInTo(page, `/d/${DOC_ID}`);
     await expect(page.getByTestId('live-region')).toHaveText(/Synced/);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     await page.getByRole('grid').first().getByRole('gridcell').first().click();
     await expect(page.getByTestId('live-region')).toHaveText(/Selected B5 in Table 1/);
   });
@@ -377,6 +382,7 @@ test.describe('grid editing', () => {
       await page.setViewportSize({ width, height: 800 });
       await signInTo(page, `/d/${DOC_ID}`);
       await page.getByRole('button', { name: 'Add table' }).click();
+      await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
       const grid = page.getByRole('grid').first();
       const b5 = grid.getByRole('gridcell').first();
       await b5.click();
@@ -445,6 +451,7 @@ test.describe('grid editing', () => {
       await page.setViewportSize({ width, height: 800 });
       await signInTo(page, `/d/${DOC_ID}`);
       await page.getByRole('button', { name: 'Add table' }).click();
+      await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
       const grid = page.getByRole('grid').first();
       const table = page.locator('.gd-table').first();
       await grid.getByRole('gridcell').first().click();
@@ -592,6 +599,7 @@ test.describe('grid editing', () => {
     await page.emulateMedia({ colorScheme: 'dark' });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     const grid = page.getByRole('grid').first();
     await grid.getByRole('gridcell').first().click();
     await page.keyboard.type('Base camp');

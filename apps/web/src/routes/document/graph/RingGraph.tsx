@@ -277,7 +277,7 @@ export const RingGraph = memo(function RingGraph({
       })}
       {layout.nodes.length === 0 && (
         <text className="gd-ring__empty" x="260" y="262" textAnchor="middle">
-          Type into a row of the table to place the first context
+          Type into a row of the table to add the first context
         </text>
       )}
     </svg>

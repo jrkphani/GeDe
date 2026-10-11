@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { isEmptyQuery, parseQuery } from '@gede/core';
 import { describe, expect, test } from 'vitest';
 
@@ -11,7 +14,8 @@ const TRANSLATED_KEYS = MESSAGE_KEYS.filter(
     k.startsWith('tour.') ||
     k.startsWith('object.') ||
     k.startsWith('sheet.') ||
-    k.startsWith('auth.'),
+    k.startsWith('auth.') ||
+    k.startsWith('inspector.'),
 );
 
 const placeholders = (s: string): string[] =>
@@ -110,7 +114,7 @@ describe('message catalogue', () => {
       expect(m['tour.step3.result.action'], locale).toContain('Diff');
     }
     const en = CATALOGUE['en-US'];
-    expect(en['tour.step3.action']).toBe('Type = in a cell and choose Union');
+    expect(en['tour.step3.action']).toBe('Type = in a cell and pick Union');
     // "cells or ranges": the detector needs a bound operand, so literals alone never count.
     expect(en['tour.step3.result.action']).toBe(
       'Commit a Diff, Inter, Comp or Cross over two cells or ranges',
@@ -239,5 +243,61 @@ describe('message catalogue', () => {
     expect(translate('ta-IN', 'tour.counter', { step: 1, total: 6 })).toBe('படி 1 / 6');
     const key: MessageKey = 'tour.skip';
     expect(translate('hi-IN', key)).toBe('छोड़ें');
+  });
+
+  test('SET-19 SET-01 SET-10 the set copy uses one verb per action: no Create, Insert, New, Place or Choose, and every Add table confirm reads Add table', () => {
+    const en = CATALOGUE['en-US'];
+    const setKeys = MESSAGE_KEYS.filter((k) => /^(addTable|pick|fill|set)\./.test(k));
+    expect(setKeys.length).toBeGreaterThan(40);
+    for (const key of setKeys) {
+      expect(en[key], key).not.toMatch(/\b(Create|Insert|New|Place|Choose)\b/);
+    }
+    expect(en['addTable.add']).toBe('Add table');
+    expect(en['addTable.pickSets']).toBe('Pick sets');
+    expect(en['fill.menu']).toBe('Fill column with formula…');
+    expect(en['fill.notEmpty']).toBe('the column is not empty');
+  });
+
+  test('SET-19 no button or menu label in any locale catalogue uses Create, Insert, New, Place or Choose', () => {
+    const labels = MESSAGE_KEYS.filter((k) => k.startsWith('menu.'));
+    expect(labels.length).toBeGreaterThan(80);
+    for (const key of labels) {
+      expect(CATALOGUE['en-US'][key], key).not.toMatch(/\b(Create|Insert|New|Place|Choose)\b/);
+    }
+    // The ban is blanket: every value in every locale, not only menu.* in en-US.
+    for (const locale of LOCALES) {
+      for (const key of MESSAGE_KEYS) {
+        expect(CATALOGUE[locale][key], `${locale} ${key}`).not.toMatch(
+          /\b(Create|Insert|New|Place|Choose)\b/i,
+        );
+      }
+    }
+    expect(CATALOGUE['en-US']['menu.addRowAbove']).toBe('Add row above');
+    expect(CATALOGUE['en-US']['menu.addColumnBefore']).toBe('Add column before');
+  });
+
+  test('SET-19 the inspector carries no literal English label, hint, title or placeholder', () => {
+    const dir = resolve(__dirname, '../routes/document/inspector');
+    const sources = readdirSync(dir)
+      .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+      .map((f) => resolve(dir, f));
+    const literal = /\b(label|aria-label|title|hint|placeholder|available)="[A-Za-z]/;
+    for (const file of sources) {
+      const hits = readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => literal.test(line));
+      expect(hits, file).toEqual([]);
+    }
+    for (const locale of LOCALES) {
+      expect(CATALOGUE[locale]['inspector.scope'], locale).not.toBe('');
+    }
+    expect(
+      Object.keys(CATALOGUE['ta-IN']).filter((k) => k.startsWith('inspector.')).length,
+    ).toBeGreaterThan(100);
+  });
+
+  test('SET-19 library phone copy says Add, not create', () => {
+    const src = readFileSync(resolve(__dirname, '../routes/library/Library.tsx'), 'utf8');
+    expect(src).not.toMatch(/\bcreate one\b/i);
   });
 });

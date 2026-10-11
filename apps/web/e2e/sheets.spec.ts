@@ -211,6 +211,7 @@ for (const width of [1024, 1440] as const) {
       await expect(menu.getByRole('menuitem')).toHaveText([
         /Add sheet/,
         /Rename sheet\s*F2/,
+        /Lock sheet/,
         /Delete sheet\s*⌫/,
       ]);
       await settled(menu);

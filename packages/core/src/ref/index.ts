@@ -56,12 +56,17 @@ export {
   computedItemsOf,
   computedOperandsLabel,
   computedRowId,
+  fillColumns,
   observeRefusedFills,
+  readsTable,
   reconcileComputed,
   setComputedColumn,
   setComputedColumns,
   setTableFormula,
+  spreadMemberLabel,
   type ComputedItems,
+  type FillRefusal,
+  type FillTarget,
 } from './computed.js';
 export {
   reconcileSplitChildren,

@@ -9,6 +9,7 @@
 import { mergeRoom, spanAt, spanCovering, tableRecord, type TableMap } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
+import { useMessages } from '../../../i18n/index.js';
 import type { CellSelection } from '../selection.js';
 import { ReasonedButton, Section, Stepper } from './controls.js';
 
@@ -20,6 +21,7 @@ export interface MergeSectionProps {
 }
 
 export function MergeSection({ table, cell, disabledReason, commands }: MergeSectionProps) {
+  const t = useMessages();
   const record = tableRecord(table);
   const anchor = cell === null ? null : spanAt(table, cell.rowId, cell.colId);
   const covering = cell === null ? null : spanCovering(table, cell.rowId, cell.colId);
@@ -32,7 +34,7 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
   const unmergeReason = disabledReason ?? (merged ? undefined : 'the cell is not merged');
   return (
     <Section
-      label="merge"
+      label={t('inspector.merge')}
       hint={
         cell === null
           ? 'Select a cell to merge from it.'
@@ -43,7 +45,7 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
     >
       <div className="gd-insp__stack">
         <Stepper
-          label="Columns spanned"
+          label={t('inspector.columnsSpanned')}
           unit="columns"
           value={cols}
           min={1}
@@ -55,7 +57,7 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
           }}
         />
         <Stepper
-          label="Rows spanned"
+          label={t('inspector.rowsSpanned')}
           unit="rows"
           value={rows}
           min={1}
@@ -67,7 +69,7 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
           }}
         />
         <ReasonedButton
-          label="Unmerge cells"
+          label={t('inspector.unmergeCells')}
           reason={unmergeReason}
           onClick={() => {
             if (cell !== null) commands.unmergeCells(cell);

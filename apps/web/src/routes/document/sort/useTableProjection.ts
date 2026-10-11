@@ -106,7 +106,7 @@ function reconcile(
 }
 
 /** The formula engine's result version for a document: ticks when any cell's value changes. */
-function useEngineVersion(table: TableMap, wanted: boolean): number {
+export function useEngineVersion(table: TableMap, wanted: boolean): number {
   const doc = table.doc;
   useEffect(() => {
     if (wanted && doc !== null) engineFor(doc);

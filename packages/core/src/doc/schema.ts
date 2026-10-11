@@ -44,6 +44,7 @@ import {
   type FormatOpts,
 } from '../format/types.js';
 import { isMethodName, type MethodName } from '../formula/ast.js';
+import { lockReasonOfTable } from './sections.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
 import { readRules, type ConditionalRule } from '../style/rules.js';
 import {
@@ -65,6 +66,8 @@ export const TABLE_TITLE_ROWS = 2;
 export const TABLE_HEADER_ROWS = 1;
 /** Default footer count-strip rows (GRID-11: 0 or 1; absent means none). */
 export const DEFAULT_FOOTER_ROWS = 0;
+/** A set table's footer strip when the key is absent (GRID-11 as amended by ADR-056, SET-05). */
+export const SET_FOOTER_ROWS = 1;
 /** Default column width in lattice units. */
 export const DEFAULT_COLUMN_WIDTH = 1;
 /** Default row height in lattice units (GRID-09, ADR-049): a row is any whole number of units ≥ 1. */
@@ -178,6 +181,16 @@ export interface PulledFrom {
   readonly rowId: Id;
 }
 
+/**
+ * A row a family of sets holds because one of its rows references another set table
+ * through `@` (SET-06, REF-01): `rowId` is the referencing row, `tableId` the set it
+ * follows. Read-only, like a pulled row; the reconciler (`reconcileSetRefs`) owns it.
+ */
+export interface SetRefOf {
+  readonly rowId: Id;
+  readonly tableId: Id;
+}
+
 /** A `Split()` child (HIER-07): piece `index` of its parent row's split column. */
 export interface SplitOf {
   readonly rowId: Id;
@@ -255,6 +268,8 @@ export interface RowMeta {
   readonly pulledFrom: PulledFrom | null;
   /** Which parent and piece a `Split()` child came from (HIER-07 provenance); null otherwise. */
   readonly splitOf: SplitOf | null;
+  /** SET-06: the referencing row and the set this row follows; null on any other row. */
+  readonly setRefOf: SetRefOf | null;
   /**
    * The result element or tuple a computed table's row stands for (SET-08):
    * its canonical text (FX-09 spelling, NFC). Provenance, like `splitOf`;
@@ -559,6 +574,14 @@ export function readPulledFrom(value: unknown): PulledFrom | null {
   return { tableId, rowId };
 }
 
+export function readSetRefOf(value: unknown): SetRefOf | null {
+  if (!isRecord(value)) return null;
+  const { rowId, tableId } = value;
+  if (typeof rowId !== 'string' || typeof tableId !== 'string') return null;
+  if (rowId === '' || tableId === '') return null;
+  return { rowId, tableId };
+}
+
 export function readSplitOf(value: unknown): SplitOf | null {
   if (!isRecord(value)) return null;
   const { rowId, index } = value;
@@ -645,7 +668,12 @@ export function tableRecord(map: TableMap): TableRecord {
       Math.max(0, Math.round(readNumber(map, 'frozenColumns', 0))),
     ),
     headerRows: readStripCount(map, 'headerRows', TABLE_HEADER_ROWS),
-    footerRows: readStripCount(map, 'footerRows', DEFAULT_FOOTER_ROWS),
+    // GRID-11 as amended by ADR-056: a set table shows its count strip unless it was hidden.
+    footerRows: readStripCount(
+      map,
+      'footerRows',
+      readTableKind(map.get('kind')) === 'plain' ? DEFAULT_FOOTER_ROWS : SET_FOOTER_ROWS,
+    ),
     outlineColumn: readColumnRef(map, 'outlineColumn', columns),
     look: tableLook(map),
     z: Math.round(readNumber(map, 'z', 0)),
@@ -806,6 +834,7 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
       splitChild: false,
       pulledFrom: null,
       splitOf: null,
+      setRefOf: null,
       computedKey: null,
       lostFrom: null,
       outlineColumn: null,
@@ -830,6 +859,7 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
     splitChild: readBoolean(meta, 'splitChild', false),
     pulledFrom: readPulledFrom(meta.get('pulledFrom')),
     splitOf: readSplitOf(meta.get('splitOf')),
+    setRefOf: readSetRefOf(meta.get('setRefOf')),
     computedKey: readNullableString(meta.get('computedKey')),
     lostFrom: readNullableString(meta.get('lostFrom')),
     outlineColumn: readOutlineColumn(meta.get('outlineColumn')),
@@ -852,19 +882,29 @@ function readOutlineColumn(value: unknown): Id | null {
  * merely tint the cell (A11Y-04). Every write path — grid commit, find and
  * replace, paste — consults this (REF-05).
  */
-export type ReadOnlyReason = Exclude<ColumnSource, 'entered'> | 'group' | 'splitChild';
+export type ReadOnlyReason =
+  | Exclude<ColumnSource, 'entered'>
+  | 'group'
+  | 'splitChild'
+  // SET-18: the table's section or its sheet is locked; checked before any other reason.
+  | 'sectionLocked'
+  | 'sheetLocked';
 
 /** The row-level read-only reason, or null: a pulled row, else a category band, else a split child. */
 export function rowReadOnlyReason(
   meta: RowMeta,
 ): Extract<ReadOnlyReason, 'pulled' | 'group' | 'splitChild'> | null {
-  if (meta.pulledFrom !== null) return 'pulled';
+  // A row a family follows from another set through `@` reads as pulled (SET-06, REF-05).
+  if (meta.pulledFrom !== null || meta.setRefOf !== null) return 'pulled';
   if (meta.group) return 'group';
   if (meta.splitChild) return 'splitChild';
   return null;
 }
 
 export function cellReadOnlyReason(table: TableMap, rowId: Id, colId: Id): ReadOnlyReason | null {
+  const locked =
+    table.doc === null ? null : lockReasonOfTable(openDocument(table.doc), readString(table, 'id'));
+  if (locked !== null) return locked === 'sheet' ? 'sheetLocked' : 'sectionLocked';
   const column = columnsArray(table)
     .toArray()
     .find((c) => readString(c, 'id') === colId);

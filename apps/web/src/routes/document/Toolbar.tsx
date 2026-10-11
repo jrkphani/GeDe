@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Button, Icon, Menu, Tooltip, type IconName, type MenuEntry } from '@gede/ui';
 
 import { ARIA_KEYS, LABELS } from '../../doc/shortcuts.js';
+import { useMessages } from '../../i18n/index.js';
 import { formatZoom, ZOOM_PRESETS } from '../../doc/viewport.js';
 
 export type InspectorMode = 'format' | 'organize';
@@ -122,12 +123,13 @@ function InspectorToggle({
   active: InspectorMode | null;
   onInspector: (mode: InspectorMode | null) => void;
 }) {
+  const t = useMessages();
   const pressed = active === mode;
   return (
     <Tooltip
       content={
         <span className="gd-doc__tip">
-          {label} inspector
+          {t('menu.labelInspector', { label })}
           <kbd className="gd-doc__tip-key">{shortcut}</kbd>
         </span>
       }
@@ -138,7 +140,7 @@ function InspectorToggle({
         className={clsx('gd-tool', 'gd-tool--text', { 'gd-tool--pressed': pressed })}
         aria-pressed={pressed}
         aria-keyshortcuts={ariaKeys}
-        aria-label={`${label} inspector`}
+        aria-label={t('menu.labelInspector', { label })}
         onClick={() => {
           onInspector(pressed ? null : mode);
         }}
@@ -189,6 +191,7 @@ export function Toolbar({
   edgesShown = false,
   onEdges,
 }: ToolbarProps) {
+  const t = useMessages();
   const viewOnly = editable ? undefined : 'you have view-only access';
   const needsTable = viewOnly ?? (hasTable ? undefined : 'select a table first');
   const graphSoon = 'arrives with the context graph release';
@@ -206,12 +209,17 @@ export function Toolbar({
   ];
 
   return (
-    <div className="gd-doc__toolbar" role="toolbar" aria-label="Document tools">
-      <Cluster label="Insert">
-        <Tool icon="table" label="Add table" onClick={onAddTable} disabledReason={viewOnly} />
+    <div className="gd-doc__toolbar" role="toolbar" aria-label={t('menu.documentTools')}>
+      <Cluster label={t('menu.add')}>
+        <Tool
+          icon="table"
+          label={t('addTable.add')}
+          onClick={onAddTable}
+          disabledReason={viewOnly}
+        />
         <Tool
           icon="add-row"
-          label="Add row"
+          label={t('menu.addRow')}
           shortcut={LABELS.addRow}
           ariaKeys={ARIA_KEYS.addRow}
           onClick={onAddRow}
@@ -219,7 +227,7 @@ export function Toolbar({
         />
         <Tool
           icon="add-column"
-          label="Add column"
+          label={t('menu.addColumn')}
           shortcut={LABELS.addColumn}
           ariaKeys={ARIA_KEYS.addColumn}
           onClick={onAddColumn}
@@ -227,22 +235,22 @@ export function Toolbar({
         />
         <Tool
           icon="graph"
-          label="Add graph"
+          label={t('menu.addGraph')}
           onClick={onAddGraph}
           disabledReason={viewOnly ?? (onAddGraph === undefined ? graphSoon : undefined)}
           tourKey="graph"
         />
       </Cluster>
       {(documentMenu !== undefined || tableMenu !== undefined) && (
-        <Cluster label="Menus">
+        <Cluster label={t('menu.menus')}>
           {documentMenu}
           {tableMenu}
         </Cluster>
       )}
-      <Cluster label="Arrange">
+      <Cluster label={t('menu.arrange')}>
         <Tool
           icon="pin"
-          label="Pin to viewport"
+          label={t('menu.pinToViewport')}
           pressed={pinned === true}
           disabledReason={viewOnly ?? (pinned === null ? needsTable : undefined)}
           onClick={() => {
@@ -251,7 +259,7 @@ export function Toolbar({
         />
         <Tool
           icon="edges"
-          label="DAG edges"
+          label={t('menu.dagEdges')}
           pressed={edgesShown}
           disabledReason={viewOnly}
           onClick={() => {
@@ -259,10 +267,10 @@ export function Toolbar({
           }}
         />
       </Cluster>
-      <Cluster label="Data">
+      <Cluster label={t('menu.data')}>
         <Tool
           icon="gridlines"
-          label="Gridlines"
+          label={t('menu.gridlines')}
           pressed={gridlines}
           onClick={() => {
             onGridlines(!gridlines);
@@ -270,7 +278,7 @@ export function Toolbar({
         />
         <Tool
           icon="filter"
-          label="Filter"
+          label={t('menu.filter')}
           onClick={() => {
             onOrganize('filter');
           }}
@@ -278,7 +286,7 @@ export function Toolbar({
         />
         <Tool
           icon="sort"
-          label="Sort"
+          label={t('menu.sort')}
           onClick={() => {
             onOrganize('sort');
           }}
@@ -286,34 +294,34 @@ export function Toolbar({
         />
       </Cluster>
       <span className="gd-doc__toolgap" />
-      <Cluster label="Find">
+      <Cluster label={t('menu.find')}>
         <Tool
           icon="search"
-          label="Find"
+          label={t('menu.find')}
           tourKey="find"
           shortcut={LABELS.find}
           ariaKeys={ARIA_KEYS.find}
           onClick={onFind}
         />
       </Cluster>
-      <Cluster label="View">
+      <Cluster label={t('menu.view')}>
         <Tool
           icon="zoom-out"
-          label="Zoom out"
+          label={t('menu.zoomOut')}
           shortcut={LABELS.zoomOut}
           ariaKeys={ARIA_KEYS.zoomOut}
           onClick={onZoomOut}
         />
         <Menu
-          label="Zoom"
+          label={t('menu.zoom')}
           align="center"
           entries={zoomEntries}
           trigger={
             <button
               type="button"
               className="gd-mono gd-doc__zoom"
-              aria-label={`Zoom ${formatZoom(zoom)}`}
-              title="Zoom"
+              aria-label={t('menu.zoomZoom', { zoom: formatZoom(zoom) })}
+              title={t('menu.zoom')}
             >
               {formatZoom(zoom)}
             </button>
@@ -321,32 +329,32 @@ export function Toolbar({
         />
         <Tool
           icon="zoom-in"
-          label="Zoom in"
+          label={t('menu.zoomIn')}
           shortcut={LABELS.zoomIn}
           ariaKeys={ARIA_KEYS.zoomIn}
           onClick={onZoomIn}
         />
         <Tool
           icon="fit"
-          label="Fit to canvas"
+          label={t('menu.fitToCanvas')}
           shortcut={LABELS.fit}
           ariaKeys={ARIA_KEYS.fit}
           onClick={onFit}
         />
       </Cluster>
-      <Cluster label="Help">
+      <Cluster label={t('menu.help')}>
         <Tool
           icon="keyboard"
-          label="Keyboard shortcuts"
+          label={t('menu.keyboardShortcuts')}
           shortcut={LABELS.shortcutSheet}
           ariaKeys={ARIA_KEYS.shortcutSheet}
           onClick={onShortcuts}
         />
       </Cluster>
-      <Cluster label="Inspectors">
+      <Cluster label={t('menu.inspectors')}>
         <InspectorToggle
           mode="format"
-          label="Format"
+          label={t('menu.format')}
           shortcut={LABELS.formatInspector}
           ariaKeys={ARIA_KEYS.formatInspector}
           active={inspector}
@@ -354,7 +362,7 @@ export function Toolbar({
         />
         <InspectorToggle
           mode="organize"
-          label="Organize"
+          label={t('menu.organize')}
           shortcut={LABELS.organizeInspector}
           ariaKeys={ARIA_KEYS.organizeInspector}
           active={inspector}

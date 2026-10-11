@@ -19,6 +19,8 @@
  * elsewhere. Nothing here touches the DOM.
  */
 import {
+  isSheetLocked,
+  lockReasonOfTable,
   addColumn,
   addColumnRule,
   addRow,
@@ -76,6 +78,8 @@ import {
   setTableTitle as setTableTitleMutation,
   spanAt,
   spanCovering,
+  splitIntoRows as splitIntoRowsMutation,
+  splitOffer,
   STACKING_LABELS,
   tableById,
   tableMap,
@@ -104,6 +108,7 @@ import {
 import type { CellSelection, GridEvent, GridState } from '../../../doc/selection.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
 import { translate } from '../../../i18n/index.js';
+import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import { columnDisplayName } from './column-name.js';
 import { isFormulaInput } from '../formula/input.js';
@@ -244,6 +249,12 @@ export interface GridCommands {
   commitCell(cell: CellSelection, text: string): boolean;
   /** GRID-06: write the editor's rich text (marks included); read-only cells refuse. */
   commitRichCell(cell: CellSelection, doc: RichDoc): boolean;
+  /**
+   * SET-02: Split into rows — a set's range cell holding a comma value keeps its first
+   * element and each other element gets a row of its own, as one undo step. False when the
+   * cell is not on offer (another column, a single element, a formula).
+   */
+  splitIntoRows(cell: CellSelection): boolean;
   /** GRID-04: why a cell will not take typing, or null when it will. */
   readOnlyReason(cell: CellSelection): ReadOnlyReason | null;
   /**
@@ -332,6 +343,16 @@ export interface GridCommandDeps {
    * the row it appended, or two divider presses.
    */
   settle?: (() => void) | undefined;
+  /**
+   * SET-02: called after a typed or pasted value lands in a set's range cell as two or more
+   * elements, so the shell can offer Split into rows; `address` is the cell's A1 address.
+   */
+  offerSplit?: ((cell: CellSelection, elements: number, address: string) => void) | undefined;
+  /**
+   * SET-02: called after a cell is split, from whichever route (the offer, the cell menu), so
+   * the shell withdraws an offer still open for it rather than offering a split already made.
+   */
+  withdrawSplit?: ((cell: CellSelection) => void) | undefined;
 }
 
 /**
@@ -339,6 +360,67 @@ export interface GridCommandDeps {
  * an edit session whose keystrokes are that step (KEYS-03, `RichCellEditor`).
  */
 const MERGING_COMMANDS = new Set<keyof GridCommands>(['commitCell', 'commitRichCell']);
+
+/** Commands that answer a list, a rename result or `null` when refused; every other one answers `false`. */
+const REFUSES_WITH_LIST = new Set(['unhideAllColumns', 'collapseAll', 'expandAll']);
+const REFUSES_WITH_RENAME = new Set(['renameColumn', 'setTableTitle']);
+const REFUSES_WITH_NULL = new Set([
+  'insertRowBelow',
+  'insertRowAbove',
+  'appendRowWith',
+  'insertColumnAfter',
+  'insertColumnBefore',
+  'deleteTable',
+  'setColumnWidth',
+  'setColumnWidths',
+  'setRowHeights',
+  'scaleTable',
+  'distributeEvenly',
+  'setFrozenColumns',
+  'clearColumn',
+  'fillColumn',
+  'addRule',
+]);
+/** View settings stored in the document that a lock does not stop. */
+const NOT_EDITS = new Set(['readOnlyReason', 'setSheetEdgesShown']);
+
+/**
+ * SET-18: a command on a table whose section or sheet is locked (or on a locked sheet) is
+ * refused whole, with the reason said, before it reaches the document. Every command's first
+ * argument is a table id, a cell selection or a sheet id. The service refuses what a client
+ * that skips this sends (`lockedTablesEdited`).
+ */
+function guardedByLock(
+  commands: GridCommands,
+  gd: GedeDoc,
+  announce: (text: string) => void,
+): GridCommands {
+  const source = commands as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const out: Record<string, unknown> = { ...source };
+  for (const key of Object.keys(source)) {
+    const fn = source[key];
+    if (fn === undefined || NOT_EDITS.has(key)) continue;
+    out[key] = (...args: unknown[]) => {
+      const first = args[0];
+      const id =
+        typeof first === 'string' ? first : (first as { tableId?: Id } | undefined)?.tableId;
+      const reason =
+        id === undefined
+          ? null
+          : (lockReasonOfTable(gd, id) ?? (isSheetLocked(gd, id) ? 'sheet' : null));
+      if (reason === null) return fn(...args);
+      const said = translate(
+        activeLocale(),
+        reason === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked',
+      );
+      announce(sentence(said));
+      if (REFUSES_WITH_LIST.has(key)) return [];
+      if (REFUSES_WITH_RENAME.has(key)) return { ok: false, reason: sentence(said) };
+      return REFUSES_WITH_NULL.has(key) ? null : false;
+    };
+  }
+  return out as unknown as GridCommands;
+}
 
 /**
  * Wrap every command so `settle` runs before and after it, whatever it
@@ -366,6 +448,17 @@ function settled(commands: GridCommands, settle: (() => void) | undefined): Grid
     };
   }
   return out as unknown as GridCommands;
+}
+
+/**
+ * Why a row cannot be deleted, or undefined (ADR-056 ruling c): a computed row is the
+ * formula's; changing the formula is how it goes. In the active locale.
+ */
+export function rowDeleteReason(gd: GedeDoc, tableId: Id, rowId: Id): string | undefined {
+  const table = tableMap(gd, tableId);
+  return table !== null && rowMeta(table, rowId).computedKey !== null
+    ? translate(activeLocale(), 'set.rowComputed')
+    : undefined;
 }
 
 /** Sentence for a read-only reason (A11Y-04: the reason is text, not a tint). */
@@ -421,7 +514,7 @@ export type RenameResult = { readonly ok: true } | { readonly ok: false; readonl
 const OK: RenameResult = { ok: true };
 
 /** "a derived column is named by its signature" → "A derived column is named by its signature". */
-function sentence(reason: string): string {
+export function sentence(reason: string): string {
   return reason.charAt(0).toLocaleUpperCase() + reason.slice(1);
 }
 
@@ -517,6 +610,12 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     const t = map(cell.tableId);
     return t === null ? null : cellReadOnlyReason(t, cell.rowId, cell.colId);
   };
+  /** SET-02: a comma value in a set's range cell is offered for Split into rows. */
+  const offerSplit = (cell: CellSelection) => {
+    if (deps.offerSplit === undefined) return;
+    const pieces = splitOffer(gd, cell.tableId, cell.rowId, cell.colId);
+    if (pieces !== null) deps.offerSplit(cell, pieces.length, addressOf(cell));
+  };
   const refuseReadOnly = (cell: CellSelection): boolean => {
     const reason = readOnlyReason(cell);
     if (reason === null) return false;
@@ -591,7 +690,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const target =
         rec === null ? null : firstVisibleColumn(rec, colId ?? selectedIn(tableId)?.colId);
       if (target !== null) select({ tableId, rowId: id, colId: target });
-      announce(rowId === undefined ? 'Added a row' : 'Inserted a row below');
+      announce(rowId === undefined ? 'Added a row' : 'Added a row below');
       return id;
     },
     appendRowWith(tableId, values) {
@@ -616,7 +715,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const rec = record(tableId);
       const colId = rec === null ? null : firstVisibleColumn(rec, selectedIn(tableId)?.colId);
       if (colId !== null) select({ tableId, rowId: id, colId });
-      announce('Inserted a row above');
+      announce('Added a row above');
       return id;
     },
     deleteRow(tableId, rowId) {
@@ -633,7 +732,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const id = addColumn(gd, tableId, { afterColId: colId });
       const rowId = selectedIn(tableId)?.rowId ?? record(tableId)?.rows[0];
       if (rowId !== undefined) select({ tableId, rowId, colId: id });
-      announce(colId === undefined ? 'Added a column' : 'Inserted a column after');
+      announce(colId === undefined ? 'Added a column' : 'Added a column after');
       return id;
     },
     insertColumnBefore(tableId, colId) {
@@ -641,7 +740,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const id = addColumn(gd, tableId, { beforeColId: colId });
       const rowId = selectedIn(tableId)?.rowId ?? record(tableId)?.rows[0];
       if (rowId !== undefined) select({ tableId, rowId, colId: id });
-      announce('Inserted a column before');
+      announce('Added a column before');
       return id;
     },
     deleteColumn(tableId, colId) {
@@ -979,16 +1078,35 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       // False when the row or column went while the editor was open: the draft is dropped
       // rather than written as a cell keyed to nothing (GRID-02). A formula's references
       // are bound to ids here, once, against today's geometry (PRD §20).
-      return commitCellText(gd, cell.tableId, cell.rowId, cell.colId, text, {
+      const written = commitCellText(gd, cell.tableId, cell.rowId, cell.colId, text, {
         index: workbookIndexFor(gd.doc),
       });
+      if (written) offerSplit(cell);
+      return written;
     },
     commitRichCell(cell, doc) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
       // A formula is a plain string bound to ids (PRD §20), never a fragment: the `commitCell`
       // that follows from the same editor finish writes it through commitCellText.
       if (isFormulaInput(plainText(doc))) return true;
-      return setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
+      const written = setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
+      if (written) offerSplit(cell);
+      return written;
+    },
+    splitIntoRows(cell) {
+      if (!editable()) return false;
+      const address = addressOf(cell);
+      const added = splitIntoRowsMutation(gd, cell.tableId, cell.rowId, cell.colId);
+      deps.withdrawSplit?.(cell);
+      if (added === null) return false;
+      const locale = activeLocale();
+      announce(
+        translate(locale, 'set.split.done', {
+          cell: address,
+          count: formatNumber(locale, added.length + 1),
+        }),
+      );
+      return true;
     },
     readOnlyReason,
     nestRow(tableId, rowId, colId) {
@@ -1230,5 +1348,5 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       return ok;
     },
   };
-  return settled(commands, deps.settle);
+  return settled(guardedByLock(commands, gd, announce), deps.settle);
 }

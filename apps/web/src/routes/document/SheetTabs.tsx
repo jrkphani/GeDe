@@ -1,10 +1,11 @@
 import clsx from 'clsx';
 import { useEffect, useRef, type KeyboardEvent, type MouseEvent } from 'react';
-import { listSheets, objectCount, type GedeDoc, type Id } from '@gede/core';
-import { Button, Tabs, Tooltip } from '@gede/ui';
+import { isSheetLocked, listSheets, objectCount, type GedeDoc, type Id } from '@gede/core';
+import { Button, Icon, Tabs, Tooltip } from '@gede/ui';
 
 import { isEditableTarget } from '../../doc/shortcuts.js';
 import { useYVersion } from '../../doc/use-y.js';
+import { useMessages } from '../../i18n/index.js';
 import { InlineNameField, isComposingEvent } from './InlineNameField.js';
 import { emptyNameReason } from './sheets.js';
 
@@ -55,8 +56,10 @@ export function SheetTabs({ gd, activeSheetId, onSelect, onAppend, edit, bottom 
   useYVersion(gd.sheets); // deep: a sheet label lives in a nested map
   useYVersion(gd.tables, { depth: 'shallow' });
   useYVersion(gd.graphs, { depth: 'shallow' });
+  const t = useMessages();
   const sheets = listSheets(gd);
   const value = activeSheetId ?? sheets[0]?.id ?? '';
+  const shown = sheets.find((s) => s.id === value);
   const strip = useRef<HTMLElement | null>(null);
   const renaming = edit?.renaming ?? null;
   // Where focus should land once this render has settled: the tab of `sheetId`, when
@@ -171,6 +174,12 @@ export function SheetTabs({ gd, activeSheetId, onSelect, onAppend, edit, bottom 
             };
           })}
         />
+      )}
+      {/* SET-18: the status line for a locked sheet. */}
+      {shown !== undefined && isSheetLocked(gd, shown.id) && (
+        <span className="gd-doc__readonly" role="status" data-testid="sheet-locked">
+          <Icon name="locked" size={13} /> {t('lock.status', { name: shown.label })}
+        </span>
       )}
       {onAppend !== undefined && (
         <Tooltip content="Add sheet">

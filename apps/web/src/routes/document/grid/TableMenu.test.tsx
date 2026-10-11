@@ -1,17 +1,28 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  computedItemsOf,
   createSheet,
   createTable,
   openDocument,
+  reconcileComputed,
+  setComputedColumn,
+  setTableFormula,
   tableById,
+  tableMap,
   type GedeDoc,
   type Id,
 } from '@gede/core';
+import { TooltipProvider } from '@gede/ui';
 
-import { createGridCommands, type GridCommands } from './commands.js';
+import { engineFor } from '../../../doc/engine.js';
+import { resetLocaleForTests, setLocale } from '../../../locale.js';
+import { TableTab } from '../inspector/TableTab.js';
+import { cellMenuEntries, type MenuContext } from '../menus/entries.js';
+
+import { createGridCommands, rowDeleteReason, type GridCommands } from './commands.js';
 import { frozenOptions, TableMenu } from './TableMenu.js';
 
 let gd: GedeDoc;
@@ -30,6 +41,71 @@ beforeEach(() => {
     state: () => ({ selection: null, editing: null }),
     dispatch: () => undefined,
     announce,
+  });
+});
+
+describe('SET-08 ruling (c): a computed row cannot be deleted', () => {
+  it('SET-08 Delete row is disabled with the reason on a computed row in the Table menu, the cell menu and the inspector, and the command refuses it', async () => {
+    const sets = createTable(gd, {
+      sheetId: createSheet(gd),
+      at: { col: 0, row: 0 },
+      columns: 2,
+      rows: 0,
+    });
+    const range = tableById(gd, sets)!.columns[0]!.id;
+    setTableFormula(gd, sets, '=Union("a", "b")');
+    setComputedColumn(gd, sets, range, { shape: 'column' });
+    // The real engine evaluates the formula; its result is handed to the reconciler.
+    const host = engineFor(gd.doc);
+    await host.settled();
+    for (const h of computedItemsOf(gd, (id) => host.result(id))) {
+      reconcileComputed(gd, h.tableId, h.items, h.members);
+    }
+    const [first, last] = tableById(gd, sets)!.rows;
+    const cell = { tableId: sets, rowId: first!, colId: range };
+
+    render(<TableMenu gd={gd} selection={{ tableId: sets, cell }} editable commands={commands} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
+    expect(screen.getByRole('menuitem', { name: 'Delete row' })).toHaveAccessibleDescription(
+      'the row is computed',
+    );
+    await userEvent.keyboard('{Escape}');
+
+    const entry = cellMenuEntries({ gd, editable: true, commands } as unknown as MenuContext, {
+      kind: 'cell',
+      ...cell,
+    }).find((e) => e.id === 'row-delete');
+    expect(entry).toMatchObject({ disabledReason: 'the row is computed' });
+
+    render(
+      <TooltipProvider>
+        <TableTab
+          gd={gd}
+          table={tableMap(gd, sets)!}
+          selection={null}
+          editable
+          commands={commands}
+        />
+      </TooltipProvider>,
+    );
+    const fewer = within(screen.getByRole('region', { name: 'rows and columns' })).getByRole(
+      'button',
+      { name: /^Fewer rows/ },
+    );
+    expect(fewer).toHaveAttribute('aria-disabled', 'true');
+    expect(fewer).toHaveAccessibleDescription('the row is computed');
+
+    expect(commands.deleteRow(sets, last!)).toBe(false);
+    expect(tableById(gd, sets)!.rows).toHaveLength(2);
+
+    // The reason is in the active locale, as the cell's read-only reason is.
+    setLocale('ta-IN');
+    try {
+      expect(rowDeleteReason(gd, sets, first!)).toBe('இந்த வரிசை கணக்கிடப்படுகிறது');
+    } finally {
+      setLocale('en-US'); // the device key outlives reset
+      resetLocaleForTests();
+    }
   });
 });
 
@@ -53,9 +129,9 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     expect(
       Array.from(menu.querySelectorAll('.gd-menu__label')).map((el) => el.textContent),
     ).toEqual([
-      'Insert row above',
+      'Add row above',
       'Delete row',
-      'Insert column before',
+      'Add column before',
       'Delete column',
       'Hide column',
       'Unhide columns',
@@ -116,7 +192,7 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     await userEvent.click(screen.getByRole('menuitem', { name: 'Unhide 1 column' }));
     expect(tableById(gd, tableId)?.columns[1]?.hidden).toBe(false);
     await open();
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Insert row above' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Add row above' }));
     expect(tableById(gd, tableId)?.rows).toHaveLength(3);
     await open();
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete column' }));

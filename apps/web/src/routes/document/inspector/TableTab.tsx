@@ -5,6 +5,7 @@ import {
   GRIDLINE_LABELS,
   LATTICE,
   OUTLINE_WEIGHTS,
+  isSetKind,
   rowMeta,
   setTableLook,
   TABLE_STYLE_LABELS,
@@ -13,19 +14,23 @@ import {
   type GedeDoc,
   type Id,
   type OutlineWeight,
+  type TableKind,
   type TableMap,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { useMessages, type MessageKey } from '../../../i18n/index.js';
 import { frozenOptions } from '../grid/TableMenu.js';
 import { columnDisplayName } from '../grid/column-name.js';
 import {
   columnRenameReason,
   EMPTY_COLUMN_NAME_REASON,
   EMPTY_TABLE_TITLE_REASON,
+  rowDeleteReason,
   type GridCommands,
 } from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
+import { changeTableKind, kindChoices, tableKindReason } from '../sets/set-tables.js';
 import { selectedBand, type Selection } from '../selection.js';
 import { fitColumnsToContent, fitRowsToContent, useFitter } from '../style/index.js';
 import { NameField, ReasonedButton, Section, SizeField, Stepper } from './controls.js';
@@ -36,7 +41,17 @@ export interface TableTabProps {
   selection: Selection | null;
   editable: boolean;
   commands: GridCommands;
+  /** SET-18: why the table cannot be edited when its section or sheet is locked, else view-only. */
+  readOnlyReason?: string | undefined;
 }
+
+const KIND_LABEL: Readonly<Record<TableKind, MessageKey>> = {
+  plain: 'addTable.kind.plain',
+  simple: 'addTable.kind.simple',
+  family: 'addTable.kind.family',
+  computed: 'addTable.kind.computed',
+  product: 'addTable.kind.product',
+};
 
 /** The "Outline column" select's value for "no designation: the first visible column" (ADR-052). */
 const OUTLINE_DEFAULT = 'first';
@@ -48,6 +63,51 @@ const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
   accent: 'Accent',
 };
 
+interface CaptionFieldProps {
+  readonly gd: GedeDoc;
+  readonly tableId: Id;
+  readonly caption: string;
+  readonly editable: boolean;
+  readonly label: string;
+  readonly placeholder: string;
+  readonly hint?: string | undefined;
+  /** What the live region says when the field is left (SET-04: “definition cleared”). */
+  readonly announcement: (caption: string) => string;
+}
+
+/**
+ * The caption field, or a set's definition field (SET-04, INSP-04). As the title field does
+ * (TitleBar): the document is the state, and the keystrokes merge into one undo step through
+ * the manager's capture window — a `GridCommands` call would settle (and announce) every
+ * character. Leaving the field says what it now holds.
+ */
+function CaptionField({
+  gd,
+  tableId,
+  caption,
+  editable,
+  label,
+  placeholder,
+  hint,
+  announcement,
+}: CaptionFieldProps) {
+  return (
+    <TextField
+      label={label}
+      value={caption}
+      disabled={!editable}
+      placeholder={placeholder}
+      {...(hint === undefined ? {} : { hint })}
+      onChange={(e) => {
+        if (editable) setTableLook(gd, tableId, { caption: e.currentTarget.value });
+      }}
+      onBlur={() => {
+        announce(announcement(caption));
+      }}
+    />
+  );
+}
+
 /**
  * INSP-04: the Table tab. Table style, title and caption, header row, footer,
  * header (frozen) columns, row and column counts that insert or delete
@@ -56,13 +116,22 @@ const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
  * (INSP-12). Nothing here moves an address: the style is paint, the caption
  * is a strip at the foot, fit snaps to whole units (GRID-01).
  */
-export function TableTab({ gd, table, selection, editable, commands }: TableTabProps) {
+export function TableTab({
+  gd,
+  table,
+  selection,
+  editable,
+  commands,
+  readOnlyReason,
+}: TableTabProps) {
+  const t = useMessages();
   const record = tableRecord(table);
-  const viewOnly = editable ? undefined : 'you have view-only access';
+  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
   const rows = record.rows.length;
   const columns = record.columns.length;
   const visibleWidth = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);
   const lastRow = record.rows[rows - 1];
+  const lastRowReason = lastRow === undefined ? undefined : rowDeleteReason(gd, record.id, lastRow);
   const lastColumn = record.columns[columns - 1];
   const { look } = record;
   // Fit-to-content measures with canvas `measureText`; where no 2D context exists the
@@ -122,12 +191,9 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
 
   return (
     <>
-      <Section
-        label="table style"
-        hint="A header band and an alternating band from one ramp (the prototype's swatches)."
-      >
+      <Section label={t('inspector.tableStyle')} hint={t('inspector.aHeaderBandAnd')}>
         <SegmentedControl
-          label="Style"
+          label={t('inspector.style')}
           className="gd-insp__styles"
           value={look.style}
           disabled={viewOnly !== undefined}
@@ -146,13 +212,10 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           }))}
         />
       </Section>
-      <Section
-        label="title and caption"
-        hint="The title bar keeps its two lattice rows; the caption is one row at the foot. No address moves."
-      >
+      <Section label={t('inspector.titleAndCaption')} hint={t('inspector.theTitleBarKeeps')}>
         <div className="gd-insp__stack">
           <Switch
-            label="Title"
+            label={t('inspector.title')}
             checked={look.titleShown}
             disabled={!editable}
             onCheckedChange={(on) => {
@@ -164,7 +227,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
               id-bound, so a rename breaks no formula (REF-01). */}
           <NameField
             key={record.id}
-            label="Title text"
+            label={t('inspector.titleText')}
             value={record.title}
             subject="the table"
             emptyReason={EMPTY_TABLE_TITLE_REASON}
@@ -176,44 +239,89 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }
             onCommit={(title) => commands.setTableTitle(record.id, title)}
           />
-          <Switch
-            label="Caption"
-            checked={look.captionShown}
-            disabled={!editable}
-            onCheckedChange={(on) => {
-              commands.setTableLook(record.id, { captionShown: on });
-            }}
-          />
-          {look.captionShown && (
-            <TextField
-              label="Caption text"
-              value={look.caption}
-              disabled={!editable}
-              placeholder="What this table holds"
-              onChange={(e) => {
-                // As the title field does (TitleBar): the document is the state, and the
-                // keystrokes merge into one undo step through the manager's capture window
-                // — a `GridCommands` call would settle (and announce) every character.
-                if (editable) setTableLook(gd, record.id, { caption: e.currentTarget.value });
-              }}
-              onBlur={() => {
-                announce(
-                  look.caption === ''
-                    ? `${record.title}: caption cleared`
-                    : `${record.title}: caption is “${look.caption}”`,
-                );
-              }}
+          {isSetKind(record.kind) ? (
+            // SET-04: a set's caption is its definition, shown in the title row whatever the
+            // Caption switch says; it is edited here, always (no strip at the foot to turn on).
+            <CaptionField
+              gd={gd}
+              label={t('set.definition.field')}
+              placeholder={t('set.definition.placeholder')}
+              hint={t('set.definition.hint')}
+              tableId={record.id}
+              caption={look.caption}
+              editable={editable}
+              announcement={(caption) =>
+                caption === ''
+                  ? t('set.definition.cleared', { set: record.title })
+                  : t('set.definition.changed', { set: record.title, definition: caption })
+              }
             />
+          ) : (
+            <>
+              <Switch
+                label={t('inspector.caption')}
+                checked={look.captionShown}
+                disabled={!editable}
+                onCheckedChange={(on) => {
+                  commands.setTableLook(record.id, { captionShown: on });
+                }}
+              />
+              {look.captionShown && (
+                <CaptionField
+                  gd={gd}
+                  label={t('inspector.captionText')}
+                  placeholder={t('inspector.whatThisTableHolds')}
+                  tableId={record.id}
+                  caption={look.caption}
+                  editable={editable}
+                  announcement={(caption) =>
+                    caption === ''
+                      ? t('caption.cleared', { table: record.title })
+                      : t('caption.changed', { table: record.title, caption })
+                  }
+                />
+              )}
+            </>
           )}
         </div>
+      </Section>
+      <Section label={t('kind.section')} hint={t('kind.section.hint')}>
+        {/* SET-01: the kind chosen at Add table changes here while no cell holds a typed
+          value. It is what the table is read as; no row, column or address moves. */}
+        <Select<TableKind>
+          label={t('addTable.kinds')}
+          value={record.kind}
+          disabledReason={viewOnly ?? tableKindReason(gd, record.id)}
+          onValueChange={(kind) => {
+            if (!changeTableKind(gd, record.id, kind)) return;
+            announce(t('kind.changed', { table: record.title, kind: t(KIND_LABEL[kind]) }));
+          }}
+          options={kindChoices(gd, record.id).map(({ kind, reason }) => ({
+            value: kind,
+            label: t(KIND_LABEL[kind]),
+            description: reason,
+            disabled: reason !== undefined,
+          }))}
+        />
+        {isSetKind(record.kind) && (
+          // SET-03: the set id in full — the meta row's chip shows its head — readable and
+          // selectable from the keyboard.
+          <TextField
+            label={t('set.id.field')}
+            value={record.id}
+            readOnly
+            className="gd-mono"
+            data-testid="set-id-field"
+          />
+        )}
       </Section>
       {/* INSP-04 / GRID-11: header row, header column and footer row *counts* — 0 or 1 for the
           rows (the lattice has one header strip and one footer strip), any count short of every
           column for the frozen columns. This tab is their one home (DOC-02, ADR-041). */}
-      <Section label="headers and footer" hint="0 hides the strip, 1 shows it.">
+      <Section label={t('inspector.headersAndFooter')} hint={t('inspector.0HidesTheStrip')}>
         <div className="gd-insp__stack">
           <Stepper
-            label="Header rows"
+            label={t('inspector.headerRows')}
             unit={record.headerRows === 1 ? 'row' : 'rows'}
             name="header rows"
             value={record.headerRows}
@@ -226,8 +334,8 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }}
           />
           <Select
-            label="Header columns"
-            hint="frozen"
+            label={t('inspector.headerColumns')}
+            hint={t('inspector.frozen')}
             value={String(record.frozenColumns)}
             disabledReason={viewOnly}
             onValueChange={(value) => {
@@ -235,11 +343,16 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }}
             options={frozenOptions(columns).map((n) => ({
               value: String(n),
-              label: n === 0 ? 'None' : `${String(n)} ${n === 1 ? 'column' : 'columns'}`,
+              label:
+                n === 0
+                  ? t('inspector.none')
+                  : t(n === 1 ? 'inspector.columnCountOne' : 'inspector.columnCountOther', {
+                      count: n,
+                    }),
             }))}
           />
           <Stepper
-            label="Footer rows"
+            label={t('inspector.footerRows')}
             unit={record.footerRows === 1 ? 'row' : 'rows'}
             name="footer rows"
             value={record.footerRows}
@@ -253,22 +366,22 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           />
         </div>
       </Section>
-      <Section label="rows and columns" hint="− deletes the last row or column; + appends one.">
+      <Section label={t('inspector.rowsAndColumns')} hint={t('inspector.deletesTheLastRow')}>
         <div className="gd-insp__stack">
           <Stepper
-            label="Rows"
+            label={t('inspector.rows')}
             unit="rows"
             value={rows}
-            min={1}
+            min={lastRowReason === undefined ? 1 : rows}
             disabledReason={viewOnly}
-            decrementReason="a table keeps at least one row"
+            decrementReason={lastRowReason ?? 'a table keeps at least one row'}
             onChange={(next) => {
               if (next > rows) commands.insertRowBelow(record.id);
               else if (lastRow !== undefined) commands.deleteRow(record.id, lastRow);
             }}
           />
           <Stepper
-            label="Columns"
+            label={t('inspector.columns')}
             unit="columns"
             value={columns}
             min={1}
@@ -281,10 +394,10 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           />
         </div>
       </Section>
-      <Section label="outline and gridlines">
+      <Section label={t('inspector.outlineAndGridlines')}>
         <div className="gd-insp__stack">
           <Select
-            label="Table outline"
+            label={t('inspector.tableOutline')}
             value={look.outline}
             disabledReason={viewOnly}
             onValueChange={(outline) => {
@@ -293,8 +406,8 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             options={OUTLINE_WEIGHTS.map((w) => ({ value: w, label: OUTLINE_LABELS[w] }))}
           />
           <Select
-            label="Gridline density"
-            hint="this table"
+            label={t('inspector.gridlineDensity')}
+            hint={t('inspector.thisTable')}
             value={look.gridlines}
             disabledReason={viewOnly}
             onValueChange={(gridlines) => {
@@ -303,7 +416,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             options={GRIDLINE_DENSITIES.map((d) => ({ value: d, label: GRIDLINE_LABELS[d] }))}
           />
           <Switch
-            label="Alternating row colour"
+            label={t('inspector.alternatingRowColour')}
             checked={look.alternating}
             disabled={!editable}
             onCheckedChange={(on) => {
@@ -312,13 +425,10 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           />
         </div>
       </Section>
-      <Section
-        label="row and column size"
-        hint="Whole lattice units (22 px rows, 160 px columns at 100 %); addresses never move. Height and Width act on the selected rows and columns, or the whole table."
-      >
+      <Section label={t('inspector.rowAndColumnSize')} hint={t('inspector.wholeLatticeUnits22')}>
         <div className="gd-insp__stack">
           <SizeField
-            label="Height"
+            label={t('inspector.height')}
             value={rowUnits}
             unitPx={LATTICE.row}
             subject={rowSubject}
@@ -340,7 +450,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }}
           />
           <SizeField
-            label="Width"
+            label={t('inspector.width')}
             value={columnUnits}
             unitPx={LATTICE.col}
             subject={columnSubject}
@@ -362,7 +472,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }}
           />
           <Stepper
-            label="Table width"
+            label={t('inspector.tableWidth')}
             unit="units"
             value={visibleWidth}
             min={Math.max(1, record.columns.filter((c) => !c.hidden).length)}
@@ -375,14 +485,14 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           <div className="gd-insp__row">
             {/* Numbers N6 (ADR-049): the selected rows or columns, else every one, share their total. */}
             <ReasonedButton
-              label="Distribute rows evenly"
+              label={t('inspector.distributeRowsEvenly')}
               reason={viewOnly}
               onClick={() => {
                 commands.distributeEvenly(record.id, 'row', rowBand?.ids);
               }}
             />
             <ReasonedButton
-              label="Distribute columns evenly"
+              label={t('inspector.distributeColumnsEvenly')}
               reason={viewOnly}
               onClick={() => {
                 commands.distributeEvenly(record.id, 'column', columnBand?.ids);
@@ -391,12 +501,9 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           </div>
         </div>
       </Section>
-      <Section
-        label="wrap"
-        hint="The table's default: a cell, row or column can say otherwise (Text tab). Off, text clips at the cell; on, the row grows to show every line."
-      >
+      <Section label={t('inspector.wrap')} hint={t('inspector.theTableSDefault')}>
         <Switch
-          label="Wrap text in cells"
+          label={t('inspector.wrapTextInCells')}
           checked={look.wrap}
           disabled={!editable}
           onCheckedChange={(on) => {
@@ -407,7 +514,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
       {/* ADR-051: the selected column's name — the home of Rename column (INSP-04, MENU-03);
           the header's inline field, F2, a double-click and the column menu are routes. */}
       <Section
-        label="column"
+        label={t('inspector.column2')}
         hint={
           namedColumn === null
             ? 'Select a column, or a cell in it, to rename it.'
@@ -417,7 +524,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
         {/* Keyed by the column: a draft or a refusal for one column never shows for the next. */}
         <NameField
           key={namedColumn?.id ?? 'none'}
-          label="Name"
+          label={t('inspector.name')}
           value={namedColumn?.label ?? null}
           subject={namedColumn === null ? 'a column' : `column ${namedColumn.label}`}
           emptyReason={EMPTY_COLUMN_NAME_REASON}
@@ -430,19 +537,19 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
         />
       </Section>
       {/* HIER-01: the selected row, its parent and depth, promote / nest, collapse. */}
-      <Section label="row">
+      <Section label={t('inspector.row2')}>
         {/* HIER-04 / ADR-052: the table's default outline column; a row nested from another
             column keeps its own. `first` is the sentinel for "no designation" (Radix refuses ''). */}
         <Select
-          label="Outline column"
-          hint="default"
+          label={t('inspector.outlineColumn')}
+          hint={t('inspector.default')}
           value={record.outlineColumn ?? OUTLINE_DEFAULT}
           disabledReason={viewOnly}
           onValueChange={(value) => {
             commands.setOutlineColumn(record.id, value === OUTLINE_DEFAULT ? null : value);
           }}
           options={[
-            { value: OUTLINE_DEFAULT, label: 'First visible column' },
+            { value: OUTLINE_DEFAULT, label: t('inspector.firstVisibleColumn') },
             ...record.columns
               .filter((c) => !c.hidden)
               .map((c) => ({ value: c.id, label: columnDisplayName(record, c.id) ?? c.label })),

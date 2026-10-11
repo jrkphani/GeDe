@@ -482,3 +482,15 @@ describe('presence', () => {
     expect(initials('  ')).toBe('');
   });
 });
+
+describe('SET-01 a table records the kind picked at Add table', () => {
+  test('SET-01 createTable writes a set kind and reads plain when none was picked', () => {
+    const gd = openDocument(new Y.Doc());
+    const sheetId = createSheet(gd);
+    const plain = createTable(gd, { sheetId, at: { col: 1, row: 1 } });
+    const simple = createTable(gd, { sheetId, at: { col: 5, row: 1 }, kind: 'simple' });
+    expect(tableById(gd, plain)?.kind).toBe('plain');
+    expect(tableMap(gd, plain)?.has('kind')).toBe(false);
+    expect(tableById(gd, simple)?.kind).toBe('simple');
+  });
+});

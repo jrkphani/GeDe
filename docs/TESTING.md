@@ -178,7 +178,7 @@ it is a **post-deploy** check: a red run fails the execution but rolls nothing b
 production is already updated (RUNBOOK §2). Locally it runs against production too; there is
 no other environment.
 
-`journey.spec.ts`: sign in → the library loads → New workscape, named after the run → type
+`journey.spec.ts`: sign in → the library loads → Add workscape, named after the run → type
 in B5, Enter → reload (the session is memory-only, so this is a second sign-in that returns
 to the document) shows the text → a fresh browser context (no IndexedDB replica) shows it
 too, which is the proof the service persisted it → ⌘F finds it → Share opens the sheet →

@@ -140,6 +140,7 @@ for (const width of [1024, 1440] as const) {
     await page.setViewportSize({ width, height: 900 });
     await signInTo(page, `/d/${DOC_ID}`);
     await page.getByRole('button', { name: 'Add table' }).click();
+    await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
     await fillTable(page);
 
     // ── GRAPH-03: pointing mode — dashed accent targets, a banner, Escape cancels.
@@ -328,6 +329,7 @@ for (const width of [1024, 1440] as const) {
       await page.emulateMedia({ colorScheme: scheme });
       await signInTo(page, `/d/${DOC_ID}`);
       await page.getByRole('button', { name: 'Add table' }).click();
+      await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
       await fillTable(page);
       await page.getByRole('button', { name: 'Add graph' }).click();
       await page.getByRole('button', { name: 'Bind the graph to Table 1' }).click();
@@ -532,6 +534,7 @@ test('RESP-02 GRAPH-01 at 480 the pair renders read-only: no drag, no corner, no
   await page.setViewportSize({ width: 1440, height: 900 });
   await signInTo(page, `/d/${DOC_ID}`);
   await page.getByRole('button', { name: 'Add table' }).click();
+  await page.keyboard.press('Enter'); // SET-01: Plain table is preselected
   await enter(page, 'B5', 'Nepal');
   await enter(page, 'C5', 'Spring');
   await enter(page, 'B6', 'India');

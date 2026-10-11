@@ -5,10 +5,12 @@ import { useMessages, type Translate } from '../../../i18n/index.js';
 import { activeLocale } from '../../../locale.js';
 import {
   cellKey,
+  formatEntityPath,
+  openDocument,
   readString,
   searchEntities,
+  setTablesMatching,
   workbookCellId,
-  type EntityEntry,
   type EntitySearch,
   type Id,
   type TableMap,
@@ -103,17 +105,22 @@ const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
 const ENTITY_LIMIT = 8;
 
 /** The set operators (FX-09, FX-10, ADR-053): offered wherever Concat is — every argument is the strings in its cells. */
-const SET_FORMS: readonly FormOption[] = [
-  { id: 'union', label: 'Union(a, b, …)', hint: 'elements in any of the sets', insert: '=Union(' },
-  { id: 'inter', label: 'Inter(a, b, …)', hint: 'elements in every set', insert: '=Inter(' },
-  { id: 'diff', label: 'Diff(a, b, …)', hint: 'elements of a that are not in b', insert: '=Diff(' },
+const setForms = (t: Translate): FormOption[] => [
+  { id: 'union', label: 'Union(a, b, …)', hint: t('pick.op.Union'), insert: '=Union(' },
+  { id: 'inter', label: 'Inter(a, b, …)', hint: t('pick.op.Inter'), insert: '=Inter(' },
+  { id: 'diff', label: 'Diff(a, b, …)', hint: t('pick.op.Diff'), insert: '=Diff(' },
   {
     id: 'comp',
     label: 'Comp(a, u)',
     hint: 'elements of the universe u not in a',
     insert: '=Comp(',
   },
-  { id: 'cross', label: 'Cross(a, b, …)', hint: 'every ordered pair (a, b)', insert: '=Cross(' },
+  {
+    id: 'cross',
+    label: 'Cross(a, b, …)',
+    hint: t('pick.op.Cross'),
+    insert: '=Cross(',
+  },
 ];
 
 function forms(summable: boolean, t: Translate): FormOption[] {
@@ -126,7 +133,7 @@ function forms(summable: boolean, t: Translate): FormOption[] {
       insert: '=Sum(',
       disabledReason: summable ? undefined : SUM_DISABLED,
     },
-    ...SET_FORMS,
+    ...setForms(t),
     { id: 'power', label: 'Power(a)', hint: t('forms.power.hint'), insert: '=Power(' },
     {
       id: 'entity',
@@ -135,6 +142,18 @@ function forms(summable: boolean, t: Translate): FormOption[] {
       insert: '=@',
     },
   ];
+}
+
+/** One option of the `@` list: a cell (ADR-054) or a whole set table (SET-06). */
+interface PickerEntry {
+  readonly key: string;
+  /** What a pick writes: `@Table.Row` for a cell, `@E` for a set. */
+  readonly text: string;
+  /** The cell's value; '' for a set, which is listed by its path. */
+  readonly value: string;
+  /** The table the option is in, or the set's own title. */
+  readonly table: string;
+  readonly set: boolean;
 }
 
 /**
@@ -185,7 +204,33 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
     // indexVersion: labels or tables changed; the index itself is cached per document.
     [doc, showEntities, entityQuery?.query, indexVersion, tableId, self],
   );
-  const entities: readonly EntityEntry[] = search.entries;
+  // SET-06, REF-01: a set table is named whole by `@E` — offered first while one segment is
+  // typed; the engine reads it as the set, and a family row holding it follows E's rows.
+  const sets = useMemo(
+    () =>
+      showEntities && doc !== null
+        ? setTablesMatching(openDocument(doc), entityQuery.query, tableId)
+        : [],
+    // indexVersion: titles or tables changed.
+    [doc, showEntities, entityQuery?.query, indexVersion, tableId],
+  );
+  const entities: readonly PickerEntry[] = useMemo(() => {
+    const whole: PickerEntry[] = sets.map((set) => ({
+      key: `set:${set.id}`,
+      text: formatEntityPath([set.title]),
+      value: '',
+      table: set.title,
+      set: true,
+    }));
+    const cells: PickerEntry[] = search.entries.map((entry) => ({
+      key: entry.cellId,
+      text: entry.text,
+      value: entry.value,
+      table: entry.path[0] ?? '',
+      set: false,
+    }));
+    return [...whole, ...cells].slice(0, ENTITY_LIMIT);
+  }, [sets, search.entries]);
 
   const open: 'forms' | 'entities' | null = showForms
     ? 'forms'
@@ -273,7 +318,8 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   const activeId = open === null ? undefined : `${listboxId}-${String(highlighted)}`;
   const tableTitle = table === null ? '' : readString(table, 'title');
   const moreId = `${listboxId}-more`;
-  const more = open === 'entities' && search.more > 0 ? search.more : 0;
+  const hidden = search.more + Math.max(0, sets.length + search.entries.length - ENTITY_LIMIT);
+  const more = open === 'entities' && hidden > 0 ? hidden : 0;
 
   const element: ReactNode = (
     <Popover
@@ -317,7 +363,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
         <div role="listbox" id={listboxId} aria-label="Entities" className="gd-formula-list">
           {entities.map((entry, i) => (
             <div
-              key={entry.cellId}
+              key={entry.key}
               id={`${listboxId}-${String(i)}`}
               role="option"
               aria-selected={i === highlighted}
@@ -342,8 +388,12 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
                   <span className="gd-mono gd-formula-option__path">{entry.text}</span>
                 </span>
               )}
-              {entry.path[0] !== tableTitle && (
-                <span className="gd-formula-option__hint">{entry.path[0]}</span>
+              {entry.set ? (
+                <span className="gd-formula-option__hint">{t('set.ref.hint')}</span>
+              ) : (
+                entry.table !== tableTitle && (
+                  <span className="gd-formula-option__hint">{entry.table}</span>
+                )
               )}
             </div>
           ))}

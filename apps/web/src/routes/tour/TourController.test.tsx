@@ -217,7 +217,7 @@ describe('TourController', () => {
     expect(me.updateMe).toHaveBeenCalledWith({ tourDone: true });
     expect(tourState()).toEqual({ phase: 'idle' });
     // The row and every control stay usable — nothing was ever inert.
-    expect(screen.getByRole('button', { name: 'New workscape' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add workscape' })).toBeEnabled();
   });
 
   it('ONB-08 Replay guided tour from the ? help control clears the flag and restarts at step 1, whether or not a tour is running', async () => {
@@ -295,7 +295,7 @@ describe('TourController', () => {
     );
     expect(pick).toHaveTextContent('=Union(C5:C12, I5:I8)');
     expect(pick).toHaveTextContent('Priya, Marcus, Aditi, Sanjay');
-    expect(within(pick).getByText(/Type = in a cell and choose Union/)).toHaveClass(
+    expect(within(pick).getByText(/Type = in a cell and pick Union/)).toHaveClass(
       'gd-tour__action',
     );
     // A Sum is what Numbers teaches; it does not move the card (ONB-10).
@@ -365,7 +365,7 @@ describe('TourController', () => {
       pair = core.createGraphPair(gd, { sheetId: core.listSheets(gd)[0]!.id, tableId: table.id });
       setTourPointing(false);
     });
-    const dimensions = await screen.findByRole('dialog', { name: 'Choose the dimensions' });
+    const dimensions = await screen.findByRole('dialog', { name: 'Pick the dimensions' });
     expect(dimensions).toHaveAttribute('data-substep', 'dimensions');
     expect(within(dimensions).getByText('STEP 4 OF 6')).toBeInTheDocument();
     expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'dimensions');

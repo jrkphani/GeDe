@@ -100,7 +100,7 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
     expect(RENAME_KEYS.rename).toBe(SHEET_KEYS.rename);
     // KEYS-02 / KEYS-07: the PRD's chords the browser keeps are listed, marked, and not bound (ADR-030).
     expect(reservedRows().map((row) => row.action)).toEqual([
-      'New workscape',
+      'Add workscape',
       'Close document',
       'Next / previous sheet',
     ]);
@@ -146,5 +146,10 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
     }
     expect(rowAriaKeys({ action: 'x', keys: ['Tab'] })).toBeUndefined();
     expect(rowAriaKeys({ action: 'x', ids: ['undo', 'redo'] })).toBe('Meta+Z Shift+Meta+Z');
+  });
+
+  it('SET-19 no row in the shortcut sheet uses Create, Insert, New, Place or Choose', () => {
+    const actions = SHORTCUT_SECTIONS.flatMap((section) => section.rows.map((row) => row.action));
+    expect(actions.filter((a) => /\b(Create|Insert|New|Place|Choose)\b/i.test(a))).toEqual([]);
   });
 });

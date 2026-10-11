@@ -82,6 +82,8 @@ export interface TableStructure {
   readonly columns: readonly ColumnStructure[];
   /** SET-08: the one set formula the table's computed columns fill from. */
   readonly computedFormula?: string | undefined;
+  /** SET-02: a set table's range column, so `@E` reads the set (SET-06, REF-01). */
+  readonly setRange?: Id | undefined;
   readonly rows: readonly Id[];
   /**
    * Per row, in row order; 2 for a wrapped row (GRID-09), 0 for a row hidden

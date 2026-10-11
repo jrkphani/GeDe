@@ -326,7 +326,7 @@ async function setStep(
   await expect(pick).not.toContainText('Sum');
   await expect(pick).toContainText('=Union(C5:C12, I5:I8)');
   await expect(pick).toContainText('Priya, Marcus, Aditi, Sanjay');
-  await expect(pick.getByText('Type = in a cell and choose Union')).toHaveClass(/gd-tour__action/);
+  await expect(pick.getByText('Type = in a cell and pick Union')).toHaveClass(/gd-tour__action/);
   await expect(pick.getByRole('button', { name: /next/i })).toHaveCount(0);
   await expectCardPlaced(page, null);
   await checkCardBothThemes(page, checkA11y, `tour step 3a ${label}`);
@@ -448,7 +448,7 @@ async function graphStep(
   await expect(page.getByRole('region', { name: 'Ring graph of Deliverables' })).toBeVisible();
 
   // 4c — the dimensions: the rail opens in Format mode on the Graph tab; the checklist is spotlit.
-  const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
+  const dimensions = page.getByRole('dialog', { name: 'Pick the dimensions' });
   await expect(dimensions).toBeVisible();
   await expect(dimensions).toHaveAttribute('data-step', '4');
   await expect(dimensions).toHaveAttribute('data-substep', 'dimensions');
@@ -823,7 +823,7 @@ for (const width of [1024, 1440] as const) {
     expect(await page.locator('[data-address^="B"][data-address$="5"]').count()).toBe(rowsBefore);
     await expect(page.locator('[data-address="B13"]')).toHaveCount(0);
     await page.keyboard.press('Enter');
-    await expect(page.getByRole('dialog', { name: 'Choose the dimensions' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Pick the dimensions' })).toBeVisible();
     await expect(page.getByTestId('inspector')).toHaveAttribute('data-state', 'open');
     await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
     // The tour put focus on the checklist's first box, so the next action is one key away:
@@ -893,7 +893,7 @@ test.describe('200 % zoom', () => {
     expect(covered).toBeLessThanOrEqual(visible / 2);
     await checkCardBothThemes(page, checkA11y, 'tour step 4b 1024 200%');
     await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
-    const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
+    const dimensions = page.getByRole('dialog', { name: 'Pick the dimensions' });
     await expect(dimensions).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
     await expectCardPlaced(page, 'dimensions');
@@ -939,7 +939,7 @@ test('ONB-13 RESP-03 ONB-04 at 768 the graph sub-flow runs with the inspector as
   await expectCardPlaced(page, 'pointing');
   await checkCardBothThemes(page, checkA11y, 'tour step 4b 768');
   await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
-  const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
+  const dimensions = page.getByRole('dialog', { name: 'Pick the dimensions' });
   await expect(dimensions).toBeVisible();
   // RESP-03: below 1024 the open rail is an overlay; the tour opened it for the Graph tab.
   await expect(rail).toHaveAttribute('data-state', 'open');
