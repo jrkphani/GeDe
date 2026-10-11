@@ -274,6 +274,7 @@ export function createEngineHost(
       results.set(r.cellId, r);
       arrivedAt.set(r.cellId, now);
       touched.push(r.cellId);
+      if (isSetTable(splitWorkbookCellId(r.cellId).tableId)) answeredSinceRound.add(r.cellId);
     }
     if (touched.length > 0) {
       version += 1;
@@ -322,12 +323,13 @@ export function createEngineHost(
   // FX-06: the cut is never silent. The formula cells of the set tables that did not settle read
   // ⚠ circular (until the document changes and they are evaluated again).
   let structureCut = false;
+  // The set-table cells answered since the last round: when the cap hits, these are the ones still moving.
+  const answeredSinceRound = new Set<WorkbookCellId>();
   const markCircular = () => {
     structureCut = true;
     const touched: WorkbookCellId[] = [];
     for (const [id, r] of results) {
-      if (r.source === '' || r.error !== null || !isSetTable(splitWorkbookCellId(id).tableId))
-        continue;
+      if (!answeredSinceRound.has(id) || r.source === '' || r.error !== null) continue;
       version += 1;
       results.set(id, { ...r, version, value: null, error: { kind: 'circular' } });
       touched.push(id);
@@ -342,6 +344,7 @@ export function createEngineHost(
       if (!structureCut) markCircular();
       return;
     }
+    answeredSinceRound.clear();
     const changes = structureState.next(
       (tableId) => (rowId, colId) =>
         results.get(workbookCellId(tableId, cellKey(rowId, colId)))?.value,

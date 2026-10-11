@@ -14,7 +14,7 @@
  *
  * What counts as an edit: a table added or removed, its own keys (title, place, look...), its
  * columns, its cell formats and spans, a row added or removed that a person owns, and the text
- * of a cell on such a row, a row id listed twice, and the order of the person-owned rows that stay. Machines write some things in a
+ * of a cell on such a row, a row id listed twice, and the order of the rows that stay. Machines write some things in a
  * locked table too (a computed table follows its formula, a pulled or split row follows its
  * source) and no replica can tell from the update whose hand wrote them. So the reconcilers'
  * bookkeeping keys, and rows whose meta before the update marks them as machine-written, are
@@ -338,10 +338,11 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       const was = new Set(wasList);
       const now = new Set(nowList);
       // A row id listed twice puts one cell at two addresses; a person's rows in another order
-      // shift every address between them. Machine rows are left out so reconcilers can insert.
-      const owned = (list: readonly Id[], other: Set<Id>): Id[] =>
-        [...new Set(list)].filter((id) => other.has(id) && !machineRow(tableId, id));
-      if (nowList.length !== now.size || owned(wasList, now).join() !== owned(nowList, was).join())
+      // shift every address between them, a machine row's included. Rows that stay keep their order;
+      // a reconciler may insert or remove its own rows between them.
+      const kept = (list: readonly Id[], other: Set<Id>): Id[] =>
+        [...new Set(list)].filter((id) => other.has(id));
+      if (nowList.length !== now.size || kept(wasList, now).join() !== kept(nowList, was).join())
         edit(tableId);
       for (const id of [...was, ...now]) {
         if (was.has(id) !== now.has(id) && !machineRow(tableId, id)) edit(tableId);

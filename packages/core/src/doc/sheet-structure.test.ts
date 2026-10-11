@@ -787,6 +787,27 @@ describe('lock guard holes (SET-17, SET-18)', () => {
     expect(rows()).toEqual(order);
   });
 
+  test('SET-18 a pulled row moved to the front of a locked table is put back', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a', 'b'], 1);
+    const src = setTable('S', ['x'], 8);
+    setPull(gd, id, rangeOf(id), { tableId: src, colId: rangeOf(src), filter: '' });
+    reconcilePull(gd, id);
+    setSectionLocked(gd, sheetId, lane, true);
+    const rows = () => (tableMap(gd, id)?.get('rows') as Y.Array<string>).toArray();
+    const order = rows();
+    const moved = sentBy((r) => {
+      r.doc.transact(() => {
+        const arr = tableMap(r, id)?.get('rows') as Y.Array<string>;
+        const last = arr.get(arr.length - 1);
+        arr.delete(arr.length - 1, 1);
+        arr.insert(0, [last]);
+      });
+    });
+    expect(applyGuardedUpdate(gd, moved, 'client')).toEqual([id]);
+    expect(rows()).toEqual(order);
+  });
+
   const forgedRow = (r: GedeDoc, id: Id): Id => {
     const row = addRow(r, id);
     r.doc.transact(() => {

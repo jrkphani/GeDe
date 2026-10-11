@@ -123,6 +123,46 @@ describe('engine host: structure tables (SET-13..16)', () => {
     expect(host.structure(sheetId).length).toBeGreaterThan(0);
     host.dispose();
   });
+
+  it('FX-06 SET-13 an indirect loop through a plain cell marks only the cells that keep moving', async () => {
+    const f = fixture();
+    const host = createEngineHost(f.gd);
+    const sheetId = tableById(f.gd, f.tableId)!.sheetId;
+    const mk = (col: number, title: string) =>
+      createTable(f.gd, {
+        sheetId,
+        at: { col, row: 1 },
+        columns: 1,
+        rows: 2,
+        kind: 'simple',
+        title,
+      });
+    const e = mk(8, 'E');
+    const h = mk(12, 'H');
+    const first = (id: string) => {
+      const t = tableById(f.gd, id)!;
+      return { row: t.rows[0]!, col: t.columns[0]!.id };
+    };
+    const [ec, hc] = [first(e), first(h)];
+    commitCellText(f.gd, h, hc.row, hc.col, '=Concat("x","y")');
+    setCellText(f.gd, e, tableById(f.gd, e)!.rows[1]!, ec.col, 'b');
+    await quiet(host);
+    const [u] = host.structure(sheetId).filter((t) => t.kind === 'universe');
+    const address = `${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[u!.table.gridCol] ?? ''}${String(u!.table.gridRow + 4)}`;
+    f.set(0, 0, `=Concat("a",${address})`);
+    commitCellText(f.gd, e, ec.row, ec.col, `=${f.addr(0, 0)}`);
+    await quiet(host);
+    await quiet(host);
+    const kind = (t: string, c: { row: string; col: string }) =>
+      host.result(workbookCellId(t, cellKey(c.row, c.col)))?.error?.kind;
+    expect(kind(e, ec)).toBe('circular');
+    expect(kind(h, hc)).toBeUndefined();
+    expect(host.result(workbookCellId(h, cellKey(hc.row, hc.col)))?.value).toEqual({
+      kind: 'text',
+      text: 'xy',
+    });
+    host.dispose();
+  });
 });
 
 describe('engine host', () => {
