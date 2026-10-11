@@ -72,7 +72,8 @@ export type MenuTarget =
   | { kind: 'sheet'; sheetId: Id }
   /** SET-17: a section's heading. */
   | { kind: 'section'; sheetId: Id; sectionId: Id }
-  | { kind: 'canvas' };
+  /** `planeX`: where the pointer was, in pixels from the plane's left edge (SET-17 Add section). */
+  | { kind: 'canvas'; planeX?: number };
 
 /** What the other Wave 2 PRs mount; each `undefined` leaves its commands disabled with a reason. */
 export interface MenuSlots {
@@ -135,7 +136,8 @@ export interface MenuContext {
     | {
         /** The sheet shown. */
         sheetId: Id | null;
-        add: () => void;
+        /** `planeX`: the pointer's x on the plane; the section starts at its column. */
+        add: (planeX?: number) => void;
         rename: (sheetId: Id, sectionId: Id) => void;
         setLocked: (sheetId: Id, sectionId: Id, locked: boolean) => void;
         setSheetLocked: (sheetId: Id, locked: boolean) => void;
@@ -972,7 +974,7 @@ const lockText = (reason: 'sheet' | 'section'): string =>
   translate(activeLocale(), reason === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked');
 
 /** SET-17: Add section, on the canvas menu; disabled with its reason on a locked sheet. */
-function sectionAddEntries(ctx: MenuContext): MenuEntry[] {
+function sectionAddEntries(ctx: MenuContext, planeX: number | undefined): MenuEntry[] {
   if (ctx.sections === undefined) return [];
   const { sheetId } = ctx.sections;
   return [
@@ -984,7 +986,9 @@ function sectionAddEntries(ctx: MenuContext): MenuEntry[] {
       disabledReason:
         (ctx.editable ? undefined : VIEW_ONLY) ??
         (sheetId !== null && isSheetLocked(ctx.gd, sheetId) ? lockText('sheet') : undefined),
-      onSelect: ctx.sections.add,
+      onSelect: () => {
+        ctx.sections?.add(planeX);
+      },
     },
   ];
 }
@@ -1028,7 +1032,10 @@ export function sectionMenuEntries(
 }
 
 /** Empty canvas: place a table here, view commands. */
-export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
+export function canvasMenuEntries(
+  ctx: MenuContext,
+  target: MenuTarget & { kind: 'canvas' },
+): MenuEntry[] {
   const sheetId = ctx.sections?.sheetId ?? null;
   const viewOnly = ctx.editable
     ? sheetId !== null && isSheetLocked(ctx.gd, sheetId)
@@ -1062,7 +1069,7 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
         ctx.canvas.addGraph?.();
       },
     },
-    ...sectionAddEntries(ctx),
+    ...sectionAddEntries(ctx, target.planeX),
     sep('s-view'),
     {
       kind: 'item',
@@ -1191,7 +1198,7 @@ export function menuEntriesFor(ctx: MenuContext, target: MenuTarget): MenuEntry[
     case 'section':
       return sectionMenuEntries(ctx, target);
     case 'canvas':
-      return canvasMenuEntries(ctx);
+      return canvasMenuEntries(ctx, target);
   }
 }
 

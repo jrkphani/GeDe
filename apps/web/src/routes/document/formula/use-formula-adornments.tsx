@@ -9,6 +9,7 @@ import {
   openDocument,
   readString,
   searchEntities,
+  setNameKey,
   setTablesMatching,
   workbookCellId,
   type EntitySearch,
@@ -17,6 +18,7 @@ import {
 } from '@gede/core';
 import { Icon, Popover } from '@gede/ui';
 
+import { peekEngine } from '../../../doc/engine.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import { useWorkbookIndexVersion, workbookIndexFor } from '../../../doc/workbook-index.js';
 import {
@@ -206,14 +208,26 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   );
   // SET-06, REF-01: a set table is named whole by `@E` — offered first while one segment is
   // typed; the engine reads it as the set, and a family row holding it follows E's rows.
-  const sets = useMemo(
-    () =>
-      showEntities && doc !== null
-        ? setTablesMatching(openDocument(doc), entityQuery.query, tableId)
-        : [],
-    // indexVersion: titles or tables changed.
-    [doc, showEntities, entityQuery?.query, indexVersion, tableId],
-  );
+  const structureVersion = doc === null ? 0 : (peekEngine(doc)?.version ?? 0);
+  const sets = useMemo(() => {
+    if (!showEntities || doc === null) return [];
+    const real = setTablesMatching(openDocument(doc), entityQuery.query, tableId);
+    // SET-13..16: U, the super set array and the summaries are named whole too, on this sheet.
+    const typed = entityQuery.query.trim().replace(/^"/, '');
+    const sheetId = table === null ? '' : readString(table, 'sheetId');
+    const named = new Set(real.map((set) => setNameKey(set.title)));
+    const structure = typed.includes('.')
+      ? []
+      : (peekEngine(doc)?.structure(sheetId) ?? [])
+          .map(({ table: t }) => ({ id: t.id, title: t.title }))
+          .filter(
+            (set) =>
+              setNameKey(set.title).startsWith(setNameKey(typed)) &&
+              !named.has(setNameKey(set.title)),
+          );
+    return [...real, ...structure];
+    // indexVersion: titles or tables changed; structureVersion: the structure tables moved.
+  }, [doc, table, showEntities, entityQuery?.query, indexVersion, tableId, structureVersion]);
   const entities: readonly PickerEntry[] = useMemo(() => {
     const whole: PickerEntry[] = sets.map((set) => ({
       key: `set:${set.id}`,

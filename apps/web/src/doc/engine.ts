@@ -16,20 +16,26 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import type * as Y from 'yjs';
 import {
+  cellKey,
   FormulaEngine,
   observeWorkbook,
   openDocument,
+  splitWorkbookCellId,
+  structureSync,
+  workbookCellId,
   workbookSnapshot,
   type CellResult,
   type EngineRequest,
   type EngineResponse,
   type GedeDoc,
   type Id,
+  type StructureTable,
   type WorkbookCellId,
   type WorkbookChange,
 } from '@gede/core';
 
 import { activeLocale, subscribeLocale } from '../locale.js';
+import { structureLabels } from './structure-labels.js';
 
 /** Where evaluation happens. Both speak the core protocol; only `worker` leaves the thread. */
 export interface EngineTransport {
@@ -70,7 +76,12 @@ export interface EngineHost {
    * ids of the cells whose result changed or went (Find re-indexes their tables, #125).
    */
   subscribeAll(onChange: (touched: readonly WorkbookCellId[]) => void): () => void;
-  /** Monotonic counter across all result changes. */
+  /**
+   * The sheet's structure tables (SET-13..16): U, the super set array and the summaries as the
+   * engine was last told them, so what is drawn is what a formula reads.
+   */
+  structure(sheetId: Id): readonly StructureTable[];
+  /** Monotonic counter across all result changes and structure changes. */
   readonly version: number;
   /** Resolves once every change posted so far has been answered. */
   settled(): Promise<void>;
@@ -268,6 +279,10 @@ export function createEngineHost(
       version += 1;
       for (const id of touched) notify(id);
       for (const cb of allListeners) cb(touched);
+      // A set table's formula answered: its summaries may count differently now.
+      if (touched.some((id) => isSetTable(splitWorkbookCellId(id).tableId))) {
+        scheduleStructure();
+      }
     }
     if (pending.size === 0) for (const resolve of settleWaiters.splice(0)) resolve();
     releaseTables(false);
@@ -290,7 +305,57 @@ export function createEngineHost(
     pendingTables.set(seq, 'all');
     transport.post({ type: 'locale', seq, locale: activeLocale() });
   };
-  const stopLocale = subscribeLocale(postLocale);
+  // SET-13..16: U, the super set array and the summaries are read-only tables the engine holds
+  // beside the document's own. They are recomputed from the document and the engine's results
+  // (a formula range cell counts its value, SET-02) whenever either moved, and only what
+  // changed is sent, so a result that changes a table that changes a result settles.
+  const isSetTable = (tableId: Id): boolean => {
+    const kind = gd.tables.get(tableId)?.get('kind');
+    return kind !== undefined && kind !== 'plain';
+  };
+  const structureState = structureSync(gd, () => structureLabels(activeLocale()));
+  let structureQueued = false;
+  // shortcut: a range cell reading `@U` makes U depend on itself; the loop is cut after this
+  // many rounds without a document change, when the structure has not settled.
+  const MAX_STRUCTURE_ROUNDS = 8;
+  let structureRounds = 0;
+  const refreshStructure = () => {
+    structureQueued = false;
+    if (status.failed || structureRounds >= MAX_STRUCTURE_ROUNDS) return;
+    const changes = structureState.next(
+      (tableId) => (rowId, colId) =>
+        results.get(workbookCellId(tableId, cellKey(rowId, colId)))?.value,
+    );
+    if (changes.length === 0) return;
+    structureRounds += 1;
+    post(changes);
+    version += 1;
+    for (const cb of allListeners) cb([]);
+  };
+  const scheduleStructure = () => {
+    if (structureQueued) return;
+    structureQueued = true;
+    queueMicrotask(refreshStructure);
+  };
+  /** A cell edit in a plain table cannot move a set table or the band's place; anything else can. */
+  const touchesStructure = (event: Y.YEvent<Y.AbstractType<unknown>>): boolean => {
+    const [tableId, part] = event.path;
+    if (tableId === undefined || part !== 'cells') return true;
+    return isSetTable(String(tableId));
+  };
+  const documentChanged = () => {
+    structureRounds = 0;
+    scheduleStructure();
+  };
+  const watchTables = (events: Y.YEvent<Y.AbstractType<unknown>>[]) => {
+    if (events.some(touchesStructure)) documentChanged();
+  };
+  gd.tables.observeDeep(watchTables);
+  gd.sheets.observeDeep(documentChanged);
+  const stopLocale = subscribeLocale(() => {
+    postLocale();
+    documentChanged();
+  });
 
   const stopHeartbeat = () => {
     if (heartbeat !== null) clearInterval(heartbeat);
@@ -334,6 +399,8 @@ export function createEngineHost(
     start();
     postLocale();
     post([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
+    structureState.reset();
+    scheduleStructure();
   };
   const start = () => {
     transport = makeTransport();
@@ -347,6 +414,7 @@ export function createEngineHost(
   startHeartbeat();
   postLocale();
   const stopObserving = observeWorkbook(gd, post);
+  scheduleStructure();
 
   return {
     get mode() {
@@ -367,7 +435,10 @@ export function createEngineHost(
       start();
       postLocale();
       post([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
+      structureState.reset();
+      scheduleStructure();
     },
+    structure: (sheetId) => structureState.tables(sheetId),
     result: (cellId) => results.get(cellId),
     computedAt: (cellId) => arrivedAt.get(cellId),
     subscribe: (cellId, onChange) => {
@@ -411,6 +482,8 @@ export function createEngineHost(
             settleWaiters.push(resolve);
           }),
     dispose: () => {
+      gd.tables.unobserveDeep(watchTables);
+      gd.sheets.unobserveDeep(documentChanged);
       stopObserving();
       stopLocale();
       stopHeartbeat();

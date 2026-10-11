@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 
 import { commitCellText } from '../engine/commit.js';
-import { FormulaEngine } from '../engine/engine.js';
-import { observeWorkbook } from '../engine/snapshot.js';
-import { workbookCellId, type CellResult } from '../engine/types.js';
+import { formatAddress } from '../address.js';
+import { liveEngine } from '../engine/__fixtures__/structure.js';
+import type { StructureTable } from '../engine/structure.js';
+import { workbookCellId, type CellSnapshot } from '../engine/types.js';
 import { nestRow } from '../hier/mutations.js';
 import { cellKey, type Id } from '../ids.js';
 import { tableAddresses } from './geometry.js';
@@ -34,6 +35,7 @@ import {
   nextSectionRange,
   renameSection,
   sectionLockReason,
+  sectionRangeAt,
   setSectionLocked,
   setSheetLocked,
 } from './sections.js';
@@ -41,6 +43,8 @@ import {
   cellReadOnlyReason,
   cellText,
   openDocument,
+  TABLE_HEADER_ROWS,
+  TABLE_TITLE_ROWS,
   tableById,
   tableMap,
   type GedeDoc,
@@ -48,7 +52,6 @@ import {
 } from './schema.js';
 import { setRangeColumn } from './set-range.js';
 import {
-  structureLayout,
   SUMMARY_ALGEBRA_LIMIT,
   sectionSummary,
   sheetSummary,
@@ -110,6 +113,22 @@ describe('sections (SET-17)', () => {
     expect(nextSectionRange(gd, sheetId, 4)).toEqual({ firstColumn: 0, lastColumn: 3 });
     section('A', 0, 5);
     expect(nextSectionRange(gd, sheetId, 4)).toEqual({ firstColumn: 7, lastColumn: 10 });
+  });
+
+  test('SET-17 Add section at the pointer starts at its column, moves past a section it would touch, and stops short of the next', () => {
+    expect(sectionRangeAt(gd, sheetId, 10, 4)).toEqual({ firstColumn: 10, lastColumn: 13 });
+    section('A', 0, 5);
+    section('C', 20, 25);
+    // Inside A, and on its gutter column: after A's gutter.
+    expect(sectionRangeAt(gd, sheetId, 3, 4)).toEqual({ firstColumn: 7, lastColumn: 10 });
+    expect(sectionRangeAt(gd, sheetId, 6, 4)).toEqual({ firstColumn: 7, lastColumn: 10 });
+    // Cut short where C's gutter begins.
+    expect(sectionRangeAt(gd, sheetId, 15, 10)).toEqual({ firstColumn: 15, lastColumn: 18 });
+    // Whatever it returns, addSection accepts.
+    for (const col of [0, 3, 6, 7, 17, 18, 19, 26, 40]) {
+      const range = sectionRangeAt(gd, sheetId, col, 4);
+      expect(addSection(gd, sheetId, { name: `at ${String(col)}`, ...range })).not.toBeNull();
+    }
   });
 
   test('SET-17 Rename section… trims, refuses an empty name, and is one undo-able write', () => {
@@ -334,11 +353,7 @@ describe('universal set, super set and summaries (SET-13..16)', () => {
   });
 
   test('SET-13 @U is the sheet’s universal set in a formula, and follows the sets', () => {
-    const engine = new FormulaEngine();
-    const results = new Map<string, CellResult>();
-    observeWorkbook(gd, (changes) => {
-      for (const r of engine.apply(changes).results) results.set(r.cellId, r);
-    });
+    const { results } = liveEngine(gd);
     const e = setTable('E', ['a', 'b']);
     const c = setTable('C', ['b', 'x'], 10);
     const probe = createTable(gd, {
@@ -363,11 +378,7 @@ describe('universal set, super set and summaries (SET-13..16)', () => {
   });
 
   test('SET-13 @U on another sheet does not read this one', () => {
-    const engine = new FormulaEngine();
-    const results = new Map<string, CellResult>();
-    observeWorkbook(gd, (changes) => {
-      for (const r of engine.apply(changes).results) results.set(r.cellId, r);
-    });
+    const { results } = liveEngine(gd);
     setTable('E', ['a']);
     const other = 'other-sheet';
     const probe = createTable(gd, {
@@ -469,23 +480,180 @@ describe('universal set, super set and summaries (SET-13..16)', () => {
     ]);
   });
 
-  test('SET-15 SET-16 the band sits under the tables: each section’s summary under its lane, the sheet’s blocks under them', () => {
-    expect(structureLayout(5, [], [])).toBeNull();
+  test('SET-15 SET-16 the structure tables stack under the sheet’s tables, a row apart, from the first lane', () => {
+    const { sync } = liveEngine(gd);
+    expect(sync.tables(sheetId)).toEqual([]);
     const first = section('First', 0, 8);
     const second = section('Second', 10, 14);
     setTable('E', ['a', 'b'], 0);
     setTable('C', ['b', 'c'], 4);
     setTable('B', ['x'], 11);
-    const layout = structureLayout(5, listSections(gd, sheetId), summarySets(gd, sheetId));
-    expect(layout?.sections).toEqual([
-      { sectionId: first, block: { col: 0, row: 5, cols: 9, rows: 3 + 2 + 1 } },
-      { sectionId: second, block: { col: 10, row: 5, cols: 5, rows: 3 + 1 + 1 } },
+    const tables = sync.tables(sheetId);
+    expect(tables.map((t) => [t.kind, t.sectionId])).toEqual([
+      ['section', first],
+      ['section', second],
+      ['sheet', null],
+      ['universe', null],
+      ['super', null],
     ]);
-    // Sheet summary: title, counts, header and a row per section; then U and the super set array.
-    expect(layout?.sheetSummary).toEqual({ col: 0, row: 12, cols: 15, rows: 3 + 2 });
-    expect(layout?.universe).toEqual({ col: 0, row: 18, cols: 15, rows: 2 + 1 + 1 });
-    expect(layout?.superSet).toEqual({ col: 0, row: 23, cols: 15, rows: 2 + 1 });
-    expect(layout?.end).toBe(26);
+    // The sets sit in rows 2..4 (title 2, header 1, no rows beyond the table's own two); the
+    // tables start a row under them and are each title + header + one row per entry tall.
+    const top = tables[0]?.bounds.row ?? 0;
+    expect(top).toBeGreaterThan(4);
+    let row = top;
+    for (const t of tables) {
+      expect(t.bounds.col).toBe(0);
+      expect(t.bounds.row).toBe(row);
+      expect(t.bounds.rows).toBe(TABLE_TITLE_ROWS + TABLE_HEADER_ROWS + t.table.rows.length);
+      row += t.bounds.rows + 1;
+    }
+    expect(tables.map((t) => t.table.rows.length)).toEqual([2, 1, 2, 4, 7]);
+  });
+});
+
+describe('structure tables are read-only tables on the lattice (SET-13..16)', () => {
+  function deleteTableFixture(id: Id) {
+    gd.tables.delete(id);
+  }
+
+  /** The A1 address of data row `r`, column `c` of the `i`th structure table. */
+  function addressIn(tables: readonly StructureTable[], i: number, r: number, c = 0) {
+    const t = tables[i]?.table;
+    if (t === undefined) throw new Error('no such table');
+    const offset = t.columns.slice(0, c).reduce((sum, column) => sum + column.width, 0);
+    return formatAddress({
+      col: t.gridCol + offset,
+      row: t.gridRow + TABLE_TITLE_ROWS + TABLE_HEADER_ROWS + r,
+    });
+  }
+
+  function probeCell(text: string) {
+    const probe = createTable(gd, {
+      sheetId,
+      at: { col: 30, row: 0 },
+      columns: 1,
+      rows: 1,
+      title: 'P',
+    });
+    const row = tableById(gd, probe)?.rows[0] ?? '';
+    const col = tableById(gd, probe)?.columns[0]?.id ?? '';
+    commitCellText(gd, probe, row, col, text);
+    return workbookCellId(probe, cellKey(row, col));
+  }
+
+  const textOf = (results: Map<string, { value: unknown }>, id: string): unknown => {
+    const v = results.get(id)?.value as { kind: string; text?: string } | undefined;
+    return v?.kind === 'text' ? v.text : v;
+  };
+
+  test('SET-13 U is a table titled U with one element per row, and a formula reads its cells by A1 address', () => {
+    const { results, sync } = liveEngine(gd);
+    setTable('E', ['a', 'b']);
+    const c = setTable('C', ['b', 'x'], 10);
+    const tables = sync.tables(sheetId);
+    const u = tables.find((t) => t.kind === 'universe');
+    expect(u?.table.title).toBe('U');
+    expect(u?.table.rows).toHaveLength(3);
+    const at = tables.findIndex((t) => t.kind === 'universe');
+    const first = probeCell(`=${addressIn(tables, at, 0)}`);
+    const third = probeCell(`=${addressIn(tables, at, 2)}`);
+    expect(textOf(results, first)).toBe('a');
+    expect(textOf(results, third)).toBe('x');
+    // It follows the sets: a new element appears at the next address.
+    setCellText(gd, c, addRow(gd, c), rangeOf(c), 'y');
+    const grown = sync.tables(sheetId);
+    expect(grown.find((t) => t.kind === 'universe')?.table.rows).toHaveLength(4);
+    const fourth = probeCell(`=${addressIn(grown, at, 3)}`);
+    expect(textOf(results, fourth)).toBe('y');
+  });
+
+  test('SET-14 the super set array lists U’s elements then every set’s name, each kind in words', () => {
+    const { sync } = liveEngine(gd);
+    setTable('E', ['a', 'b']);
+    setTable('C', ['b', 'x'], 10);
+    const array = sync.tables(sheetId).find((t) => t.kind === 'super');
+    const cells = (array?.table.cells ?? {}) as Record<string, CellSnapshot>;
+    const rows = array?.table.rows ?? [];
+    const cols = array?.table.columns ?? [];
+    const read = rows.map((r) =>
+      cols.map((c) => {
+        const cell = cells[cellKey(r, c.id)];
+        return cell?.kind === 'text' ? cell.text : '';
+      }),
+    );
+    expect(read).toEqual([
+      ['a', 'element'],
+      ['b', 'element'],
+      ['x', 'element'],
+      ['E', 'set'],
+      ['C', 'set'],
+    ]);
+  });
+
+  test('SET-15 a section summary is a table with a row per set; a formula reads a cell of it', () => {
+    const { results, sync } = liveEngine(gd);
+    section('Foundation', 0, 20);
+    setTable('E', ['a', 'b']);
+    setTable('A', ['a', 'b'], 4);
+    const tables = sync.tables(sheetId);
+    expect(tables[0]?.table.title).toBe('1° Foundation');
+    expect(tables[0]?.table.rows).toHaveLength(2);
+    // Column 1 is the set's name, column 5 the sets equal to it.
+    expect(textOf(results, probeCell(`=${addressIn(tables, 0, 0, 1)}`))).toBe('E');
+    expect(textOf(results, probeCell(`=${addressIn(tables, 0, 0, 5)}`))).toBe('A');
+  });
+
+  test('SET-16 the sheet summary is a table of sections with set and element counts as numbers', () => {
+    const { results, sync } = liveEngine(gd);
+    section('First', 0, 8);
+    setTable('E', ['a', 'b']);
+    const tables = sync.tables(sheetId);
+    const at = tables.findIndex((t) => t.kind === 'sheet');
+    expect(textOf(results, probeCell(`=${addressIn(tables, at, 0, 0)}`))).toBe('1° First');
+    expect(
+      results.get(probeCell(`=Sum(${addressIn(tables, at, 0, 1)}, ${addressIn(tables, at, 0, 2)})`))
+        ?.value,
+    ).toEqual({ kind: 'number', value: 3 });
+  });
+
+  test('SET-13 SET-16 @U and the summaries are @ names: a set titled U wins, and another sheet’s do not leak', () => {
+    const { results } = liveEngine(gd);
+    setTable('E', ['a']);
+    expect(textOf(results, probeCell('=@U'))).toBe('a');
+    const own = setTable('U', ['z'], 10);
+    expect(own).not.toBe('');
+    expect(textOf(results, probeCell('=@U'))).toBe('z');
+  });
+
+  test('SET-13 the engine is told only what moved: nothing when nothing did, a removal when the sets go, everything after a reset', () => {
+    const { sync, settle } = liveEngine(gd);
+    const e = setTable('E', ['a', 'b']);
+    const valueOf = () => undefined;
+    expect(sync.next(valueOf)).toEqual([]);
+    sync.reset();
+    const all = sync.next(valueOf);
+    expect(all.filter((c) => c.type === 'table')).toHaveLength(sync.tables(sheetId).length);
+    deleteTableFixture(e);
+    settle();
+    expect(sync.tables(sheetId)).toEqual([]);
+    expect(sync.next(valueOf)).toEqual([]);
+  });
+
+  test('SET-02 a formula typed into a range column counts as elements when it evaluates to text, as Union reads it', () => {
+    const { results, sync } = liveEngine(gd);
+    const e = setTable('E', ['a']);
+    const row = addRow(gd, e);
+    commitCellText(gd, e, row, rangeOf(e), '=Concat("b", ", c")');
+    const u = sync.tables(sheetId).find((t) => t.kind === 'universe');
+    const texts = (u?.table.rows ?? []).map((r) => {
+      const cell = u?.table.cells[cellKey(r, 'c0')];
+      return cell?.kind === 'text' ? cell.text : '';
+    });
+    expect(texts).toEqual(['a', 'b', 'c']);
+    const union = results.get(probeCell('=Union(@E, @E)'))?.value;
+    expect(
+      union?.kind === 'list' ? union.items.map((i) => (i.kind === 'text' ? i.text : '?')) : union,
+    ).toEqual(['a', 'b', 'c']);
   });
 });
 
@@ -951,11 +1119,7 @@ describe('lock guard holes (SET-17, SET-18)', () => {
 
 describe('@U order (SET-13)', () => {
   test('SET-13 =@U lists the same elements in the same order as the drawn U, wherever the sets sit', () => {
-    const engine = new FormulaEngine();
-    const results = new Map<string, CellResult>();
-    observeWorkbook(gd, (changes) => {
-      for (const r of engine.apply(changes).results) results.set(r.cellId, r);
-    });
+    const { results } = liveEngine(gd);
     setTable('E', ['c', 'a'], 40);
     setTable('C', ['b', 'a'], 0);
     const probe = createTable(gd, { sheetId, at: { col: 20, row: 2 }, columns: 1, rows: 1 });

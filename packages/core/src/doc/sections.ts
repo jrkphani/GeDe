@@ -174,6 +174,35 @@ export function nextSectionRange(
 }
 
 /**
+ * SET-17: the range for a section added at lattice column `col` (the pointer's): it starts
+ * there, moves right past a section it would touch or land in (the gutter stays), and is cut
+ * short where the next section's gutter begins, never below one column.
+ */
+export function sectionRangeAt(
+  gd: GedeDoc,
+  sheetId: Id,
+  col: number,
+  columns: number = DEFAULT_SECTION_COLUMNS,
+): { firstColumn: number; lastColumn: number } {
+  const sections = listSections(gd, sheetId);
+  let firstColumn = Math.max(0, Math.floor(col));
+  for (const s of sections) {
+    if (
+      firstColumn >= s.firstColumn - SECTION_GUTTER &&
+      firstColumn <= s.lastColumn + SECTION_GUTTER
+    ) {
+      firstColumn = s.lastColumn + 1 + SECTION_GUTTER;
+    }
+  }
+  let lastColumn = firstColumn + Math.max(1, columns) - 1;
+  for (const s of sections) {
+    if (s.firstColumn > firstColumn)
+      lastColumn = Math.min(lastColumn, s.firstColumn - 1 - SECTION_GUTTER);
+  }
+  return { firstColumn, lastColumn };
+}
+
+/**
  * SET-17: add a section, as one undo step. Null — nothing written — for an empty name, a range
  * that is not whole non-negative columns within the lattice, one that overlaps another section or leaves less
  * than the gutter between them, or a locked sheet.

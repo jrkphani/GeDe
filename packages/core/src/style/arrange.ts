@@ -8,6 +8,7 @@
  * "Connecting Edges", §20) and never stored.
  */
 import {
+  addSection,
   cellsMap,
   columnRecord,
   columnsArray,
@@ -117,7 +118,9 @@ export const LAYOUT_GAP = { cols: 1, rows: 4, stagger: 6 } as const;
  * first table's origin: lanes lay them left to right on one row; stacked
  * lays them top to bottom in one column; side by side lays them left to
  * right with every second table dropped by `stagger` rows, as the prototype
- * does. Returns the tables moved (their new origins).
+ * does. Lanes also add a section per lane, named for its table and as wide (SET-17); a lane
+ * that would overlap a section already there gets none. Returns the tables moved (their new
+ * origins).
  */
 export function layoutSheet(
   gd: GedeDoc,
@@ -151,6 +154,13 @@ export function layoutSheet(
       if (map.get('gridCol') !== at.col) map.set('gridCol', at.col);
       if (map.get('gridRow') !== at.row) map.set('gridRow', at.row);
       moved.push({ id: t.id, ...at });
+      if (layout === 'lanes') {
+        addSection(gd, sheetId, {
+          name: t.title,
+          firstColumn: at.col,
+          lastColumn: at.col + bounds.cols - 1,
+        });
+      }
     });
     return moved;
   });

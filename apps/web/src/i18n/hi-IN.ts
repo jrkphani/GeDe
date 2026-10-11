@@ -293,6 +293,8 @@ export const messages: Messages = {
   'summary.super.count': 'अवयव: {elements} · समुच्चय: {sets}',
   'summary.super.element': 'अवयव',
   'summary.super.set': 'समुच्चय',
+  'summary.super.member': 'सदस्य',
+  'summary.super.kindColumn': 'प्रकार',
   'summary.indexes': 'शीट सूचकांक, अपने आप अद्यतन',
   'footer.rowsFiltered': '{total} में से {shown} पंक्तियाँ',
   // SET-19: menu, table-menu and toolbar labels.

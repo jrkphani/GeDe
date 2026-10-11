@@ -300,6 +300,8 @@ export const messages: Messages = {
   'summary.super.count': 'உறுப்புகள்: {elements} · கணங்கள்: {sets}',
   'summary.super.element': 'உறுப்பு',
   'summary.super.set': 'கணம்',
+  'summary.super.member': 'உறுப்பினர்',
+  'summary.super.kindColumn': 'வகை',
   'summary.indexes': 'தாள் குறியீடுகள், தானாகப் புதுப்பிக்கப்படும்',
   'footer.rowsFiltered': '{total} இல் {shown} வரிசைகள்',
   // SET-19: menu, table-menu and toolbar labels.

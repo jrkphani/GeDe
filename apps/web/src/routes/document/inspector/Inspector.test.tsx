@@ -18,6 +18,7 @@ import {
   columnLetter,
   createSheet,
   createTable,
+  listSections,
   createUndoManager,
   DEFAULT_SEARCH_OPTIONS,
   hasMarkThroughout,
@@ -1008,9 +1009,12 @@ describe('Inspector', () => {
     await userEvent.click(within(position).getByRole('button', { name: 'More column' }));
     await userEvent.click(within(position).getByRole('button', { name: 'More row' }));
     const record = tableById(gd, tableId)!;
-    expect([record.gridCol, record.gridRow]).toEqual([laned.gridCol + 1, laned.gridRow + 1]);
+    // SET-17: Pipeline lanes made a section as wide as the table, so the table keeps to it
+    // (More column cannot take it out); the row moves.
+    expect(listSections(gd, sheetId).map((s) => s.firstColumn)).toContain(laned.gridCol);
+    expect([record.gridCol, record.gridRow]).toEqual([laned.gridCol, laned.gridRow + 1]);
     expect(position).toHaveTextContent(
-      `${columnLetter(laned.gridCol + 1)}${String(laned.gridRow + 2)}`,
+      `${columnLetter(laned.gridCol)}${String(laned.gridRow + 2)}`,
     );
     expect(section('size')).toHaveTextContent('3 units · 480 px');
   });

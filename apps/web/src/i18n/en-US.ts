@@ -344,6 +344,8 @@ export const messages = {
   'summary.super.count': 'Elements: {elements} · Sets: {sets}',
   'summary.super.element': 'element',
   'summary.super.set': 'set',
+  'summary.super.member': 'member',
+  'summary.super.kindColumn': 'kind',
   'summary.indexes': 'Sheet indexes, updated automatically',
   'footer.rowsFiltered': '{shown} of {total} rows',
   // SET-19: menu, table-menu and toolbar labels.

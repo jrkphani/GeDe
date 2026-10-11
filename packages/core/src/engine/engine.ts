@@ -320,31 +320,21 @@ export class FormulaEngine {
     if (path.length !== 1) return undefined;
     const name = setNameKey(path[0] ?? '');
     if (name === '') return undefined;
-    const ids = [...this.tables.keys()].sort();
-    const rangeCells = (tableId: Id, leavesOnly: boolean): WorkbookCellId[] => {
-      const table = this.tables.get(tableId);
-      const range = table?.structure.setRange;
-      if (table === undefined || range === undefined) return [];
-      const { rows, rowDepths } = table.structure;
-      const out: WorkbookCellId[] = [];
-      rows.forEach((rowId, i) => {
-        // SET-13: U lists elements, not the sets a family holds (a row with rows under it).
-        if (leavesOnly && (rowDepths[i + 1] ?? 0) > (rowDepths[i] ?? 0)) return;
-        const key = cellKey(rowId, range);
-        if (table.cells.has(key)) out.push(workbookCellId(tableId, key));
-      });
-      return out;
-    };
-    for (const tableId of ids) {
-      const table = this.tables.get(tableId);
-      if (table?.structure.setRange === undefined) continue;
-      if (setNameKey(table.structure.title) === name) return rangeCells(tableId, false);
-    }
-    // SET-13: no set is titled U, so `@U` is the sheet's universal set: every set's elements.
-    if (name !== setNameKey('U') || sheetId === undefined) return undefined;
-    return ids.flatMap((id) =>
-      this.tables.get(id)?.structure.sheetId === sheetId ? rangeCells(id, true) : [],
-    );
+    // A set table of that title wins; else the sheet's own structure table (SET-13: `@U`).
+    const named = [...this.tables.values()]
+      .filter(({ structure: t }) => t.setRange !== undefined && setNameKey(t.title) === name)
+      .sort(
+        (a, b) =>
+          Number(a.structure.structure === true) - Number(b.structure.structure === true) ||
+          (a.structure.id < b.structure.id ? -1 : 1),
+      )
+      .find(({ structure: t }) => t.structure !== true || t.sheetId === sheetId);
+    const range = named?.structure.setRange;
+    if (named === undefined || range === undefined) return undefined;
+    return named.structure.rows
+      .map((rowId) => cellKey(rowId, range))
+      .filter((key) => named.cells.has(key))
+      .map((key) => workbookCellId(named.structure.id, key));
   }
 
   valueOf(cellId: WorkbookCellId, blocked: ReadonlySet<WorkbookCellId>): CellValue {

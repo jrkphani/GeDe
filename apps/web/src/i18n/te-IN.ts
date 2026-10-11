@@ -293,6 +293,8 @@ export const messages: Messages = {
   'summary.super.count': 'మూలకాలు: {elements} · సమితులు: {sets}',
   'summary.super.element': 'మూలకం',
   'summary.super.set': 'సమితి',
+  'summary.super.member': 'సభ్యుడు',
+  'summary.super.kindColumn': 'రకం',
   'summary.indexes': 'షీట్ సూచికలు, ఆటోమేటిక్‌గా నవీకరించబడతాయి',
   'footer.rowsFiltered': '{total}లో {shown} వరుసలు',
   // SET-19: menu, table-menu and toolbar labels.

@@ -1,8 +1,8 @@
 /**
  * The values around a sheet's set tables (SET-13..16; ADR-056, SPEC §3): the universal set U,
  * the super set array, a section's summary and the sheet's. Pure functions of the sets'
- * facts, recomputed when the sets change; nothing here is stored or typed, so none of it has
- * a row id to converge (SPEC §3: rendered tables with no Yjs content).
+ * facts, recomputed when the sets change; nothing here is stored or typed. `engine/structure`
+ * lays them out as read-only tables on the lattice.
  */
 import type { Id } from '../ids.js';
 import { isSetKind } from './set-range.js';
@@ -204,89 +204,4 @@ export function sheetSummary(
       elementCount: universalSet(inSection).length,
     };
   });
-}
-
-/** A rectangle of the lattice, in units. */
-export interface BandBlock {
-  readonly col: number;
-  readonly row: number;
-  readonly cols: number;
-  readonly rows: number;
-}
-
-export interface StructureLayout {
-  /** Each section's summary, under the section's lane. */
-  readonly sections: readonly { readonly sectionId: Id; readonly block: BandBlock }[];
-  readonly sheetSummary: BandBlock;
-  readonly universe: BandBlock;
-  readonly superSet: BandBlock;
-  /** The first row below everything the structure draws. */
-  readonly end: number;
-}
-
-/** Title row, counts row and header row of a summary table; a list block has the first two. */
-export const SUMMARY_HEAD_ROWS = 3;
-const LIST_HEAD_ROWS = 2;
-const MIN_BAND_COLUMNS = 6;
-const DEFAULT_BAND_COLUMNS = 12;
-
-/**
- * Where the summaries, U and the super set array sit (SPEC §3): in a band below `top`, the
- * first row under the sheet's tables. A section's summary sits under its lane, as wide as the
- * lane; the sheet's three blocks follow, as wide as the lanes together, each a row apart. All
- * sizes follow from counts, so the shell can reserve the band before it is drawn. Null when
- * the sheet has neither a section nor a set.
- */
-export function structureLayout(
-  top: number,
-  sections: readonly SectionRecord[],
-  sets: readonly SummarySet[],
-): StructureLayout | null {
-  if (sections.length === 0 && sets.length === 0) return null;
-  const left = sections[0]?.firstColumn ?? 0;
-  const right = sections.at(-1)?.lastColumn ?? left + DEFAULT_BAND_COLUMNS - 1;
-  const width = Math.max(MIN_BAND_COLUMNS, right - left + 1);
-  const sectionBlocks = sections.map((section) => {
-    const inSection = sets.filter((s) => s.sectionId === section.id).length;
-    const algebraNote = inSection > SUMMARY_ALGEBRA_LIMIT ? 1 : 0;
-    return {
-      sectionId: section.id,
-      block: {
-        col: section.firstColumn,
-        row: top,
-        cols: section.lastColumn - section.firstColumn + 1,
-        // Title, counts, header, one row per set, then the note on “—” (and on the limit).
-        rows: SUMMARY_HEAD_ROWS + inSection + 1 + algebraNote,
-      },
-    };
-  });
-  const sectionRows = Math.max(0, ...sectionBlocks.map((b) => b.block.rows));
-  const sheetTop = top + (sectionRows === 0 ? 0 : sectionRows + 1);
-  const sheetSummary = {
-    col: left,
-    row: sheetTop,
-    cols: width,
-    rows: SUMMARY_HEAD_ROWS + sections.length,
-  };
-  const elements = universalSet(sets).length;
-  const universe = {
-    col: left,
-    row: sheetSummary.row + sheetSummary.rows + 1,
-    cols: width,
-    // Title, counts, one row of chips per `width` elements, then the line saying how to use U.
-    rows: LIST_HEAD_ROWS + Math.max(1, Math.ceil(elements / width)) + 1,
-  };
-  const superSet = {
-    col: left,
-    row: universe.row + universe.rows + 1,
-    cols: width,
-    rows: LIST_HEAD_ROWS + Math.max(1, Math.ceil((elements + sets.length) / width)),
-  };
-  return {
-    sections: sectionBlocks,
-    sheetSummary,
-    universe,
-    superSet,
-    end: superSet.row + superSet.rows,
-  };
 }

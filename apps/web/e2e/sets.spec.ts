@@ -19,6 +19,7 @@ import {
   openDocument,
   renameColumn,
   setCellText,
+  setColumnWidth,
   setTableLook,
   tableRecord,
   tablesOnSheet,
@@ -921,6 +922,8 @@ test.describe('Phase 4 second red-team regressions', () => {
       const record = tableRecord(seeded.tables.get(id)!);
       const [first, second, third] = record.rows;
       const range = record.columns[0]!.id;
+      // 320 px, the width a set's meta row is drawn for (SET-03); the kind no longer widens it.
+      setColumnWidth(seeded, id, range, 2);
       setCellText(seeded, id, first!, range, 'Alphabetical');
       setCellText(seeded, id, second!, range, 'beta');
       setCellText(seeded, id, third!, range, 'gamma');
@@ -931,8 +934,8 @@ test.describe('Phase 4 second red-team regressions', () => {
       await asDesktop(page, width, 900);
       await signInTo(page, `/d/${DOC_ID}`);
       const section = page.locator('section[aria-label="F"]');
-      const tags = await section.getByTestId('set-note').all();
       await expect(section.getByTestId('set-note')).toHaveText(['set', 'element', 'element']);
+      const tags = await section.getByTestId('set-note').all();
       const cells = await section.getByRole('row').getByRole('gridcell').all();
       expect(cells).toHaveLength(3);
       for (const [i, cell] of cells.entries()) {

@@ -21,6 +21,7 @@ import {
   renameSection,
   renameSheet,
   sectionLockReason,
+  sectionRangeAt,
   setSectionLocked,
   setSheetLocked,
   sheetBounds,
@@ -67,6 +68,7 @@ import {
   fitViewport,
   INITIAL_VIEWPORT,
   revealBounds,
+  toCanvas,
   visibleRange,
   ZOOM_STEP,
   zoomBy,
@@ -715,20 +717,32 @@ function OpenDocument({
   );
   // SET-17, SET-18: sections are named lanes; Rename section… is an inline field on the heading.
   const [renamingSection, setRenamingSection] = useState<Id | null>(null);
-  const addSectionHere = useCallback(() => {
-    if (activeSheetId === null || !editable) return;
-    if (isSheetLocked(gd, activeSheetId)) {
-      announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
-      return;
-    }
-    const name = translate(activeLocale, 'section.defaultName', {
-      n: listSections(gd, activeSheetId).length + 1,
-    });
-    session.undo.stopCapturing();
-    const id = addSection(gd, activeSheetId, { name, ...nextSectionRange(gd, activeSheetId) });
-    session.undo.stopCapturing();
-    if (id !== null) announce(translate(activeLocale, 'section.added', { name }));
-  }, [gd, session, activeSheetId, editable, activeLocale]);
+  const addSectionHere = useCallback(
+    (planeX?: number) => {
+      if (activeSheetId === null || !editable) return;
+      if (isSheetLocked(gd, activeSheetId)) {
+        announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
+        return;
+      }
+      const name = translate(activeLocale, 'section.defaultName', {
+        n: listSections(gd, activeSheetId).length + 1,
+      });
+      // SET-17: at the pointer's lattice column when the menu opened under one.
+      const range =
+        planeX === undefined
+          ? nextSectionRange(gd, activeSheetId)
+          : sectionRangeAt(
+              gd,
+              activeSheetId,
+              Math.floor(toCanvas(viewport, { x: planeX, y: 0 }).x / LATTICE.col),
+            );
+      session.undo.stopCapturing();
+      const id = addSection(gd, activeSheetId, { name, ...range });
+      session.undo.stopCapturing();
+      if (id !== null) announce(translate(activeLocale, 'section.added', { name }));
+    },
+    [gd, session, activeSheetId, editable, activeLocale, viewport],
+  );
   const commitSectionRename = useCallback(
     (sectionId: Id, name: string): RenameResult => {
       if (activeSheetId === null || !editable) return { ok: false, reason: '' };

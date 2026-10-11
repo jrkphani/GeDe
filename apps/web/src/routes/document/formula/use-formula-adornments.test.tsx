@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useRef, useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import {
+  addRow,
   createTable,
   renameColumn,
   setCellText,
@@ -13,6 +14,7 @@ import {
   type Id,
 } from '@gede/core';
 
+import { engineFor } from '../../../doc/engine.js';
 import { testDoc, type TestDoc } from '../../../test/formula-doc.js';
 import {
   FormulaEditorAdornments,
@@ -275,6 +277,37 @@ describe('useFormulaAdornments', () => {
     expect(
       Array.from(renamed.querySelectorAll('.gd-formula-option__path')).map((o) => o.textContent),
     ).toEqual(['@Deliverables."Onboarding flow".Owner', '@Deliverables."Passkey sign-in".Owner']);
+  });
+
+  it('FX-04 SET-13 SET-16 @U and the sheet’s summaries are offered whole beside the sets, and picking @U writes it', async () => {
+    const d = testDoc(2, 2);
+    const e = createTable(d.gd, {
+      sheetId: d.sheetId,
+      at: { col: 8, row: 1 },
+      columns: 2,
+      rows: 0,
+      kind: 'simple',
+      title: 'E',
+    });
+    const range = tableById(d.gd, e)!.columns[0]!.id;
+    setCellText(d.gd, e, addRow(d.gd, e), range, 'a');
+    engineFor(d.doc);
+    render(<Host d={d} colId={d.colId(1)} />);
+    const editor = screen.getByLabelText('Edit');
+    await userEvent.click(editor);
+    // The structure tables arrive from the engine a tick after the document changes.
+    await waitFor(async () => {
+      await userEvent.clear(editor);
+      await userEvent.type(editor, '=@U');
+      const list = screen.getByRole('listbox', { name: 'Entities' });
+      expect(list.querySelector('[role=option]')?.textContent).toContain('@U');
+    });
+    await userEvent.keyboard('{Enter}');
+    expect(editor).toHaveValue('=@U');
+    await userEvent.clear(editor);
+    await userEvent.type(editor, '=@sheet');
+    const summary = await screen.findByRole('listbox', { name: 'Entities' });
+    expect(summary.textContent).toContain('@"sheet summary"');
   });
 
   it('FX-04 REF-01 (partial: test host, grid editor not wired) a bare @ lists the edited table first, eight entries at most with the highlight walking them, and the editor is described by how many more there are; a value typed from another table still finds it (ADR-054)', async () => {
