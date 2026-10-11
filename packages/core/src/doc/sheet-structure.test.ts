@@ -10,7 +10,10 @@ import { cellKey, type Id } from '../ids.js';
 import { tableAddresses } from './geometry.js';
 import { applyGuardedUpdate, lockedTablesEdited } from './lock-guard.js';
 import { computedRowId, reconcileComputed, setComputedColumn } from '../ref/computed.js';
+import { addDerivedColumn } from '../ref/derive.js';
 import { reconcilePull, setPull } from '../ref/pull.js';
+import { reconcileSplitChildren, splitChildId } from '../ref/split.js';
+import { reconcileSetRefs } from './set-table.js';
 import { deleteSheet } from './sheets.js';
 import {
   addRow,
@@ -685,6 +688,133 @@ describe('lock guard holes (SET-17, SET-18)', () => {
       });
     });
     expect(lockedTablesEdited(gd, noId)).toEqual([id]);
+  });
+
+  /** Set a meta key on an added row, as a forger would. */
+  const tag = (r: GedeDoc, id: Id, row: Id, key: string, value: unknown) => {
+    r.doc.transact(() => {
+      const meta = tableMap(r, id)?.get('rowMeta') as Y.Map<Y.Map<unknown>> | undefined;
+      meta?.get(row)?.set(key, value);
+    });
+  };
+
+  /** A locked table at `col`, with a Split column or (without) a computed formula. */
+  function lockedSplitTable(withColumn: boolean, col = 1) {
+    const lane = listSections(gd, sheetId)[0]?.id ?? section('Lane', 0, 12);
+    const id = setTable('E', ['a, b'], col);
+    if (withColumn) {
+      addDerivedColumn(gd, id, { sourceColId: rangeOf(id), method: 'Split', args: [', '] });
+    } else {
+      tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
+    }
+    setSectionLocked(gd, sheetId, lane, true);
+    return { id, parent: rowOf(gd, id) };
+  }
+
+  test('SET-18 a split child the reconciler writes lands in a locked table', () => {
+    const { id, parent } = lockedSplitTable(true);
+    const sent = sentBy((r) => reconcileSplitChildren(r, id, new Map([[parent, ['a', 'b']]])));
+    expect(lockedTablesEdited(gd, sent)).toEqual([]);
+    expect(applyGuardedUpdate(gd, sent, 'client')).toEqual([]);
+    expect(tableById(gd, id)?.rows).toHaveLength(3);
+  });
+
+  test('SET-18 a split tag on an added row is refused without its parent row and Split column', () => {
+    const { id, parent } = lockedSplitTable(true);
+    const forge = (row: (r: GedeDoc) => Id, parentId: Id, index = 0, flag = true) =>
+      sentBy((r) => {
+        const child = row(r);
+        tag(r, id, child, 'splitChild', flag);
+        tag(r, id, child, 'splitOf', { rowId: parentId, index });
+      });
+    expect(
+      lockedTablesEdited(
+        gd,
+        forge((r) => addRow(r, id), 'NOPARENT'),
+      ),
+    ).toEqual([id]);
+    // Right parent, but not the id the reconciler would give the child.
+    expect(
+      lockedTablesEdited(
+        gd,
+        forge((r) => addRow(r, id), parent),
+      ),
+    ).toEqual([id]);
+    // A splitChild flag with no splitOf at all.
+    const bare = sentBy((r) => {
+      tag(r, id, addRow(r, id), 'splitChild', true);
+    });
+    expect(lockedTablesEdited(gd, bare)).toEqual([id]);
+    // Right id and parent, but the table has no Split column (a computed table).
+    const other = lockedSplitTable(false, 7);
+    const child = splitChildId(other.parent, 0);
+    const noColumn = sentBy((r) => {
+      r.doc.transact(() => {
+        (tableMap(r, other.id)?.get('rows') as Y.Array<string>).push([child]);
+        const m = new Y.Map<unknown>();
+        m.set('splitChild', true);
+        m.set('splitOf', { rowId: other.parent, index: 0 });
+        (tableMap(r, other.id)?.get('rowMeta') as Y.Map<Y.Map<unknown>>).set(child, m);
+      });
+    });
+    expect(lockedTablesEdited(gd, noColumn)).toEqual([other.id]);
+  });
+
+  test('SET-18 a category band tag on an added row is refused in a locked machine-driven table', () => {
+    const { id } = lockedSplitTable(true);
+    const sent = sentBy((r) => {
+      tag(r, id, addRow(r, id), 'group', true);
+    });
+    expect(lockedTablesEdited(gd, sent)).toEqual([id]);
+  });
+
+  test('SET-18 a followed row lands in a locked family only when its set and referencing row exist', () => {
+    const lane = section('Lane', 0, 5);
+    setTable('Src', ['p', 'q'], 8);
+    const fam = setTable('Fam', ['x'], 1, 'family');
+    const ref = rowOf(gd, fam);
+    setCellText(gd, fam, ref, rangeOf(fam), '=@Src');
+    setSectionLocked(gd, sheetId, lane, true);
+    const genuine = sentBy((r) => void reconcileSetRefs(r, fam));
+    expect(lockedTablesEdited(gd, genuine)).toEqual([]);
+    expect(applyGuardedUpdate(gd, genuine, 'client')).toEqual([]);
+    expect(tableById(gd, fam)?.rows).toHaveLength(3);
+  });
+
+  test('SET-18 a setRefOf tag on an added row of a locked family is refused without backing', () => {
+    const lane = section('Lane', 0, 5);
+    const src = setTable('Src', ['p'], 8);
+    const fam = setTable('Fam', ['x'], 1, 'family');
+    const ref = rowOf(gd, fam);
+    setSectionLocked(gd, sheetId, lane, true);
+    const forge = (tableId: Id, parentRow: Id, rowId?: (r: GedeDoc) => Id) =>
+      sentBy((r) => {
+        const row = rowId?.(r) ?? addRow(r, fam);
+        tag(r, fam, row, 'setRefOf', { rowId: parentRow, tableId });
+      });
+    expect(lockedTablesEdited(gd, forge('NOSET', ref))).toEqual([fam]);
+    expect(lockedTablesEdited(gd, forge(src, 'NOROW'))).toEqual([fam]);
+    // Both exist, but the row id is not the one the reconciler derives.
+    expect(lockedTablesEdited(gd, forge(src, ref))).toEqual([fam]);
+  });
+
+  test('SET-18 a computedIds entry with no row is refused, one beside its row lands', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a'], 1);
+    tableMap(gd, id)?.set('computedFormula', '=Union(A1, A2)');
+    setSectionLocked(gd, sheetId, lane, true);
+    const phantom = sentBy((r) => {
+      const ids = new Y.Map<unknown>();
+      ids.set(computedRowId(id, 'k'), 'k');
+      tableMap(r, id)?.set('computedIds', ids);
+    });
+    expect(lockedTablesEdited(gd, phantom)).toEqual([id]);
+    expect(
+      lockedTablesEdited(
+        gd,
+        sentBy((r) => void computedRow(r, id, 'k')),
+      ),
+    ).toEqual([]);
   });
 
   test('SET-18 a forged pulledFrom row, and a client rewrite of a pulled row, are refused', () => {

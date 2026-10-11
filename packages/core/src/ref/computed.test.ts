@@ -18,13 +18,14 @@ import {
 } from '../doc/index.js';
 import { FormulaEngine } from '../engine/engine.js';
 import { observeWorkbook } from '../engine/snapshot.js';
-import type { CellResult } from '../engine/types.js';
+import { computedFormulaKey, workbookCellId, type CellResult } from '../engine/types.js';
 import { cross } from '../formula/sets.js';
 import { isId, type Id } from '../ids.js';
 import {
   computedItemsOf,
   computedOperandsLabel,
   computedRowId,
+  fillColumns,
   observeRefusedFills,
   reconcileComputed,
   setComputedColumn,
@@ -797,3 +798,93 @@ describe('SET-08 red-team round 5 regressions', () => {
 function fail(): never {
   throw new Error('missing');
 }
+
+describe('FX-06 concurrent Fills that merge into a cycle', () => {
+  /** E, P and Q on one sheet, as each replica starts. */
+  function base() {
+    const gd = openDocument(new Y.Doc());
+    const sheetId = createSheet(gd);
+    const make = (title: string, col: number): Id =>
+      createTable(gd, { sheetId, at: { col, row: 1 }, columns: 1, rows: 0, kind: 'simple', title });
+    const e = make('E', 0);
+    setCellText(gd, e, addRow(gd, e), tableById(gd, e)?.columns[0]?.id ?? '', 'a');
+    const [p, q] = [make('P', 4), make('Q', 8)];
+    return { snapshot: Y.encodeStateAsUpdate(gd.doc), p, q };
+  }
+
+  /** A replica on its own engine; `results` follows every update it sees. */
+  function replica(snapshot: Uint8Array) {
+    const doc = new Y.Doc();
+    const gd = openDocument(doc);
+    const engine = new FormulaEngine();
+    const results = new Map<string, CellResult>();
+    observeWorkbook(gd, (changes) => {
+      const out = engine.apply(changes);
+      for (const id of out.removed) results.delete(id);
+      for (const r of out.results) results.set(r.cellId, r);
+    });
+    Y.applyUpdate(doc, snapshot);
+    return { gd, results, doc };
+  }
+
+  test('FX-06 P = E minus Q and Q = E minus P show circular on both tables, whichever update arrives first', () => {
+    const { snapshot, p, q } = base();
+    const fill = (r: ReturnType<typeof replica>, id: Id, formula: string): Uint8Array => {
+      const before = Y.encodeStateVector(r.doc);
+      const colId = tableById(r.gd, id)?.columns[0]?.id ?? '';
+      expect(fillColumns(r.gd, id, [{ colId, spec: { shape: 'column' } }], formula)).toBe(true);
+      return Y.encodeStateAsUpdate(r.doc, before);
+    };
+    const a = replica(snapshot);
+    const b = replica(snapshot);
+    const fromA = fill(a, p, '=Diff(@E, @Q)');
+    const fromB = fill(b, q, '=Diff(@E, @P)');
+    const orders: [Uint8Array, Uint8Array][] = [
+      [fromA, fromB],
+      [fromB, fromA],
+    ];
+    for (const order of orders) {
+      const r = replica(snapshot);
+      for (const update of order) Y.applyUpdate(r.doc, update);
+      for (const id of [p, q]) {
+        const colId = tableById(r.gd, id)?.columns[0]?.id ?? '';
+        const result = r.results.get(workbookCellId(id, computedFormulaKey(colId)));
+        expect(result?.error).toMatchObject({ kind: 'circular' });
+      }
+      // Breaking the loop settles both: P no longer reads a formula that reads it.
+      expect(setTableFormula(r.gd, q, '=Union("x", "y")')).toBe(true);
+      const pCol = tableById(r.gd, p)?.columns[0]?.id ?? '';
+      expect(r.results.get(workbookCellId(p, computedFormulaKey(pCol)))?.error).toBeNull();
+    }
+  });
+});
+
+describe('FX-06 a computed table reads an operand table in error', () => {
+  test('FX-06 U = P union C shows the error of P instead of its held rows, and clears with it', () => {
+    const { gd, sheetId, results } = harness();
+    const make = (title: string, col: number): Id =>
+      createTable(gd, { sheetId, at: { col, row: 1 }, columns: 1, rows: 0, kind: 'simple', title });
+    const [p, c, u] = [make('P', 0), make('C', 4), make('U2', 8)];
+    const col = (id: Id): Id => tableById(gd, id)?.columns[0]?.id ?? '';
+    setCellText(gd, c, addRow(gd, c), col(c), 'z');
+    const fill = (id: Id, formula: string) => {
+      expect(fillColumns(gd, id, [{ colId: col(id), spec: { shape: 'column' } }], formula)).toBe(
+        true,
+      );
+    };
+    fill(p, '=Union("a", "b")');
+    fill(u, '=Union(@P, @C)');
+    handOff(gd, results);
+    handOff(gd, results);
+    const errorOf = (id: Id) => results.get(workbookCellId(id, computedFormulaKey(col(id))))?.error;
+    expect(errorOf(u)).toBeNull();
+    expect(rowsOf(gd, u)).toHaveLength(3);
+    // P's formula breaks: P holds its rows, and U must not present them as current.
+    expect(setTableFormula(gd, p, '=Union("a")')).toBe(true);
+    expect(errorOf(p)).toMatchObject({ kind: 'arity' });
+    expect(errorOf(u)).toMatchObject({ kind: 'arity' });
+    expect(rowsOf(gd, u)).toHaveLength(3);
+    expect(setTableFormula(gd, p, '=Union("a", "b")')).toBe(true);
+    expect(errorOf(u)).toBeNull();
+  });
+});

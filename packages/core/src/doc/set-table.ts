@@ -674,7 +674,7 @@ function followedRows(gd: GedeDoc, sourceId: Id): FollowedRow[] {
 }
 
 /** The id of the row that follows `sourceRowId` under `rowId`: the same on every replica. */
-function followedRowId(rowId: Id, sourceRowId: Id): Id {
+export function followedRowId(rowId: Id, sourceRowId: Id): Id {
   return deterministicId(`set-ref~${rowId}~${sourceRowId}`);
 }
 

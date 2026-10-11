@@ -4,39 +4,51 @@
  *
  * A refused update is still applied: a client's later updates build on its earlier ones, so
  * dropping one would leave every one after it waiting for it for good. Its effect on the locked
- * tables is undone instead — each is put back as it was, in a write the room broadcasts, so the
+ * tables is undone instead. Each is put back as it was, in a write the room broadcasts, so the
  * client that sent it converges on the locked content.
  *
- * An update is applied to a copy of the document and the tables it changes are read off the
+ * The update is applied to a copy of the document and the tables it changes are read off the
  * copy's events. A change counts when the table was locked before the update (an edit that
  * unlocks and edits at once is refused whole), or locked where the update leaves it (a table
  * moved into a locked lane, a new table in one).
- * What counts as an edit: a table added or removed, its own keys (title, place, look…), its
- * columns, its cell formats and spans, a row added or removed that a person owns, and the
- * text of a cell on such a row. Left alone because machines write them in a locked table too
- * — a computed table follows its formula, a pulled or split row follows its source — and no
- * replica can tell, from the update, whose hand wrote them: the reconcilers' bookkeeping keys
- * and rows whose meta, as it was before the update, marks them as machine-written. A row the
- * update adds is read by its own meta only in a machine-driven table (a computed formula or a
- * non-entered column, judged as the table was before the update; a formula in a cell does not
- * make one), and only when the tag is backed: a computed key needs the table's formula and its
- * computedIds entry, a pulled row needs a source table and row that exist once the update lands and a pull spec on
- * the receiving table. Anything else is a person's row. A tag is backed only by what the
- * reconciler would derive, never by a voucher the update writes itself: a computed row has the id
- * its key gives it, a pulled row its source row's id, and the only cell a reconciler writes is the
- * pull column bound to the source cell, so a pulled row's other text and a computed row's text are
- * edits. A row that stays keeps its tag: a pulled row its source, a computed row the key its id
- * gives it; computedIds entries must match too. shortcut: the key of a computed row (shown until the next reconcile drops it), and a
- * split, followed or band tag with its cells, are trusted in a machine-driven table; the sync
- * service has no formula engine, so when rows carry a signed provenance, close them.
- * Row order alone is not an edit. A locked sheet is put back if deleted, with all its tables;
- * a locked section's name and columns are put back.
+ *
+ * What counts as an edit: a table added or removed, its own keys (title, place, look...), its
+ * columns, its cell formats and spans, a row added or removed that a person owns, and the text
+ * of a cell on such a row. Row order alone is not an edit. Machines write some things in a
+ * locked table too (a computed table follows its formula, a pulled or split row follows its
+ * source) and no replica can tell from the update whose hand wrote them. So the reconcilers'
+ * bookkeeping keys, and rows whose meta before the update marks them as machine-written, are
+ * left alone.
+ *
+ * A row the update adds is read by its own meta only in a machine-driven table (a computed
+ * formula, a non-entered column or a family of sets, judged as the table was before the update;
+ * a formula in a cell does not make one), and only when each tag is backed by what the
+ * reconciler would derive. The update never vouches for itself. A computed row has the id its
+ * key gives it, the table's formula and a computedIds entry. A pulled row has its source row's
+ * id, a source row that exists, and a pull spec on the receiving table. A split child has the
+ * id its parent and index give it, a parent row and a Split column from before the update. A
+ * followed row has the id its referencing row and source row give it, with both the row and the
+ * set from before the update. A category band is never backed: nothing writes one. A computedIds
+ * entry counts only beside its row. A row that stays keeps its tag. Anything unbacked is a
+ * person's row.
+ *
+ * The only cell a reconciler writes on a pulled row is the pull column bound to the source cell,
+ * so a pulled row's other text and a computed row's text are edits.
+ *
+ * shortcut: the service has no formula engine, so it cannot check a computed row's key against
+ * the result (it shows until the next reconcile drops it), nor a split or followed row's text;
+ * when rows carry a signed provenance, close them.
+ *
+ * A locked sheet is put back if deleted, with all its tables; a locked section's name and
+ * columns are put back.
  */
 import * as Y from 'yjs';
 
 import type { Id } from '../ids.js';
 import { computedRowId } from '../ref/computed.js';
 import { pulledCellSource, pullOf } from '../ref/pull.js';
+import { splitChildId, splitColumnOf } from '../ref/split.js';
+import { followedRowId } from './set-table.js';
 import { isCellKey, splitCellKey } from '../ids.js';
 import {
   anyLock,
@@ -56,6 +68,7 @@ import {
   rowReadOnlyReason,
   rowsArray,
   tableMap,
+  tableRecord,
   type GedeDoc,
   type TableMap,
 } from './schema.js';
@@ -96,6 +109,7 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       return (
         t !== null &&
         (readString(t, 'computedFormula') !== '' ||
+          tableRecord(t).kind === 'family' ||
           columnsArray(t)
             .toArray()
             .some((c) => readColumnSource(c) !== 'entered'))
@@ -131,7 +145,32 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
         )
           return false;
       }
-      return true;
+      // A split child needs its parent row and a Split column, both from before the update.
+      const { splitOf, splitChild } = meta;
+      if (splitOf !== null || splitChild) {
+        if (
+          splitOf === null ||
+          splitColumnOf(tableRecord(before)) === null ||
+          !rowsOf(before).has(splitOf.rowId) ||
+          splitChildId(splitOf.rowId, splitOf.index) !== rowId
+        )
+          return false;
+      }
+      // A followed row needs the referencing row and the set it follows, from before the update.
+      const ref = meta.setRefOf;
+      if (ref !== null) {
+        const followed = tableMap(gd, ref.tableId);
+        if (
+          followed === null ||
+          !rowsOf(before).has(ref.rowId) ||
+          !rowsArray(followed)
+            .toArray()
+            .some((s) => followedRowId(ref.rowId, s) === rowId)
+        )
+          return false;
+      }
+      // Nothing writes a stored category band, so none is backed.
+      return !meta.group;
     };
     // A row's provenance is read from the document as it was: an update cannot vouch for its
     // own writes by setting `pulledFrom` on a row a person owns. A row the update adds has no
@@ -169,7 +208,12 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       if (!(ids instanceof Y.Map)) return true;
       return (only ?? [...ids.keys()]).every((id) => {
         const key: unknown = ids.get(id);
-        return key === undefined || (typeof key === 'string' && computedRowId(tableId, key) === id);
+        return (
+          key === undefined ||
+          (typeof key === 'string' &&
+            computedRowId(tableId, key) === id &&
+            rowsOf(tableMap(after, tableId)).has(id))
+        );
       });
     };
     const machineRow = (tableId: Id, rowId: Id): boolean => machineMeta(tableId, rowId) !== null;

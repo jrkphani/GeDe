@@ -205,6 +205,8 @@ export class FormulaEngine {
   private readonly results = new Map<WorkbookCellId, CellResult>();
   private readonly parseCache = new Map<string, ParsedFormula>();
   private readonly needsResolve = new Set<WorkbookCellId>();
+  /** A computed formula was added, changed or dropped: some table's circular state may have moved. */
+  private recheckComputed = false;
   /** tableId → formulas whose bound references point into it. */
   private readonly boundInto = new Map<Id, Set<WorkbookCellId>>();
   readonly index: WorkbookIndex;
@@ -480,6 +482,7 @@ export class FormulaEngine {
       wanted.set(computedFormulaKey(driver.id), structure.computedFormula);
     }
     table.derivedColumns = derivedColumns;
+    this.recheckComputed = true;
     for (const cell of [...table.cells.values()]) {
       if (cell.synthetic && !wanted.has(cell.key)) {
         this.dropCell(cell, removed);
@@ -781,16 +784,46 @@ export class FormulaEngine {
   private evaluate(): CellResult[] {
     this.resolvePending();
     const changed: CellResult[] = [];
-    if (this.graph.dirtyNodes().size === 0) return changed;
-    const topology = this.graph.topologicalBatches();
-    const blocked = new Set(topology.blocked);
-    const cycleMembers = new Set(topology.cycle ?? []);
-    for (const batch of topology.batches) {
-      for (const id of batch) this.evaluateCell(id, blocked, cycleMembers, changed);
+    // A computed formula that settled differently can move the tables that read it: look again.
+    let recheck = this.recheckComputed;
+    for (let round = 0; round <= this.tables.size; round += 1) {
+      if (recheck) this.recheckCircularFills();
+      if (this.graph.dirtyNodes().size === 0) break;
+      const from = changed.length;
+      const topology = this.graph.topologicalBatches();
+      const blocked = new Set(topology.blocked);
+      const cycleMembers = new Set(topology.cycle ?? []);
+      for (const batch of topology.batches) {
+        for (const id of batch) this.evaluateCell(id, blocked, cycleMembers, changed);
+      }
+      for (const id of topology.blocked) this.evaluateCell(id, blocked, cycleMembers, changed);
+      this.graph.clearDirty();
+      recheck = changed
+        .slice(from)
+        .some((r) => this.fillCellOf(this.cells.get(r.cellId)?.tableId ?? '') === r.cellId);
     }
-    for (const id of topology.blocked) this.evaluateCell(id, blocked, cycleMembers, changed);
-    this.graph.clearDirty();
     return changed;
+  }
+
+  /**
+   * FX-06: a computed formula that reads another table's formula (P = E ∖ Q) is circular once
+   * Q's reads P, but the graph has no edge between them while either has no rows, so P is not
+   * dirtied when Q's formula arrives or leaves. Each computed formula whose circular state
+   * disagrees with its table reads is dirtied, so both tables settle the same on every replica.
+   */
+  private recheckCircularFills(): void {
+    this.recheckComputed = false;
+    for (const tableId of this.tables.keys()) {
+      const id = this.fillCellOf(tableId);
+      const cell = id === null ? undefined : this.cells.get(id);
+      if (id === null || cell === undefined || !this.graph.hasNode(id)) continue;
+      const expected = this.readsOwnRows(cell)
+        ? { kind: 'circular' as const }
+        : this.inheritedError(cell);
+      const error = this.results.get(id)?.error ?? null;
+      // An own error (arity...) differs from `expected` too: a harmless second look.
+      if (!sameError(error, expected)) this.graph.markDirty(id);
+    }
   }
 
   private evaluateCell(
@@ -820,6 +853,11 @@ export class FormulaEngine {
       );
       if (outcome.ok) value = outcome.value;
       else error = outcome.error;
+      const inherited = error === null ? this.inheritedError(cell) : null;
+      if (inherited !== null) {
+        value = null;
+        error = inherited;
+      }
     }
     const previous = this.results.get(id);
     if (
@@ -842,6 +880,56 @@ export class FormulaEngine {
   }
 
   /**
+   * The tables a formula names (an id-bound reference, or an `@Title` of a set table). A table
+   * with no rows yet has no cell to be a graph edge, so two Fills made apart (P = E ∖ Q,
+   * Q = E ∖ P) would show a cycle only once both had rows; reading the formulas themselves
+   * closes it whichever arrived first (FX-06).
+   */
+  private tablesRead(cell: CellState): Set<Id> {
+    const formula = cell.formula;
+    const tables = new Set<Id>();
+    if (formula?.ast == null) return tables;
+    for (const id of formula.boundTables) tables.add(id);
+    for (const ref of references(formula.ast)) {
+      if (ref.kind !== 'entity' || ref.path.length !== 1) continue;
+      if (this.index.entityIndex().byKey.has(entityKey(ref.path))) continue;
+      const name = setNameKey(ref.path[0] ?? '');
+      for (const [id, table] of this.tables) {
+        if (name !== '' && setNameKey(table.structure.title) === name) tables.add(id);
+      }
+    }
+    return tables;
+  }
+
+  /** The synthetic cell holding a computed table's formula, or null for any other table. */
+  private fillCellOf(tableId: Id): WorkbookCellId | null {
+    const driver = this.tables
+      .get(tableId)
+      ?.structure.columns.find((c) => c.computed !== undefined);
+    return driver === undefined ? null : workbookCellId(tableId, computedFormulaKey(driver.id));
+  }
+
+  private formulasOfTablesRead(cell: CellState): WorkbookCellId[] {
+    return [...this.tablesRead(cell)].flatMap((id) => this.fillCellOf(id) ?? []);
+  }
+
+  /**
+   * FX-06: a computed table whose operand table is itself in error shows that error, not
+   * rows held from before it failed as if they were a current result.
+   */
+  private inheritedError(cell: CellState): CellError | null {
+    if (splitCellKey(cell.key).rowId !== COMPUTED_FORMULA_ROW) return null;
+    for (const id of this.formulasOfTablesRead(cell)) {
+      const error = this.results.get(id)?.error;
+      if (error === null || error === undefined) continue;
+      return error.kind === 'parse'
+        ? { kind: 'invalid-argument', message: error.error.message }
+        : error;
+    }
+    return null;
+  }
+
+  /**
    * SET-08: a computed column's formula that reads, through any chain, a cell
    * a computed reconcile writes — its own table's or one whose formula leads
    * back to it — would rewrite its rows on every pass and never settle. The
@@ -851,13 +939,14 @@ export class FormulaEngine {
   private readsOwnRows(cell: CellState): boolean {
     if (splitCellKey(cell.key).rowId !== COMPUTED_FORMULA_ROW) return false;
     const seen = new Set<string>();
-    const stack = [...this.graph.dependenciesOf(cell.id)];
+    const stack = [...this.graph.dependenciesOf(cell.id), ...this.formulasOfTablesRead(cell)];
     for (let dep = stack.pop(); dep !== undefined; dep = stack.pop()) {
       if (dep === cell.id) return true;
       if (seen.has(dep)) continue;
       seen.add(dep);
       for (const next of this.graph.dependenciesOf(dep)) stack.push(next);
       const read = this.cells.get(dep);
+      if (read !== undefined) stack.push(...this.formulasOfTablesRead(read));
       if (read === undefined) continue;
       const { colId } = splitCellKey(read.key);
       const columns = this.tables.get(read.tableId)?.structure.columns ?? [];
