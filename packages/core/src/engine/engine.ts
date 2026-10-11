@@ -40,13 +40,7 @@ import { AUTO_FORMAT, isFormatLocale, type CellFormat } from '../format/types.js
 import { cellValueOf } from '../format/value.js';
 import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { cellMayRelabel } from './entities.js';
-import {
-  cellsInColumnOn,
-  dataOriginRow,
-  entityKey,
-  positionKey,
-  type SheetIndex,
-} from './sheet-index.js';
+import { cellsInColumnOn, entityKey, positionKey, type SheetIndex } from './sheet-index.js';
 import {
   COMPUTED_FORMULA_ROW,
   computedFormulaKey,
@@ -918,8 +912,9 @@ export class FormulaEngine {
     for (const id of this.tablesRead(cell)) if (isStructure(id)) return true;
     const ast = cell.formula?.ast;
     if (ast == null) return false;
-    // The structure tables' rectangles (title to the growth row past the last entry), so a read
-    // of a blank cell inside or just past one counts as a read of the table.
+    // The structure tables' columns from the title down: a formula can grow one by any number of
+    // rows, so a read below it, blank or not, may land on its content on a later round.
+    // shortcut: a read of another table's cell below a structure table in its columns is circular too.
     const boxes = [...this.tables.values()].flatMap(({ structure: t }) =>
       t.structure === true && t.sheetId === own.sheetId
         ? [
@@ -927,7 +922,7 @@ export class FormulaEngine {
               col0: t.gridCol,
               col1: t.gridCol + t.columns.reduce((n, c) => n + c.width, 0) - 1,
               row0: t.gridRow,
-              row1: dataOriginRow(t) + t.rows.length,
+              row1: Infinity,
             },
           ]
         : [],

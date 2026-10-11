@@ -14,7 +14,7 @@
  *
  * What counts as an edit: a table added or removed, its own keys (title, place, look...), its
  * columns, its cell formats and spans, a row added or removed that a person owns, and the text
- * of a cell on such a row, a row id listed twice, and the order of the rows that stay. Machines write some things in a
+ * of a cell on such a row, a person's row id listed twice, and the order of the person's rows that stay (a machine row may be reordered among its own, not moved past a person's row). Machines write some things in a
  * locked table too (a computed table follows its formula, a pulled or split row follows its
  * source) and no replica can tell from the update whose hand wrote them. So the reconcilers'
  * bookkeeping keys, and rows whose meta before the update marks them as machine-written, are
@@ -337,13 +337,22 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       const nowList = rowsList(tableMap(after, tableId));
       const was = new Set(wasList);
       const now = new Set(nowList);
-      // A row id listed twice puts one cell at two addresses; a person's rows in another order
-      // shift every address between them, a machine row's included. Rows that stay keep their order;
-      // a reconciler may insert or remove its own rows between them.
-      const kept = (list: readonly Id[], other: Set<Id>): Id[] =>
-        [...new Set(list)].filter((id) => other.has(id));
-      if (nowList.length !== now.size || kept(wasList, now).join() !== kept(nowList, was).join())
-        edit(tableId);
+      // A person's row listed twice puts one cell at two addresses (a machine row's transient
+      // twin, from two replicas inserting its deterministic id, is not one), and a person's rows
+      // in another order shift every address between them. A reconciler may reorder its own rows
+      // (a pulled block follows its source) but not move one past a person's row.
+      const kept = (list: readonly Id[], other: Set<Id>): string => {
+        const people: Id[] = [];
+        const machines: string[] = [];
+        for (const id of new Set(list)) {
+          if (!other.has(id)) continue;
+          if (machineRow(tableId, id)) machines.push(`${id}@${people.length}`);
+          else people.push(id);
+        }
+        return `${people.join()}|${machines.sort().join()}`;
+      };
+      const twice = nowList.some((id, i) => nowList.indexOf(id) !== i && !machineRow(tableId, id));
+      if (twice || kept(wasList, now) !== kept(nowList, was)) edit(tableId);
       for (const id of [...was, ...now]) {
         if (was.has(id) !== now.has(id) && !machineRow(tableId, id)) edit(tableId);
         // A genuine split child stays while its piece exists: removing it shifts the rows below.

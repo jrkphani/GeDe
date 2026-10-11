@@ -808,6 +808,25 @@ describe('lock guard holes (SET-17, SET-18)', () => {
     expect(rows()).toEqual(order);
   });
 
+  test('SET-18 a source reorder reconciled into a locked pulled table is accepted', () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a', 'b'], 1);
+    const src = setTable('S', ['x', 'y'], 8);
+    setPull(gd, id, rangeOf(id), { tableId: src, colId: rangeOf(src), filter: '' });
+    reconcilePull(gd, id);
+    setSectionLocked(gd, sheetId, lane, true);
+    const sent = sentBy((r) => {
+      r.doc.transact(() => {
+        const arr = tableMap(r, src)?.get('rows') as Y.Array<string>;
+        const last = arr.get(arr.length - 1);
+        arr.delete(arr.length - 1, 1);
+        arr.insert(0, [last]);
+      });
+      reconcilePull(r, id);
+    });
+    expect(lockedTablesEdited(gd, sent)).toEqual([]);
+  });
+
   const forgedRow = (r: GedeDoc, id: Id): Id => {
     const row = addRow(r, id);
     r.doc.transact(() => {
@@ -1373,6 +1392,15 @@ describe('structure reads by rectangle (FX-06, SET-13)', () => {
           `=Diff("a", ${formatAddress({ col: u.bounds.col, row: u.bounds.row + u.bounds.rows })})`,
       ),
     ).toEqual(circular);
+  });
+
+  test('FX-06 SET-13 a read more than one row past the growth row is circular', () => {
+    expect(
+      readOf(
+        (u) =>
+          `=Diff(Union("x", "y"), ${formatAddress({ col: u.bounds.col, row: u.bounds.row + u.bounds.rows + 1 })})`,
+      ),
+    ).toEqual({ kind: 'circular' });
   });
 
   test('FX-06 SET-13 a range over only blank structure cells, or a whole column of one, is circular', () => {
