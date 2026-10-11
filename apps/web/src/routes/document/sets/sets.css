@@ -107,7 +107,7 @@ p.gd-set-picker__legend {
    moves (SET-07), and nothing draws outside the table's footprint, so a neighbouring table
    (tables abut on the lattice) and the row ruler stay clear. The rail is the footprint's
    left edge, as wide as its longest label, and the first column yields that room as padding
-   (its cells keep their lattice units); a family's kind column is a unit of its own. */
+   (its cells keep their lattice units). */
 .gd-table--set {
   /* IBM Plex Mono advances 0.6 em; the rail's labels are 0.625 rem. */
   --gd-set-rail: calc(var(--gd-set-rail-chars, 3) * 0.375rem + var(--space-2));
@@ -239,41 +239,7 @@ p.gd-set-picker__legend {
   );
 }
 
-/* SET-06: a family's kind column — a lattice unit of its own beyond the last column, in the
-   table's footprint (core `SET_KIND_COLUMN_UNITS`), so the person's columns keep their whole
-   width: a one-column family's range cell still reads its elements. */
-.gd-set-kind {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: flex-start;
-  box-sizing: border-box;
-  width: var(--lattice-col);
-  padding: 0 var(--space-2);
-  border-left: 1px solid var(--border);
-  overflow: hidden;
-  pointer-events: none;
-}
-.gd-set-kind--header {
-  font-size: 0.71875rem;
-  font-weight: 500;
-}
-.gd-set-kind__tag {
-  max-width: 100%;
-  padding: 0 var(--space-1);
-  overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--ink-muted);
-  font-size: var(--text-mono-cell);
-  line-height: 0.875rem;
-  letter-spacing: 0.04em;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-/* SET-02: a repeat's flag, in words beside the element. */
+/* SET-02, SET-06: a repeat's flag and a family row's kind, in words beside the element. */
 .gd-cell__note {
   flex: none;
   margin-left: auto;

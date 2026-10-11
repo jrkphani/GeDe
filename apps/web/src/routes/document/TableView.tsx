@@ -30,7 +30,6 @@ import {
   rowReadOnlyReason,
   setRangeColumn,
   isSetKind,
-  SET_KIND_COLUMN_UNITS,
   SET_DEGREE,
   spanIndex,
   TABLE_TITLE_ROWS,
@@ -115,10 +114,8 @@ import { useTableLock } from './sets/use-table-lock.js';
 import {
   railCharacters,
   rangeCellNote,
-  rowKindDescription,
   SetCounts,
   SetDegree,
-  SetKindCell,
   SetMetaRow,
   SetTitleRow,
 } from './sets/SetTableParts.js';
@@ -325,14 +322,11 @@ export const TableView = memo(function TableView({
   const widthUnitsOf = (colId: Id, i: number): number =>
     columnPreview?.get(colId) ?? previewWidths[i] ?? 1;
   const columnUnits = visible.map((c, i) => widthUnitsOf(c.id, i));
-  // SET-06: a family's kind column is a lattice unit of its own beyond the last column.
   const widthPx =
-    (Math.max(
+    Math.max(
       1,
       columnUnits.reduce((a, b) => a + b, 0),
-    ) +
-      (record.kind === 'family' ? SET_KIND_COLUMN_UNITS : 0)) *
-    LATTICE.col;
+    ) * LATTICE.col;
   // Heights in document row order (GRID-09, ADR-049): the stored whole units, or a drag's
   // preview — one row's, a band's, or the corner's proportional share of every row's.
   const storedHeights = effectiveRowHeights(table, record);
@@ -363,7 +357,6 @@ export const TableView = memo(function TableView({
   const spans = useMemo(() => spanIndex(table, record), [table, record]);
   const paint = paintTable(record);
   const setChrome = setFacts !== null && tier !== 'macro';
-  const kindColumn = setChrome && record.kind === 'family';
   const style: CSSProperties = {
     left: `${String(record.gridCol * LATTICE.col)}px`,
     top: `${String(record.gridRow * LATTICE.row)}px`,
@@ -715,7 +708,6 @@ export const TableView = memo(function TableView({
         'gd-table--pinned': record.pinned,
         'gd-table--gutter': showAffordances,
         'gd-table--set': setChrome,
-        'gd-table--set-kinds': kindColumn,
       })}
       style={style}
       aria-label={record.title}
@@ -931,7 +923,6 @@ export const TableView = memo(function TableView({
                     </div>
                   );
                 })}
-                {kindColumn && <SetKindCell kind={null} />}
               </div>
             )}
             {sections.map((section, si) => {
@@ -1053,12 +1044,11 @@ export const TableView = memo(function TableView({
                               lostSets={col.id === lostColumn ? lostSets : null}
                               note={
                                 col.id === rangeColId && setFacts !== null
-                                  ? rangeCellNote(setFacts.rows.get(rowId), t)
-                                  : null
-                              }
-                              description={
-                                col.id === rangeColId && kindColumn
-                                  ? rowKindDescription(setFacts.rows.get(rowId), t)
+                                  ? rangeCellNote(
+                                      setFacts.rows.get(rowId),
+                                      t,
+                                      record.kind === 'family',
+                                    )
                                   : null
                               }
                               rowMeta={rowMetaOf}
@@ -1079,9 +1069,6 @@ export const TableView = memo(function TableView({
                             />
                           );
                         })}
-                        {kindColumn && (
-                          <SetKindCell kind={setFacts.rows.get(rowId)?.kind ?? 'element'} />
-                        )}
                         {/* ADR-049: the row's handle and divider live in the gutter GeDe draws
                             left of the table while it is selected (Numbers' row header) — a
                             `rowheader` named "Row 5", the row's last child so it is never in
@@ -1528,10 +1515,8 @@ interface CellProps {
    * column a lost row's words are drawn in; null elsewhere and when the table has none.
    */
   lostSets: string | null;
-  /** SET-02: the words a set's range cell carries beside its element — a repeat's flag — or null. */
+  /** SET-02, SET-06: the words a set's range cell carries beside its element — a family row's kind, a repeat's flag — or null. */
   note: string | null;
-  /** SET-06: a family row's kind, as the range cell's accessible description, or null. */
-  description: string | null;
   /** The row's meta, resolved once per row render (REF-02 provenance, HIER-07 children). */
   rowMeta: RowMeta;
   locale: FormatLocale;
@@ -1711,7 +1696,6 @@ const COMPARED_CELL_PROPS = {
   column: true,
   lostSets: true,
   note: true,
-  description: true,
   rowMeta: true,
   locale: true,
   undo: true,
@@ -1764,7 +1748,6 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
     a.readOnly !== b.readOnly ||
     a.lostSets !== b.lostSets ||
     a.note !== b.note ||
-    a.description !== b.description ||
     a.outlineLocked !== b.outlineLocked ||
     !outlineRowsEqual(a.outline, b.outline) ||
     a.locale !== b.locale ||
@@ -1816,7 +1799,6 @@ const Cell = memo(function Cell({
   column,
   lostSets,
   note,
-  description,
   rowMeta: row,
   locale,
   undo,
@@ -2076,7 +2058,6 @@ const Cell = memo(function Cell({
       tabIndex={tabStop ? 0 : -1}
       aria-selected={selected || undefined}
       aria-readonly={readOnly === null ? undefined : true}
-      aria-description={description ?? undefined}
       aria-colspan={look.span === null || look.span.cols === 1 ? undefined : look.span.cols}
       aria-rowspan={look.span === null || look.span.rows === 1 ? undefined : look.span.rows}
       aria-label={

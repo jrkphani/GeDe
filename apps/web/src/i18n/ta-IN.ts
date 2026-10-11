@@ -241,8 +241,6 @@ export const messages: Messages = {
   'set.definition.changed': '{set}: வரையறை “{definition}”',
   'caption.cleared': '{table}: தலைப்புக் குறிப்பு நீக்கப்பட்டது',
   'caption.changed': '{table}: தலைப்புக் குறிப்பு “{caption}”',
-  'set.kind.header': 'வகை',
-  'set.kind.label': 'வகை: {kind}',
   'set.definition.field': 'வரையறை',
   'set.definition.placeholder': '{ x | x ஓர் எழுத்து }',
   'set.definition.hint':

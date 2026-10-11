@@ -235,8 +235,6 @@ export const messages: Messages = {
   'set.definition.changed': '{set}: परिभाषा है “{definition}”',
   'caption.cleared': '{table}: कैप्शन हटाया गया',
   'caption.changed': '{table}: कैप्शन है “{caption}”',
-  'set.kind.header': 'प्रकार',
-  'set.kind.label': 'प्रकार: {kind}',
   'set.definition.field': 'परिभाषा',
   'set.definition.placeholder': '{ x | x एक अक्षर है }',
   'set.definition.hint':

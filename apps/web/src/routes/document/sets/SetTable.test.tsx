@@ -204,9 +204,11 @@ describe('set tables on the canvas (ADR-056)', () => {
     nestRow(gd, id, x ?? '');
     nestRow(gd, id, x ?? '');
     mount(id);
-    // A kind column with its own header, in words; the range cells keep their values.
-    expect(screen.getByTestId('set-kind-header')).toHaveTextContent('kind');
-    expect(screen.getAllByTestId('set-kind').map((n) => n.textContent)).toEqual([
+    // The kind is words inside the range cell (no kind column); the cell's value is unchanged.
+    const ranges = screen
+      .getAllByRole('gridcell')
+      .filter((c) => c.getAttribute('data-col-id') === rangeOf(id));
+    expect(ranges.map((c) => c.querySelector('[data-testid="set-note"]')?.textContent)).toEqual([
       'element',
       'set',
       'element',
@@ -214,28 +216,16 @@ describe('set tables on the canvas (ADR-056)', () => {
       'set',
       'element',
     ]);
-    expect(screen.queryAllByTestId('set-note')).toHaveLength(0);
-    const ranges = screen
-      .getAllByRole('gridcell')
-      .filter((c) => c.getAttribute('data-col-id') === rangeOf(id));
-    expect(ranges.map((c) => c.getAttribute('aria-description'))).toEqual([
-      'kind: element',
-      'kind: set',
-      'kind: element',
-      'kind: family',
-      'kind: set',
-      'kind: element',
-    ]);
-    expect(ranges[1]).toHaveAttribute('aria-label', 'B6, A');
+    expect(screen.queryByTestId('set-kind-header')).toBeNull();
+    expect(ranges[1]).toHaveAttribute('aria-label', 'B6, A, set');
     expect(degrees().slice(3)).toEqual(['+1°', '+2°', '+2.1°', '+3°', '+3.1°', '+3.1.1°']);
     // |T| counts the top-level members; the bag every leaf.
     expect(screen.getByTestId('set-counts')).toHaveTextContent('T: cardinality 3, bag 3');
   });
 
-  test('SET-06 a simple set has no kind column', () => {
+  test('SET-06 a simple set states no kind: its cells carry no words beside the element', () => {
     mount(setTable('simple', ['a']));
-    expect(screen.queryByTestId('set-kind-header')).toBeNull();
-    expect(screen.queryAllByTestId('set-kind')).toHaveLength(0);
+    expect(screen.queryAllByTestId('set-note')).toHaveLength(0);
   });
 
   test('SET-04 a set table never draws its definition twice: no caption strip at the foot', () => {
@@ -256,7 +246,7 @@ describe('set tables on the canvas (ADR-056)', () => {
     const section = document.querySelector<HTMLElement>('section.gd-table');
     // “+1.1.1°” is seven characters.
     expect(section?.style.getPropertyValue('--gd-set-rail-chars')).toBe('7');
-    expect(section).toHaveClass('gd-table--set', 'gd-table--set-kinds');
+    expect(section).toHaveClass('gd-table--set');
   });
 
   test('SET-02 a plain table has no meta row, rail or count strip', () => {

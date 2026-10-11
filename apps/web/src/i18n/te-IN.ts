@@ -234,8 +234,6 @@ export const messages: Messages = {
   'set.definition.changed': '{set}: నిర్వచనం “{definition}”',
   'caption.cleared': '{table}: శీర్షిక వివరణ తొలగించారు',
   'caption.changed': '{table}: శీర్షిక వివరణ “{caption}”',
-  'set.kind.header': 'రకం',
-  'set.kind.label': 'రకం: {kind}',
   'set.definition.field': 'నిర్వచనం',
   'set.definition.placeholder': '{ x | x ఒక అక్షరం }',
   'set.definition.hint':

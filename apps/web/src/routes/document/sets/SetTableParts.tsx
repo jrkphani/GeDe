@@ -1,9 +1,9 @@
 /**
  * A set table's presentation (SET-02..07; ADR-056, SPEC §5; designs SimpleSet and
  * FamilyOfSets): the meta row and title row drawn in the title bar's two lattice rows, the
- * degree rail along the table's left edge and a family's kind column along its right edge
- * (both inside the footprint, so they never draw over a neighbouring table), the count strip
- * in GRID-11's footer, and a repeat's flag in its range cell. None of it is a Yjs row and
+ * degree rail along the table's left edge (inside the footprint, so it never draws over a
+ * neighbouring table), the count strip in GRID-11's footer, and in a range cell a repeat's
+ * flag and a family row's kind in words. None of it is a Yjs row and
  * none of it takes a lattice unit, so no A1 address moves (SET-07). Every value is read
  * from `setTableFacts` in core; nothing here is typed or stored.
  */
@@ -197,40 +197,22 @@ const ROW_KIND: Readonly<Record<SetRowFacts['kind'], MessageKey>> = {
   family: 'set.rowKind.family',
 };
 
-/** SET-02: the words a range cell carries beside a repeated element — “repeat of +2°” — or null. */
-export function rangeCellNote(row: SetRowFacts | undefined, t: Translate): string | null {
-  return row?.repeatOf == null ? null : t('set.repeat', { degree: row.repeatOf });
-}
-
 /**
- * SET-06: a family row's kind in words, for the range cell's description (assistive
- * technology hears it after the cell's value, which it never changes).
+ * The words a range cell carries beside its element, in the cell and in its accessible name:
+ * a family row's kind (SET-06, “element”, “set” or “family”) and a repeat's flag (SET-02,
+ * “repeat of +2°”); null when there are none.
  */
-export function rowKindDescription(row: SetRowFacts | undefined, t: Translate): string | null {
-  return row === undefined ? null : t('set.kind.label', { kind: t(ROW_KIND[row.kind]) });
-}
-
-/**
- * SET-06: one cell of a family's kind column — “element”, “set” or “family” in words, in the
- * lattice unit the family's footprint keeps beyond its last column (`SET_KIND_COLUMN_UNITS`).
- * Presentation: the range cell's description says the same to assistive technology, so the
- * grid's columns and their count are untouched.
- */
-export function SetKindCell({ kind }: { readonly kind: SetRowFacts['kind'] | null }) {
-  const t = useMessages();
-  return (
-    <span
-      className={clsx('gd-set-kind', { 'gd-set-kind--header': kind === null })}
-      aria-hidden="true"
-      data-testid={kind === null ? 'set-kind-header' : 'set-kind'}
-    >
-      {kind === null ? (
-        t('set.kind.header')
-      ) : (
-        <span className="gd-mono gd-set-kind__tag">{t(ROW_KIND[kind])}</span>
-      )}
-    </span>
-  );
+export function rangeCellNote(
+  row: SetRowFacts | undefined,
+  t: Translate,
+  family: boolean,
+): string | null {
+  if (row === undefined) return null;
+  const words = [
+    family ? t(ROW_KIND[row.kind]) : null,
+    row.repeatOf === null ? null : t('set.repeat', { degree: row.repeatOf }),
+  ].filter((w) => w !== null);
+  return words.length === 0 ? null : words.join(' · ');
 }
 
 /** SET-07: the rail's width in characters — its longest label, so a deep family widens it. */

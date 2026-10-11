@@ -285,8 +285,6 @@ export const messages = {
   'set.definition.changed': '{set}: definition is “{definition}”',
   'caption.cleared': '{table}: caption cleared',
   'caption.changed': '{table}: caption is “{caption}”',
-  'set.kind.header': 'kind',
-  'set.kind.label': 'kind: {kind}',
   'set.definition.field': 'Definition',
   'set.definition.placeholder': '{ x | x is a letter }',
   'set.definition.hint':
