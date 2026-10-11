@@ -105,6 +105,23 @@ export function lockReasonAt(gd: GedeDoc, sheetId: Id, col: number): LockReason 
   return null;
 }
 
+/** Origin of the write that pins a sheet's structure rows: never an undo step. */
+export const STRUCTURE_PIN_ORIGIN = 'structure-pin';
+
+/** The lattice row the sheet's structure tables start at, once pinned (SET-13), else null. */
+export function structureRowOf(gd: GedeDoc, sheetId: Id): number | null {
+  const sheet = sheetMapOf(gd, sheetId);
+  const row = sheet === null ? Number.NaN : readNumber(sheet, 'structureRow', Number.NaN);
+  return Number.isInteger(row) ? row : null;
+}
+
+/** Store the structure rows' anchor so moving a table never moves the addresses a formula reads. */
+export function pinStructureRow(gd: GedeDoc, sheetId: Id, row: number): void {
+  const sheet = sheetMapOf(gd, sheetId);
+  if (sheet === null || structureRowOf(gd, sheetId) !== null) return;
+  gd.doc.transact(() => sheet.set('structureRow', row), STRUCTURE_PIN_ORIGIN);
+}
+
 /** SET-17: a table belongs to the section holding its anchor column. */
 export function sectionOfTable(gd: GedeDoc, tableId: Id): SectionRecord | null {
   const table = gd.tables.get(tableId);
@@ -120,6 +137,13 @@ export function lockReasonOfTable(gd: GedeDoc, tableId: Id): LockReason | null {
   const table = gd.tables.get(tableId);
   if (table === undefined) return null;
   return lockReasonAt(gd, readString(table, 'sheetId'), readNumber(table, 'gridCol', 0));
+}
+
+/** SET-18: why the sheet cannot be laid out whole: it is locked, or a section of it is. */
+export function sheetLockReason(gd: GedeDoc, sheetId: Id): LockReason | null {
+  const sheet = sheetMapOf(gd, sheetId);
+  if (sheet === null || !sheetHasLock(sheet)) return null;
+  return readBoolean(sheet, 'locked', false) ? 'sheet' : 'section';
 }
 
 /** Whether any sheet or section is locked: the sync service checks nothing else on a document without one. */
@@ -171,6 +195,35 @@ export function nextSectionRange(
   const last = listSections(gd, sheetId).at(-1);
   const firstColumn = last === undefined ? 0 : last.lastColumn + 1 + SECTION_GUTTER;
   return { firstColumn, lastColumn: firstColumn + Math.max(1, columns) - 1 };
+}
+
+/**
+ * SET-17: the range for a section added at lattice column `col` (the pointer's): it starts
+ * there, moves right past a section it would touch or land in (the gutter stays), and is cut
+ * short where the next section's gutter begins, never below one column.
+ */
+export function sectionRangeAt(
+  gd: GedeDoc,
+  sheetId: Id,
+  col: number,
+  columns: number = DEFAULT_SECTION_COLUMNS,
+): { firstColumn: number; lastColumn: number } {
+  const sections = listSections(gd, sheetId);
+  let firstColumn = Math.max(0, Math.floor(col));
+  for (const s of sections) {
+    if (
+      firstColumn >= s.firstColumn - SECTION_GUTTER &&
+      firstColumn <= s.lastColumn + SECTION_GUTTER
+    ) {
+      firstColumn = s.lastColumn + 1 + SECTION_GUTTER;
+    }
+  }
+  let lastColumn = firstColumn + Math.max(1, columns) - 1;
+  for (const s of sections) {
+    if (s.firstColumn > firstColumn)
+      lastColumn = Math.min(lastColumn, s.firstColumn - 1 - SECTION_GUTTER);
+  }
+  return { firstColumn, lastColumn };
 }
 
 /**

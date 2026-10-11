@@ -5,11 +5,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   addRow,
   addSection,
+  cellKey,
+  commitCellText,
   createSheet,
   createTable,
   listSections,
@@ -22,12 +24,14 @@ import {
   tableAddresses,
   tableById,
   tableMap,
+  workbookCellId,
   type GedeDoc,
   type Id,
   type TableKind,
 } from '@gede/core';
 
 import { LiveRegion } from '../../../announce.js';
+import { engineFor } from '../../../doc/engine.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import { openViewStore, ViewStoreProvider, type ViewStore } from '../../../doc/view-state.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
@@ -291,10 +295,12 @@ describe('summaries on the canvas (SET-13..16)', () => {
     setTable('D', ['b', 'c'], 9);
   }
 
-  test('SET-15 the section summary has the twelve columns, one row per set, counts in the caption', () => {
+  const cellsOf = (row: HTMLElement) => within(row).getAllByRole('cell');
+
+  test('SET-15 the section summary is a table with the twelve columns and a row per set, counts in its title bar', async () => {
     relations();
     render(<Harness />);
-    const summary = screen.getByRole('region', { name: 'Section summary: Foundation' });
+    const summary = await screen.findByRole('region', { name: 'Section summary: Foundation' });
     const headers = within(summary)
       .getAllByRole('columnheader')
       .map((h) => h.textContent?.replace(/±0°/, ''));
@@ -316,73 +322,67 @@ describe('summaries on the canvas (SET-13..16)', () => {
     expect(body).toHaveLength(4);
     expect(summary).toHaveTextContent('Sets: 4 · Elements: 4');
     const e = body[0]!;
-    expect(within(e).getAllByRole('cell')[0]).toHaveTextContent('E');
-    // E equals A, and is a subset of A and of nothing properly.
-    expect(within(e).getAllByRole('cell')[4]).toHaveTextContent('A');
+    expect(within(e).getByRole('rowheader')).toHaveTextContent('+1°');
+    expect(cellsOf(e)[0]).toHaveTextContent('E');
+    // E equals A.
+    expect(cellsOf(e)[4]).toHaveTextContent('A');
   });
 
-  test('SET-15 “—” is spoken as none found; the note says what it means', () => {
+  test('SET-15 “—” is spoken as none found', async () => {
     relations();
     render(<Harness />);
-    const summary = screen.getByRole('region', { name: 'Section summary: Foundation' });
+    const summary = await screen.findByRole('region', { name: 'Section summary: Foundation' });
     const e = within(summary).getAllByRole('row')[1]!;
     // Special status of a three-element set: nothing, in words for assistive technology.
-    expect(within(e).getAllByRole('cell')[3]).toHaveTextContent('—none found');
-    expect(summary).toHaveTextContent(
-      '“—” means GeDe checked and found none, not that the cell is empty.',
-    );
+    expect(cellsOf(e)[3]).toHaveTextContent('—none found');
   });
 
-  test('SET-15 above 30 sets the pair columns read “—” with the reason', () => {
+  test('SET-15 above 30 sets the pair columns read “—” with the reason', async () => {
     section('Big', 0, 200);
     for (let i = 0; i < 31; i += 1) setTable(`T${String(i)}`, [String(i)], i * 3);
     render(<Harness />);
-    const summary = screen.getByRole('region', { name: 'Section summary: Big' });
+    const summary = await screen.findByRole('region', { name: 'Section summary: Big' });
     expect(summary).toHaveTextContent('more than 30 sets in this section');
-    const first = within(summary).getAllByRole('row')[1]!;
-    const cells = within(first).getAllByRole('cell');
+    const cells = cellsOf(within(summary).getAllByRole('row')[1]!);
     expect(cells[8]).toHaveTextContent('—more than 30 sets in this section');
     expect(cells[9]).toHaveTextContent('—more than 30 sets in this section');
     expect(cells[10]).toHaveTextContent('—more than 30 sets in this section');
   });
 
-  test('SET-13 SET-14 U lists every element once, and the super set array labels elements and sets in words', () => {
+  test('SET-13 SET-14 U lists every element once, and the super set array labels elements and sets in words', async () => {
     relations();
     render(<Harness />);
-    const universe = screen.getByTestId('universal-set');
+    const universe = await screen.findByTestId('universal-set');
     expect(
       within(universe)
-        .getAllByRole('listitem')
-        .map((li) => li.textContent),
+        .getAllByRole('row')
+        .slice(1)
+        .map((r) => r.textContent?.replace(/^\+\d+°/, '')),
     ).toEqual(['a', 'b', 'c', 'x']);
     expect(universe).toHaveTextContent('|U| = 4');
     expect(universe).toHaveTextContent('@U');
     const array = screen.getByTestId('super-set-array');
-    const items = within(array)
-      .getAllByRole('listitem')
-      .map((li) => li.textContent);
-    expect(items).toEqual([
-      'elementa',
-      'elementb',
-      'elementc',
-      'elementx',
-      'setE',
-      'setA',
-      'setC',
-      'setD',
-    ]);
+    expect(
+      within(array)
+        .getAllByRole('row')
+        .slice(1)
+        .map((r) => r.textContent?.replace(/^\+\d+°/, '')),
+    ).toEqual(['aelement', 'belement', 'celement', 'xelement', 'Eset', 'Aset', 'Cset', 'Dset']);
   });
 
-  test('SET-16 the sheet summary lists each section with its set and element counts', () => {
+  test('SET-16 the sheet summary lists each section with its set and element counts', async () => {
     section('First', 0, 8);
     section('Second', 10, 20);
     setTable('E', ['a', 'b'], 0);
     setTable('C', ['b', 'c'], 4);
     setTable('B', ['x'], 11);
     render(<Harness />);
-    const summary = screen.getByRole('region', { name: 'sheet summary' });
+    const summary = await screen.findByRole('region', { name: 'sheet summary' });
     const rows = within(summary).getAllByRole('row').slice(1);
-    expect(rows.map((r) => r.textContent)).toEqual(['1° First23', '2° Second11']);
+    expect(rows.map((r) => r.textContent?.replace(/^\+\d+°/, ''))).toEqual([
+      '1° First23',
+      '2° Second11',
+    ]);
   });
 
   test('SET-13 the structure draws nothing on a sheet with no set and no section', () => {
@@ -390,5 +390,56 @@ describe('summaries on the canvas (SET-13..16)', () => {
     render(<Harness />);
     expect(screen.queryByTestId('sheet-structure')).toBeNull();
     fireEvent.click(document.body);
+  });
+
+  test('SET-13 SET-14 SET-15 SET-16 each drawn cell holds what a formula reads at its address', async () => {
+    relations();
+    render(<Harness />);
+    await screen.findByTestId('universal-set');
+    const probe = createTable(gd, { sheetId, at: { col: 40, row: 0 }, columns: 1, rows: 1 });
+    const row = tableById(gd, probe)?.rows[0] ?? '';
+    const col = tableById(gd, probe)?.columns[0]?.id ?? '';
+    const engine = engineFor(gd.doc);
+    const drawn = [
+      ...document.querySelectorAll<HTMLElement>(
+        '.gd-sband td[data-address], .gd-sband th[scope="row"][data-address]',
+      ),
+    ]
+      // Each kind of table once: the first cell of U, of the super set array, of the sheet summary and a summary name.
+      .filter((cell) => cell.textContent !== '');
+    expect(drawn.length).toBeGreaterThan(10);
+    for (const cell of drawn.slice(0, 40)) {
+      const address = cell.dataset.address ?? '';
+      commitCellText(gd, probe, row, col, `=${address}`);
+      await engine.settled();
+      const result = engine.result(workbookCellId(probe, cellKey(row, col)));
+      const clone = cell.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('.gd-visually-hidden, .gd-sband__degree').forEach((n) => {
+        n.remove();
+      });
+      const text = clone.textContent;
+      const value = result?.value;
+      const read =
+        value?.kind === 'text' ? value.text : value?.kind === 'number' ? String(value.value) : '';
+      // A dash is drawn for a value read as the dash.
+      expect(read, address).toBe(text ?? '');
+    }
+  });
+
+  test('SET-17 Add section on the canvas menu hands the pointer’s x to the shell', () => {
+    const add = vi.fn();
+    const context = {
+      gd,
+      editable: true,
+      sections: { sheetId, add },
+      canvas,
+      sheets,
+    } as unknown as MenuContext;
+    const entry = menuEntriesFor(context, { kind: 'canvas', planeX: 320 }).find(
+      (e) => e.id === 'section-add',
+    );
+    if (entry?.kind !== 'item') throw new Error('no Add section');
+    entry.onSelect();
+    expect(add).toHaveBeenCalledWith(320);
   });
 });

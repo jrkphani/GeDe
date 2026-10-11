@@ -51,7 +51,6 @@ import {
 import type { RenameTarget } from '../grid/rename.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { RENAME_KEYS, SHEET_KEYS } from '../keys/shortcut-map.js';
-import { TRACKED } from '../inspector/controls.js';
 import { fillColumnReason } from '../sets/set-tables.js';
 import { LAST_SHEET_REASON } from '../sheets.js';
 import {
@@ -72,7 +71,8 @@ export type MenuTarget =
   | { kind: 'sheet'; sheetId: Id }
   /** SET-17: a section's heading. */
   | { kind: 'section'; sheetId: Id; sectionId: Id }
-  | { kind: 'canvas' };
+  /** `planeX`: where the pointer was, in pixels from the plane's left edge (SET-17 Add section). */
+  | { kind: 'canvas'; planeX?: number };
 
 /** What the other Wave 2 PRs mount; each `undefined` leaves its commands disabled with a reason. */
 export interface MenuSlots {
@@ -135,7 +135,8 @@ export interface MenuContext {
     | {
         /** The sheet shown. */
         sheetId: Id | null;
-        add: () => void;
+        /** `planeX`: the pointer's x on the plane; the section starts at its column. */
+        add: (planeX?: number) => void;
         rename: (sheetId: Id, sectionId: Id) => void;
         setLocked: (sheetId: Id, sectionId: Id, locked: boolean) => void;
         setSheetLocked: (sheetId: Id, locked: boolean) => void;
@@ -148,10 +149,11 @@ export interface MenuContext {
   slots?: MenuSlots | undefined;
 }
 
-const SORT_SOON = 'arrives with the sort and filter release';
-const CATEGORY_SOON = 'arrives with the hierarchy release';
-const GRAPH_SOON = TRACKED.graph;
-const VIEW_ONLY = 'you have view-only access';
+// Read per call so a locale change shows at once; `lockedEntries` compares by value.
+const SORT_SOON = () => tm('reason.sortSoon');
+const CATEGORY_SOON = () => tm('reason.categorySoon');
+const GRAPH_SOON = () => tm('reason.graphSoon');
+const VIEW_ONLY = () => tm('reason.viewOnly');
 
 /**
  * SET-02: Split into rows, for a simple set's or a family's range cell — the menu route to
@@ -173,7 +175,7 @@ function splitEntries(ctx: MenuContext, tableId: Id, rowId: Id, colId: Id): Menu
       id: 'split-rows',
       label: t('set.split.action'),
       disabledReason: !ctx.editable
-        ? VIEW_ONLY
+        ? VIEW_ONLY()
         : readOnly !== null
           ? translate(locale, 'cell.readOnly', { reason: readOnlyLabel(readOnly) })
           : formula
@@ -193,10 +195,13 @@ function sep(id: string): MenuEntry {
 }
 
 function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' }): MenuEntry[] {
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   const table = tableMap(ctx.gd, cell.tableId);
   const readOnly = table === null ? null : ctx.commands.readOnlyReason(cell);
-  const locked = readOnly === null ? undefined : `${readOnly} cells are read-only`;
+  const locked =
+    readOnly === null
+      ? undefined
+      : translate(activeLocale(), 'cell.readOnly', { reason: readOnlyLabel(readOnly) });
   return [
     {
       kind: 'item',
@@ -333,9 +338,9 @@ function columnClipboardEntries(
 
 function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): MenuEntry[] {
   const sort = ctx.slots?.sort;
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
-  const soon = sort === undefined ? SORT_SOON : undefined;
-  const needsColumn = colId === null ? 'open the column menu to filter by it' : undefined;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
+  const soon = sort === undefined ? SORT_SOON() : undefined;
+  const needsColumn = colId === null ? tm('reason.filterNeedsColumn') : undefined;
   const out: MenuEntry[] = [];
   if (colId !== null) {
     out.push(
@@ -394,8 +399,8 @@ function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): Men
 
 function categoryEntries(ctx: MenuContext, tableId: Id, colId: Id | null, label: string) {
   const hier = ctx.slots?.hierarchy;
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
-  const soon = hier === undefined ? CATEGORY_SOON : undefined;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
+  const soon = hier === undefined ? CATEGORY_SOON() : undefined;
   const out: MenuEntry[] = [];
   if (colId !== null) {
     const isCategory = hier?.isCategory(tableId, colId) === true;
@@ -404,7 +409,7 @@ function categoryEntries(ctx: MenuContext, tableId: Id, colId: Id | null, label:
         kind: 'item',
         id: 'category-add',
         label: tm('menu.addCategoryForLabel', { label }),
-        disabledReason: viewOnly ?? soon ?? (isCategory ? 'already a category' : undefined),
+        disabledReason: viewOnly ?? soon ?? (isCategory ? tm('reason.alreadyCategory') : undefined),
         onSelect: () => {
           hier?.addCategory(tableId, colId);
         },
@@ -413,7 +418,7 @@ function categoryEntries(ctx: MenuContext, tableId: Id, colId: Id | null, label:
         kind: 'item',
         id: 'category-remove',
         label: tm('menu.removeLabelCategory', { label }),
-        disabledReason: viewOnly ?? soon ?? (isCategory ? undefined : 'not a category'),
+        disabledReason: viewOnly ?? soon ?? (isCategory ? undefined : tm('reason.notCategory')),
         onSelect: () => {
           hier?.removeCategory(tableId, colId);
         },
@@ -437,7 +442,7 @@ function graphEntry(ctx: MenuContext, tableId: Id): MenuEntry {
     kind: 'item',
     id: 'graph',
     label: tm('menu.graphThisTable'),
-    disabledReason: ctx.slots?.graph === undefined ? GRAPH_SOON : undefined,
+    disabledReason: ctx.slots?.graph === undefined ? GRAPH_SOON() : undefined,
     onSelect: () => {
       ctx.slots?.graph?.graphTable(tableId);
     },
@@ -454,13 +459,12 @@ function graphEntry(ctx: MenuContext, tableId: Id): MenuEntry {
  */
 function fitColumnEntry(ctx: MenuContext, tableId: Id, colId: Id, label: string): MenuEntry {
   const { gd, commands } = ctx;
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   return {
     kind: 'item',
     id: 'col-fit',
     label,
-    disabledReason:
-      viewOnly ?? (canMeasure() ? undefined : 'text cannot be measured in this browser'),
+    disabledReason: viewOnly ?? (canMeasure() ? undefined : tm('reason.cannotMeasure')),
     onSelect: () => {
       const measure = canvasMeasure();
       const table = tableMap(gd, tableId);
@@ -489,13 +493,13 @@ export function cellMenuEntries(
   const record = tableById(gd, tableId);
   const table = tableMap(gd, tableId);
   if (record === null || table === null) return [];
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   const column = record.columns.find((c) => c.id === colId) ?? null;
   const columnIndex = record.columns.findIndex((c) => c.id === colId);
   const visibleBefore = record.columns.filter((c, i) => !c.hidden && i <= columnIndex).length;
   const frozenThrough = record.frozenColumns >= visibleBefore && visibleBefore > 0;
   const canFreeze = visibleBefore < record.columns.filter((c) => !c.hidden).length;
-  const address = cellAddress(table, rowId, colId) ?? 'the cell';
+  const address = cellAddress(table, rowId, colId) ?? tm('reason.theCell');
   // ADR-049 / Numbers N8: the cell's Wrap Text — checked when the cell wraps, whichever
   // scope decides it; a change writes the cell's own override (a route to the Text tab at cell scope).
   const cellWraps = effectiveWrap(table, column, rowId, record.look.wrap);
@@ -520,8 +524,7 @@ export function cellMenuEntries(
       id: 'freeze-columns',
       label: tm('menu.freezeColumnsThroughLabel', { label: column?.label ?? address }),
       checked: frozenThrough,
-      disabledReason:
-        viewOnly ?? (canFreeze ? undefined : 'freezing every column would leave nothing to scroll'),
+      disabledReason: viewOnly ?? (canFreeze ? undefined : tm('reason.freezeNothingLeft')),
       onCheckedChange: (on) => {
         commands.setFrozenColumns(tableId, on ? visibleBefore : 0);
       },
@@ -575,7 +578,7 @@ export function cellMenuEntries(
       disabledReason:
         viewOnly ??
         rowDeleteReason(gd, tableId, rowId) ??
-        (record.rows.length <= 1 ? 'a table keeps at least one row' : undefined),
+        (record.rows.length <= 1 ? tm('reason.lastRow') : undefined),
       onSelect: () => {
         commands.deleteRow(tableId, rowId);
       },
@@ -586,7 +589,7 @@ export function cellMenuEntries(
       label: tm('menu.deleteColumn'),
       danger: true,
       disabledReason:
-        viewOnly ?? (record.columns.length <= 1 ? 'a table keeps at least one column' : undefined),
+        viewOnly ?? (record.columns.length <= 1 ? tm('reason.lastColumn') : undefined),
       onSelect: () => {
         commands.deleteColumn(tableId, colId);
       },
@@ -605,9 +608,9 @@ export function cellMenuEntries(
       disabledReason:
         viewOnly ??
         (covered !== null
-          ? 'this cell is inside a merged cell'
+          ? tm('reason.insideMerged')
           : room !== null && (span?.cols ?? 1) >= room.cols
-            ? 'no column to the right'
+            ? tm('reason.noColumnRight')
             : undefined),
       onSelect: () => {
         commands.mergeRight({ tableId, rowId, colId });
@@ -620,9 +623,9 @@ export function cellMenuEntries(
       disabledReason:
         viewOnly ??
         (covered !== null
-          ? 'this cell is inside a merged cell'
+          ? tm('reason.insideMerged')
           : room !== null && (span?.rows ?? 1) >= room.rows
-            ? 'no row below'
+            ? tm('reason.noRowBelow')
             : undefined),
       onSelect: () => {
         commands.mergeDown({ tableId, rowId, colId });
@@ -633,7 +636,7 @@ export function cellMenuEntries(
       id: 'unmerge',
       label: tm('menu.unmergeCells'),
       disabledReason:
-        viewOnly ?? (span === null && covered === null ? 'the cell is not merged' : undefined),
+        viewOnly ?? (span === null && covered === null ? tm('reason.notMerged') : undefined),
       onSelect: () => {
         commands.unmergeCells({ tableId, rowId, colId });
       },
@@ -647,7 +650,7 @@ export function cellMenuEntries(
       id: 'select-all',
       label: tm('menu.selectTheTable'),
       shortcut: LABELS.selectAll,
-      disabledReason: ctx.selectTable === undefined ? 'select a cell first' : undefined,
+      disabledReason: ctx.selectTable === undefined ? tm('reason.selectCell') : undefined,
       onSelect: () => {
         ctx.selectTable?.(tableId);
       },
@@ -672,8 +675,7 @@ export function cellMenuEntries(
       label: tm('menu.fitRowHeightToContent'),
       // #167 criterion 5: the row's fit, from the cell's menu (GeDe has no row menu). Where
       // no 2D canvas exists the item says so (MENU-02), as the inspector's buttons do.
-      disabledReason:
-        viewOnly ?? (canMeasure() ? undefined : 'text cannot be measured in this browser'),
+      disabledReason: viewOnly ?? (canMeasure() ? undefined : tm('reason.cannotMeasure')),
       onSelect: () => {
         const measure = canvasMeasure();
         if (measure === null) return;
@@ -702,7 +704,7 @@ export function columnMenuEntries(
   const { tableId, colId } = target;
   const record = tableById(gd, tableId);
   if (record === null) return [];
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   const column = record.columns.find((c) => c.id === colId);
   if (column === undefined) return [];
   const columnIndex = record.columns.indexOf(column);
@@ -718,8 +720,7 @@ export function columnMenuEntries(
       id: 'freeze-columns',
       label: tm('menu.freezeColumnsThroughLabel', { label: column.label }),
       checked: frozenThrough,
-      disabledReason:
-        viewOnly ?? (canFreeze ? undefined : 'freezing every column would leave nothing to scroll'),
+      disabledReason: viewOnly ?? (canFreeze ? undefined : tm('reason.freezeNothingLeft')),
       onCheckedChange: (on) => {
         commands.setFrozenColumns(tableId, on ? visibleBefore : 0);
       },
@@ -734,7 +735,7 @@ export function columnMenuEntries(
       disabledReason:
         viewOnly ??
         (record.outlineColumn === null && outlineColumnId(record) === colId
-          ? 'Already the first visible column'
+          ? tm('reason.firstVisibleColumn')
           : undefined),
       onCheckedChange: (on) => {
         commands.setOutlineColumn(tableId, on ? colId : null);
@@ -772,7 +773,7 @@ export function columnMenuEntries(
       label: tm('menu.renameColumn'),
       shortcut: RENAME_KEYS.rename,
       disabledReason:
-        viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY : columnRenameReason(column)),
+        viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY() : columnRenameReason(column)),
       onSelect: () => {
         ctx.rename?.({ kind: 'column', tableId, colId });
       },
@@ -784,7 +785,7 @@ export function columnMenuEntries(
       label: translate(activeLocale(), 'fill.menu'),
       disabledReason:
         viewOnly ??
-        (ctx.fillColumn === undefined ? VIEW_ONLY : fillColumnReason(gd, tableId, colId)),
+        (ctx.fillColumn === undefined ? VIEW_ONLY() : fillColumnReason(gd, tableId, colId)),
       onSelect: () => {
         ctx.fillColumn?.(tableId, colId);
       },
@@ -796,7 +797,7 @@ export function columnMenuEntries(
       label: tm('menu.deleteColumn'),
       danger: true,
       disabledReason:
-        viewOnly ?? (record.columns.length <= 1 ? 'a table keeps at least one column' : undefined),
+        viewOnly ?? (record.columns.length <= 1 ? tm('reason.lastColumn') : undefined),
       onSelect: () => {
         commands.deleteColumn(tableId, colId);
       },
@@ -805,7 +806,7 @@ export function columnMenuEntries(
       kind: 'item',
       id: 'col-hide',
       label: tm('menu.hideColumn'),
-      disabledReason: viewOnly ?? (visibleCount <= 1 ? 'the last visible column stays' : undefined),
+      disabledReason: viewOnly ?? (visibleCount <= 1 ? tm('reason.lastVisibleColumn') : undefined),
       onSelect: () => {
         commands.hideColumn(tableId, colId);
       },
@@ -845,8 +846,8 @@ export function graphMenuEntries(
 ): MenuEntry[] {
   const graph = graphById(ctx.gd, target.graphId);
   if (graph === null) return [];
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
-  const soon = ctx.graphs === undefined ? GRAPH_SOON : undefined;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
+  const soon = ctx.graphs === undefined ? GRAPH_SOON() : undefined;
   const other = graphsInPair(ctx.gd, graph.pairId).find((g) => g.id !== graph.id);
   return [
     {
@@ -877,7 +878,7 @@ export function graphMenuEntries(
       label: tm('menu.deleteGraphPair'),
       danger: true,
       disabledReason:
-        viewOnly ?? soon ?? (other === undefined ? 'this is the only half left' : undefined),
+        viewOnly ?? soon ?? (other === undefined ? tm('reason.onlyHalfLeft') : undefined),
       onSelect: () => {
         ctx.graphs?.remove(graph.pairId);
       },
@@ -907,7 +908,7 @@ export function tableMenuEntries(
 ): MenuEntry[] {
   const record = tableById(ctx.gd, target.tableId);
   if (record === null) return [];
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   return [
     graphEntry(ctx, target.tableId),
     sep('s-insert'),
@@ -938,7 +939,7 @@ export function tableMenuEntries(
       id: 'table-rename',
       label: tm('menu.renameTable'),
       shortcut: RENAME_KEYS.rename,
-      disabledReason: viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY : undefined),
+      disabledReason: viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY() : undefined),
       onSelect: () => {
         ctx.rename?.({ kind: 'table', tableId: target.tableId });
       },
@@ -952,7 +953,7 @@ export function tableMenuEntries(
       shortcut: LABELS.clear,
       danger: true,
       disabledReason:
-        viewOnly ?? (ctx.deleteTable === undefined ? 'select a table first' : undefined),
+        viewOnly ?? (ctx.deleteTable === undefined ? tm('reason.selectTable') : undefined),
       onSelect: () => {
         ctx.deleteTable?.(target.tableId);
       },
@@ -972,7 +973,7 @@ const lockText = (reason: 'sheet' | 'section'): string =>
   translate(activeLocale(), reason === 'sheet' ? 'readOnly.sheetLocked' : 'readOnly.sectionLocked');
 
 /** SET-17: Add section, on the canvas menu; disabled with its reason on a locked sheet. */
-function sectionAddEntries(ctx: MenuContext): MenuEntry[] {
+function sectionAddEntries(ctx: MenuContext, planeX: number | undefined): MenuEntry[] {
   if (ctx.sections === undefined) return [];
   const { sheetId } = ctx.sections;
   return [
@@ -982,9 +983,11 @@ function sectionAddEntries(ctx: MenuContext): MenuEntry[] {
       id: 'section-add',
       label: translate(activeLocale(), 'section.add'),
       disabledReason:
-        (ctx.editable ? undefined : VIEW_ONLY) ??
+        (ctx.editable ? undefined : VIEW_ONLY()) ??
         (sheetId !== null && isSheetLocked(ctx.gd, sheetId) ? lockText('sheet') : undefined),
-      onSelect: ctx.sections.add,
+      onSelect: () => {
+        ctx.sections?.add(planeX);
+      },
     },
   ];
 }
@@ -1001,7 +1004,7 @@ export function sectionMenuEntries(
   const section = listSections(ctx.gd, target.sheetId).find((s) => s.id === target.sectionId);
   if (section === undefined || ctx.sections === undefined) return [];
   const sections = ctx.sections;
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   const lock = sectionLockReason(ctx.gd, target.sheetId, target.sectionId);
   const t = (key: MessageKey) => translate(activeLocale(), key);
   return [
@@ -1028,13 +1031,16 @@ export function sectionMenuEntries(
 }
 
 /** Empty canvas: place a table here, view commands. */
-export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
+export function canvasMenuEntries(
+  ctx: MenuContext,
+  target: MenuTarget & { kind: 'canvas' },
+): MenuEntry[] {
   const sheetId = ctx.sections?.sheetId ?? null;
   const viewOnly = ctx.editable
     ? sheetId !== null && isSheetLocked(ctx.gd, sheetId)
       ? lockText('sheet')
       : undefined
-    : VIEW_ONLY;
+    : VIEW_ONLY();
   return [
     {
       kind: 'item',
@@ -1048,7 +1054,7 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
       id: 'add-shaped-table',
       label: tm('menu.addShapedTableHere'),
       disabledReason:
-        viewOnly ?? (ctx.canvas.addShapedTable === undefined ? GRAPH_SOON : undefined),
+        viewOnly ?? (ctx.canvas.addShapedTable === undefined ? GRAPH_SOON() : undefined),
       onSelect: () => {
         ctx.canvas.addShapedTable?.();
       },
@@ -1057,12 +1063,12 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
       kind: 'item',
       id: 'add-graph',
       label: tm('menu.addGraphHere'),
-      disabledReason: viewOnly ?? (ctx.canvas.addGraph === undefined ? GRAPH_SOON : undefined),
+      disabledReason: viewOnly ?? (ctx.canvas.addGraph === undefined ? GRAPH_SOON() : undefined),
       onSelect: () => {
         ctx.canvas.addGraph?.();
       },
     },
-    ...sectionAddEntries(ctx),
+    ...sectionAddEntries(ctx, target.planeX),
     sep('s-view'),
     {
       kind: 'item',
@@ -1094,7 +1100,7 @@ export function sheetMenuEntries(
   ctx: MenuContext,
   target: MenuTarget & { kind: 'sheet' },
 ): MenuEntry[] {
-  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY();
   return [
     {
       kind: 'item',
@@ -1159,7 +1165,7 @@ function lockedEntries(ctx: MenuContext, build: (ctx: MenuContext) => MenuEntry[
   if (reason === null) return build(ctx);
   const text = lockText(reason);
   const swap = (disabledReason: string | undefined) =>
-    disabledReason === VIEW_ONLY ? text : disabledReason;
+    disabledReason === VIEW_ONLY() ? text : disabledReason;
   return build({ ...ctx, editable: false }).map((entry): MenuEntry => {
     switch (entry.kind) {
       case 'item':
@@ -1191,7 +1197,7 @@ export function menuEntriesFor(ctx: MenuContext, target: MenuTarget): MenuEntry[
     case 'section':
       return sectionMenuEntries(ctx, target);
     case 'canvas':
-      return canvasMenuEntries(ctx);
+      return canvasMenuEntries(ctx, target);
   }
 }
 
@@ -1199,18 +1205,18 @@ export function menuEntriesFor(ctx: MenuContext, target: MenuTarget): MenuEntry[
 export function menuLabelFor(target: MenuTarget): string {
   switch (target.kind) {
     case 'cell':
-      return 'Cell menu';
+      return tm('menuLabel.cell');
     case 'column':
-      return 'Column menu';
+      return tm('menuLabel.column');
     case 'table':
-      return 'Table menu';
+      return tm('menuLabel.table');
     case 'graph':
-      return 'Graph menu';
+      return tm('menuLabel.graph');
     case 'sheet':
-      return 'Sheet menu';
+      return tm('menuLabel.sheet');
     case 'section':
-      return 'Section menu';
+      return tm('menuLabel.section');
     case 'canvas':
-      return 'Canvas menu';
+      return tm('menuLabel.canvas');
   }
 }

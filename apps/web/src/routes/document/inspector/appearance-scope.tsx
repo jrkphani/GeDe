@@ -59,8 +59,8 @@ export function useAppearanceScope(
   const [scope, setScope] = useState<AppearanceScopeKind>('column');
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
   const address = cell === null ? null : cellAddress(table, cell.rowId, cell.colId);
-  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
-  const disabledReason = viewOnly ?? (column === null ? 'select a cell first' : undefined);
+  const viewOnly = editable ? undefined : (readOnlyReason ?? t('reason.viewOnly'));
+  const disabledReason = viewOnly ?? (column === null ? t('reason.selectCell') : undefined);
   const override =
     cell === null || column === null ? null : cellAppearanceOverride(table, cell.rowId, column.id);
   const cellOnly = scope === 'cell';

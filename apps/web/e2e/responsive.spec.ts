@@ -19,7 +19,7 @@ const VALID_EMAIL = 'someone@example.com';
 async function assertSignInLayout(page: Page, label: string) {
   await page.goto('/sign-in');
   const heading = page.getByRole('heading', { level: 1 });
-  const modes = page.getByRole('radiogroup', { name: 'Sign in or create account' });
+  const modes = page.getByRole('radiogroup', { name: 'Sign in or sign up' });
   const email = page.getByLabel('Email');
   const continueButton = page.getByRole('button', { name: 'Continue' });
 
@@ -87,10 +87,7 @@ for (const width of BREAKPOINTS) {
           if (box.height < 44 || box.width < 44) short.push(`${name} ${box.width}×${box.height}`);
         };
         await measure('Sign in segment', page.getByRole('radio', { name: 'Sign in' }));
-        await measure(
-          'Create account segment',
-          page.getByRole('radio', { name: 'Create account' }),
-        );
+        await measure('Sign up segment', page.getByRole('radio', { name: 'Sign up' }));
         await measure('Email', email);
         await measure('Continue', page.getByRole('button', { name: 'Continue' }));
         await email.press('Enter');

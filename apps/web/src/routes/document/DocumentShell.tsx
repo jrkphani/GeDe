@@ -13,6 +13,7 @@ import {
   isLastSheet,
   isSheetLocked,
   LATTICE,
+  snapPoint,
   listSections,
   listSheets,
   lockReasonAt,
@@ -21,6 +22,7 @@ import {
   renameSection,
   renameSheet,
   sectionLockReason,
+  sectionRangeAt,
   setSectionLocked,
   setSheetLocked,
   sheetBounds,
@@ -67,6 +69,7 @@ import {
   fitViewport,
   INITIAL_VIEWPORT,
   revealBounds,
+  toCanvas,
   visibleRange,
   ZOOM_STEP,
   zoomBy,
@@ -358,6 +361,12 @@ function OpenDocument({
   const [menuOpen, setMenuOpen] = useState(false);
   // SET-01: Add table asks the kind first; SET-10: Fill column with formula… on one column.
   const [addTableOpen, setAddTableOpen] = useState(false);
+  // SET-01: where the dialog's table goes when a place on the canvas asked for it.
+  const [addTableAt, setAddTableAt] = useState<{ x: number; y: number } | undefined>();
+  const openAddTable = useCallback((at?: { x: number; y: number }) => {
+    setAddTableAt(at);
+    setAddTableOpen(true);
+  }, []);
   const [fillTarget, setFillTarget] = useState<{ tableId: Id; colId: Id } | null>(null);
   // RESP-02, non-negotiable 5: a dialog that edits goes when editing does — the window
   // narrows to a phone, access drops to view-only, or sync turns read-only.
@@ -678,21 +687,28 @@ function OpenDocument({
   const selectTable = tableActions.selectTable;
 
   // -- structure --------------------------------------------------------------
+  // SET-01: where Add table puts the table: the pointer's place on the canvas, else below
+  // the sheet's last table.
+  const tableOrigin = useCallback(
+    (at?: { x: number; y: number }) => {
+      if (activeSheetId === null) return { col: 1, row: 1 };
+      const bounds = sheetBounds(gd, activeSheetId);
+      // One snap (as createTable's) for the dialog's section, the lock check and the table.
+      if (at !== undefined) return snapPoint(at);
+      return bounds === null
+        ? { col: 1, row: 1 }
+        : { col: bounds.col, row: bounds.row + bounds.rows + 1 };
+    },
+    [gd, activeSheetId],
+  );
+  const addTableOrigin = addTableOpen ? tableOrigin(addTableAt) : { col: 1, row: 1 };
+  const addTableCol = addTableOrigin.col;
   const addTable = useCallback(
     (at?: { x: number; y: number }, kind: TableKind = 'plain', pick?: SetPick) => {
       if (activeSheetId === null || !editable) return;
-      const bounds = sheetBounds(gd, activeSheetId);
-      const origin =
-        at ??
-        (bounds === null
-          ? { col: 1, row: 1 }
-          : { col: bounds.col, row: bounds.row + bounds.rows + 1 });
+      const origin = tableOrigin(at);
       // SET-18: nothing is added in a locked section or on a locked sheet.
-      const lock = lockReasonAt(
-        gd,
-        activeSheetId,
-        'col' in origin ? origin.col : Math.floor(origin.x / LATTICE.col),
-      );
+      const lock = lockReasonAt(gd, activeSheetId, origin.col);
       if (lock !== null) {
         announce(
           sentence(
@@ -711,24 +727,36 @@ function OpenDocument({
       selectTable(id);
       announce(translate(activeLocale, 'addTable.added', { table: record?.title ?? '' }));
     },
-    [gd, activeSheetId, editable, reveal, selectTable, activeLocale],
+    [gd, activeSheetId, editable, reveal, selectTable, activeLocale, tableOrigin],
   );
   // SET-17, SET-18: sections are named lanes; Rename section… is an inline field on the heading.
   const [renamingSection, setRenamingSection] = useState<Id | null>(null);
-  const addSectionHere = useCallback(() => {
-    if (activeSheetId === null || !editable) return;
-    if (isSheetLocked(gd, activeSheetId)) {
-      announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
-      return;
-    }
-    const name = translate(activeLocale, 'section.defaultName', {
-      n: listSections(gd, activeSheetId).length + 1,
-    });
-    session.undo.stopCapturing();
-    const id = addSection(gd, activeSheetId, { name, ...nextSectionRange(gd, activeSheetId) });
-    session.undo.stopCapturing();
-    if (id !== null) announce(translate(activeLocale, 'section.added', { name }));
-  }, [gd, session, activeSheetId, editable, activeLocale]);
+  const addSectionHere = useCallback(
+    (planeX?: number) => {
+      if (activeSheetId === null || !editable) return;
+      if (isSheetLocked(gd, activeSheetId)) {
+        announce(sentence(translate(activeLocale, 'readOnly.sheetLocked')));
+        return;
+      }
+      const name = translate(activeLocale, 'section.defaultName', {
+        n: listSections(gd, activeSheetId).length + 1,
+      });
+      // SET-17: at the pointer's lattice column when the menu opened under one.
+      const range =
+        planeX === undefined
+          ? nextSectionRange(gd, activeSheetId)
+          : sectionRangeAt(
+              gd,
+              activeSheetId,
+              Math.floor(toCanvas(viewport, { x: planeX, y: 0 }).x / LATTICE.col),
+            );
+      session.undo.stopCapturing();
+      const id = addSection(gd, activeSheetId, { name, ...range });
+      session.undo.stopCapturing();
+      if (id !== null) announce(translate(activeLocale, 'section.added', { name }));
+    },
+    [gd, session, activeSheetId, editable, activeLocale, viewport],
+  );
   const commitSectionRename = useCallback(
     (sectionId: Id, name: string): RenameResult => {
       if (activeSheetId === null || !editable) return { ok: false, reason: '' };
@@ -1111,7 +1139,7 @@ function OpenDocument({
       : undefined,
     canvas: {
       addTable: () => {
-        setAddTableOpen(true);
+        openAddTable();
       },
       addGraph: graphs.actions.startPointing,
       addShapedTable: () => {
@@ -1239,7 +1267,7 @@ function OpenDocument({
           editable={editable}
           inspector={inspectorOpen ? inspectorMode : null}
           onAddTable={() => {
-            setAddTableOpen(true);
+            openAddTable();
           }}
           onAddGraph={graphs.actions.startPointing}
           onAddRow={addRowToSelected}
@@ -1440,7 +1468,7 @@ function OpenDocument({
               onPlaceTable={
                 editable
                   ? (at) => {
-                      addTable(at);
+                      openAddTable(at);
                     }
                   : undefined
               }
@@ -1589,10 +1617,10 @@ function OpenDocument({
                             e.stopPropagation();
                           }}
                           onClick={() => {
-                            addTable();
+                            openAddTable();
                           }}
                         >
-                          Add first table
+                          {t('addTable.first')}
                         </Button>
                         {/* PRD §19: the empty-sheet menu is Table / Shaped table / Graph. */}
                         <Button
@@ -1755,11 +1783,12 @@ function OpenDocument({
         <AddTableDialog
           gd={gd}
           sheetId={activeSheetId}
+          col={addTableCol}
           open={addTableOpen}
           onOpenChange={setAddTableOpen}
           onAdd={(kind, pick) => {
             setAddTableOpen(false);
-            addTable(undefined, kind, pick);
+            addTable(addTableAt, kind, pick);
           }}
         />
       )}

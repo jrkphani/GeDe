@@ -217,7 +217,14 @@ export function DocumentContextMenu({
               event.stopPropagation();
               return;
             }
-            setTarget(next);
+            // SET-17: Add section starts at the pointer's column.
+            const plane =
+              event.target instanceof Element ? event.target.closest('.gd-canvas__plane') : null;
+            setTarget(
+              next.kind === 'canvas' && plane !== null
+                ? { ...next, planeX: event.clientX - plane.getBoundingClientRect().left }
+                : next,
+            );
             // A right-click selects like a left-click does (desktop parity, MENU-01).
             if (next.kind === 'cell') {
               actions.selectCell({ tableId: next.tableId, rowId: next.rowId, colId: next.colId });

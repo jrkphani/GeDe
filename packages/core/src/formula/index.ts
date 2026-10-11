@@ -39,10 +39,12 @@ export {
   normaliseElement,
   MAX_CROSS_TUPLES,
   crossCardinality,
+  crossTuples,
   power,
   powerCardinality,
   splitSetElements,
   splitSetPieces,
+  unenclosableElement,
   union,
 } from './sets.js';
 export {

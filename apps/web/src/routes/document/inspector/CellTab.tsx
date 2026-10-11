@@ -112,8 +112,8 @@ export function CellTab({ gd, table, cell, editable, commands, readOnlyReason }:
     readOnlyReason,
   );
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
-  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
-  const needsCell = column === null ? 'select a cell first' : undefined;
+  const viewOnly = editable ? undefined : (readOnlyReason ?? t('reason.viewOnly'));
+  const needsCell = column === null ? t('reason.selectCell') : undefined;
   const disabledReason = viewOnly ?? needsCell;
   const override = cell === null ? null : cellFormatOverride(table, cell.rowId, cell.colId);
   const cellOnly = scope === 'cell';
@@ -143,7 +143,7 @@ export function CellTab({ gd, table, cell, editable, commands, readOnlyReason }:
     if (column === null || cell === null || !editable) return;
     if (cellOnly) setCellFormat(gd, record.id, cell.rowId, cell.colId, kind, opts);
     else setColumnFormat(gd, record.id, column.id, kind, opts);
-    announce(scopeSentence(kind, opts.currency) ?? 'Format applied');
+    announce(scopeSentence(kind, opts.currency) ?? t('inspector.announce.formatApplied'));
   };
   const setKind = (kind: FormatKind) => {
     const opts: FormatOpts = { ...effective.opts };
@@ -266,7 +266,11 @@ export function CellTab({ gd, table, cell, editable, commands, readOnlyReason }:
               reason={viewOnly}
               onClick={() => {
                 setCellFormat(gd, record.id, cell.rowId, cell.colId, null);
-                announce(`${address ?? 'The cell'} follows the column format again`);
+                announce(
+                  address === null
+                    ? t('inspector.announce.cellFollowsColumn')
+                    : t('inspector.announce.followsColumn', { address }),
+                );
               }}
             />
           )}
@@ -331,7 +335,7 @@ export function CellTab({ gd, table, cell, editable, commands, readOnlyReason }:
             disabledReason={
               look.disabledReason ??
               (look.effective.border === undefined || look.effective.border.edges === 'none'
-                ? 'pick an edge first'
+                ? t('reason.pickEdgeFirst')
                 : undefined)
             }
             onValueChange={(weight) => {

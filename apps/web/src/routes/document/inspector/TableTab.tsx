@@ -56,11 +56,11 @@ const KIND_LABEL: Readonly<Record<TableKind, MessageKey>> = {
 /** The "Outline column" select's value for "no designation: the first visible column" (ADR-052). */
 const OUTLINE_DEFAULT = 'first';
 
-const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
-  none: 'None',
-  hairline: 'Hairline',
-  strong: 'Strong',
-  accent: 'Accent',
+const OUTLINE_LABELS: Readonly<Record<OutlineWeight, MessageKey>> = {
+  none: 'inspector.none',
+  hairline: 'inspector.hairline',
+  strong: 'inspector.strong',
+  accent: 'inspector.accent',
 };
 
 interface CaptionFieldProps {
@@ -126,7 +126,7 @@ export function TableTab({
 }: TableTabProps) {
   const t = useMessages();
   const record = tableRecord(table);
-  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
+  const viewOnly = editable ? undefined : (readOnlyReason ?? t('reason.viewOnly'));
   const rows = record.rows.length;
   const columns = record.columns.length;
   const visibleWidth = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);
@@ -185,8 +185,8 @@ export function TableTab({
     viewOnly ??
     (namedColumn === null
       ? columnBand !== null && columnBand.ids.length > 1
-        ? 'select one column'
-        : 'select a column first'
+        ? t('reason.selectOneColumn')
+        : t('reason.selectColumn')
       : columnRenameReason(namedColumn));
 
   return (
@@ -328,7 +328,7 @@ export function TableTab({
             min={0}
             max={1}
             disabledReason={viewOnly}
-            decrementReason="the header row is hidden"
+            decrementReason={t('reason.headerHidden')}
             onChange={(next) => {
               commands.setHeaderRows(record.id, next === 0 ? 0 : 1);
             }}
@@ -359,7 +359,7 @@ export function TableTab({
             min={0}
             max={1}
             disabledReason={viewOnly}
-            decrementReason="the footer is hidden"
+            decrementReason={t('reason.footerHidden')}
             onChange={(next) => {
               commands.setFooterRows(record.id, next === 0 ? 0 : 1);
             }}
@@ -374,7 +374,7 @@ export function TableTab({
             value={rows}
             min={lastRowReason === undefined ? 1 : rows}
             disabledReason={viewOnly}
-            decrementReason={lastRowReason ?? 'a table keeps at least one row'}
+            decrementReason={lastRowReason ?? t('reason.lastRow')}
             onChange={(next) => {
               if (next > rows) commands.insertRowBelow(record.id);
               else if (lastRow !== undefined) commands.deleteRow(record.id, lastRow);
@@ -386,7 +386,7 @@ export function TableTab({
             value={columns}
             min={1}
             disabledReason={viewOnly}
-            decrementReason="a table keeps at least one column"
+            decrementReason={t('reason.oneColumnMin')}
             onChange={(next) => {
               if (next > columns) commands.insertColumnAfter(record.id);
               else if (lastColumn !== undefined) commands.deleteColumn(record.id, lastColumn.id);
@@ -403,7 +403,7 @@ export function TableTab({
             onValueChange={(outline) => {
               commands.setTableLook(record.id, { outline });
             }}
-            options={OUTLINE_WEIGHTS.map((w) => ({ value: w, label: OUTLINE_LABELS[w] }))}
+            options={OUTLINE_WEIGHTS.map((w) => ({ value: w, label: t(OUTLINE_LABELS[w]) }))}
           />
           <Select
             label={t('inspector.gridlineDensity')}
@@ -477,7 +477,7 @@ export function TableTab({
             value={visibleWidth}
             min={Math.max(1, record.columns.filter((c) => !c.hidden).length)}
             disabledReason={viewOnly}
-            decrementReason="every visible column is already one unit wide"
+            decrementReason={t('reason.columnsOneWide')}
             onChange={(next) => {
               commands.scaleTable(record.id, { widthUnits: next });
             }}

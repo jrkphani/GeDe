@@ -19,6 +19,7 @@ import {
   openDocument,
   renameColumn,
   setCellText,
+  setColumnWidth,
   setTableLook,
   tableRecord,
   tablesOnSheet,
@@ -599,15 +600,14 @@ test('SET-06 SET-07 at 1440 px a family states each row as element, set or famil
     await page.keyboard.press('Control+BracketRight');
   }
   await expect(section.getByTestId('set-kind-badge')).toHaveText('Family of sets');
-  // A kind column (SET-06), headed “kind”, inside the table's right edge.
-  await expect(section.getByTestId('set-kind-header')).toHaveText('kind');
-  await expect(section.getByTestId('set-kind')).toHaveText([
+  // The kind (SET-06) is words inside each range cell; there is no kind column.
+  await expect(section.getByTestId('set-note')).toHaveText([
     'element',
     'set',
     'element',
     'element',
   ]);
-  await expect(section.getByTestId('set-note')).toHaveCount(0);
+  await expect(section.getByTestId('set-kind-header')).toHaveCount(0);
   await expect(section.getByTestId('set-degree')).toHaveText([
     '−2°',
     '−1°',
@@ -776,7 +776,7 @@ test.describe('Phase 4 red-team regressions', () => {
   });
 
   for (const width of [768, 1024] as const) {
-    test(`SET-06 SET-07 at ${String(width)} px a family’s kind column and rail sit inside the table`, async ({
+    test(`SET-06 SET-07 at ${String(width)} px a family’s kind words and rail sit inside the table`, async ({
       page,
       checkA11y,
     }) => {
@@ -786,7 +786,7 @@ test.describe('Phase 4 red-team regressions', () => {
       await signInTo(page, `/d/${DOC_ID}`);
       const section = page.locator('section[aria-label="T"]');
       await expect(section.getByRole('treegrid', { name: 'T' })).toBeVisible();
-      await expect(section.getByTestId('set-kind')).toHaveText([
+      await expect(section.getByTestId('set-note')).toHaveText([
         'element',
         'set',
         'element',
@@ -794,7 +794,7 @@ test.describe('Phase 4 red-team regressions', () => {
       ]);
       const box = (await section.boundingBox())!;
       for (const el of [
-        ...(await section.getByTestId('set-kind').all()),
+        ...(await section.getByTestId('set-note').all()),
         ...(await section.getByTestId('set-degree').all()),
       ]) {
         const b = (await el.boundingBox())!;
@@ -814,8 +814,8 @@ test.describe('Phase 4 red-team regressions', () => {
     await asPhone(page, 480, 900);
     await signInTo(page, `/d/${DOC_ID}`);
     const section = page.locator('section[aria-label="T"]');
-    await expect(section.getByTestId('set-kind').first()).toBeVisible();
-    await expect(section.getByTestId('set-kind')).toHaveText([
+    await expect(section.getByTestId('set-note').first()).toBeVisible();
+    await expect(section.getByTestId('set-note')).toHaveText([
       'element',
       'set',
       'element',
@@ -830,7 +830,7 @@ test.describe('Phase 4 red-team regressions', () => {
 
 test.describe('Phase 4 at 200 % zoom', () => {
   test.use(zoomed200(1440));
-  test('SET-03 SET-06 SET-07 A11Y-06 at 200 % zoom a family’s meta row, rail and kind column read and stay inside the table', async ({
+  test('SET-03 SET-06 SET-07 A11Y-06 at 200 % zoom a family’s meta row, rail and kind words read and stay inside the table', async ({
     page,
     checkA11y,
   }) => {
@@ -838,7 +838,7 @@ test.describe('Phase 4 at 200 % zoom', () => {
     seedFamily(room);
     await signInTo(page, `/d/${DOC_ID}`);
     const section = page.locator('section[aria-label="T"]');
-    await expect(section.getByTestId('set-kind').first()).toBeVisible();
+    await expect(section.getByTestId('set-note').first()).toBeVisible();
     expect(await clippedFacts(page, section)).toEqual([]);
     const box = (await section.boundingBox())!;
     for (const el of await section.getByTestId('set-degree').all()) {
@@ -904,7 +904,7 @@ test.describe('Phase 4 second red-team regressions', () => {
   });
 
   for (const width of [1440, 1024, 768] as const) {
-    test(`SET-06 at ${String(width)} px a one-column family: the kind column is a column of its own, the elements read whole`, async ({
+    test(`SET-06 at ${String(width)} px a one-column family: the kind is words in the cell, inside the table`, async ({
       page,
       checkA11y,
     }) => {
@@ -922,36 +922,28 @@ test.describe('Phase 4 second red-team regressions', () => {
       const record = tableRecord(seeded.tables.get(id)!);
       const [first, second, third] = record.rows;
       const range = record.columns[0]!.id;
+      // 320 px, the width a set's meta row is drawn for (SET-03); the kind no longer widens it.
+      setColumnWidth(seeded, id, range, 2);
       setCellText(seeded, id, first!, range, 'Alphabetical');
       setCellText(seeded, id, second!, range, 'beta');
       setCellText(seeded, id, third!, range, 'gamma');
       nestRow(seeded, id, second!);
       nestRow(seeded, id, third!);
-      // A table abutting the family's kind column on the right is never drawn over.
+      // A table abutting the family on the right is never drawn over.
       createTable(seeded, { sheetId, at: { col: 4, row: 1 }, columns: 1, rows: 1, title: 'Next' });
       await asDesktop(page, width, 900);
       await signInTo(page, `/d/${DOC_ID}`);
       const section = page.locator('section[aria-label="F"]');
-      await expect(section.getByTestId('set-kind')).toHaveText(['set', 'element', 'element']);
-      const tags = await section.locator('.gd-set-kind__tag').all();
+      await expect(section.getByTestId('set-note')).toHaveText(['set', 'element', 'element']);
+      const tags = await section.getByTestId('set-note').all();
       const cells = await section.getByRole('row').getByRole('gridcell').all();
       expect(cells).toHaveLength(3);
       for (const [i, cell] of cells.entries()) {
-        // The whole text — not its clipped box — ends before the kind tag begins.
-        const textRight = await cell.evaluate((el) => {
-          const range = document.createRange();
-          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-          let right = 0;
-          for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
-            range.selectNodeContents(n);
-            right = Math.max(right, range.getBoundingClientRect().right);
-          }
-          return right;
-        });
         const tag = (await tags[i]!.boundingBox())!;
-        expect(textRight, `row ${String(i)}`).toBeLessThanOrEqual(tag.x + 0.5);
         const box = (await cell.boundingBox())!;
-        expect(textRight, `row ${String(i)} fits its cell`).toBeLessThanOrEqual(box.x + box.width);
+        expect(tag.x + tag.width, `row ${String(i)} note fits its cell`).toBeLessThanOrEqual(
+          box.x + box.width + 0.5,
+        );
       }
       // Every meta value reads (a value, never an empty pill), and the badge reads whole.
       expect(await clippedFacts(page, section)).toEqual([]);
@@ -960,7 +952,7 @@ test.describe('Phase 4 second red-team regressions', () => {
       }
       const badge = section.getByTestId('set-kind-badge');
       expect(await badge.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-      // The kind column stays inside the family; the next table is not drawn over.
+      // The words stay inside the family; the next table is not drawn over.
       const familyBox = (await section.boundingBox())!;
       const nextBox = (await page.locator('section[aria-label="Next"]').boundingBox())!;
       for (const tag of tags) {
@@ -989,7 +981,7 @@ test.describe('Phase 4 second red-team regressions', () => {
     // REF-01: `@` in a plain cell opens the picker; the set A is offered whole, first, and
     // Enter picks it and commits the reference.
     await typeInto(page, 'T', 1, 0, '@A');
-    await expect(section.getByTestId('set-kind')).toHaveText([
+    await expect(section.getByTestId('set-note')).toHaveText([
       'element',
       'set',
       'element',

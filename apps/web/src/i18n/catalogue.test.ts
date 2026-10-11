@@ -281,7 +281,8 @@ describe('message catalogue', () => {
     const sources = readdirSync(dir)
       .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
       .map((f) => resolve(dir, f));
-    const literal = /\b(label|aria-label|title|hint|placeholder|available)="[A-Za-z]/;
+    const literal =
+      /\b(label|aria-label|title|hint|placeholder|available|decrementReason|disabledReason)="[A-Za-z]/;
     for (const file of sources) {
       const hits = readFileSync(file, 'utf8')
         .split('\n')
@@ -294,6 +295,70 @@ describe('message catalogue', () => {
     expect(
       Object.keys(CATALOGUE['ta-IN']).filter((k) => k.startsWith('inspector.')).length,
     ).toBeGreaterThan(100);
+  });
+
+  test('SET-19 no literal label, aria-label, title, placeholder or hint in apps/web/src uses Create, Insert, New, Place or Choose', () => {
+    const banned = /\b(Create|Creating|Insert|Inserting|New|Place|Choose)\b/i;
+    // A label-like prop or key whose value is a string or template literal.
+    const labelled =
+      /\b(label|loadingLabel|clearLabel|aria-label|title|placeholder|hint|disabledReason|reason|action)(=\{?|: )(['"`])([^'"`]*)\3/g;
+    const root = resolve(__dirname, '..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = resolve(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(e.name) && !e.name.includes('.test.')) files.push(p);
+      }
+    };
+    walk(root);
+    expect(files.length).toBeGreaterThan(100);
+    const hits: string[] = [];
+    for (const file of files) {
+      if (file.startsWith(resolve(root, 'i18n'))) continue;
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          for (const m of line.matchAll(labelled)) {
+            if (banned.test(m[4]!)) hits.push(`${file}:${String(i + 1)} ${m[0]}`);
+          }
+        });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  test('SET-19 disabled reasons, menu names and forms-menu hints live in the catalogue, not in menu, toolbar, formula or inspector source', () => {
+    const phrases = MESSAGE_KEYS.filter(
+      (k) => /^(reason|menuLabel)\./.test(k) || /^forms\..*\.(hint|disabled)$/.test(k),
+    ).map((k) => CATALOGUE['en-US'][k]);
+    expect(phrases.length).toBeGreaterThan(40);
+    const docDir = resolve(__dirname, '../routes/document');
+    const files = [
+      'menus/entries.ts',
+      'grid/TableMenu.tsx',
+      'Toolbar.tsx',
+      'formula/use-formula-adornments.tsx',
+      ...readdirSync(resolve(docDir, 'inspector'))
+        .filter((f) => /\.tsx?$/.test(f) && !f.includes('.test.') && f !== 'slots.tsx')
+        .map((f) => `inspector/${f}`),
+    ];
+    for (const file of files) {
+      const src = readFileSync(resolve(docDir, file), 'utf8');
+      for (const phrase of phrases) {
+        expect(src, `${file}: ${phrase}`).not.toContain(`'${phrase}'`);
+        expect(src, `${file}: ${phrase}`).not.toContain(`"${phrase}"`);
+      }
+    }
+    // A reason built by joining English to a key's text is still English.
+    expect(readFileSync(resolve(docDir, 'menus/entries.ts'), 'utf8')).not.toContain(
+      'cells are read-only',
+    );
+    for (const locale of LOCALES) {
+      for (const key of ['reason.viewOnly', 'menuLabel.cell', 'forms.sum.hint'] as const) {
+        expect(CATALOGUE[locale][key], `${locale} ${key}`).not.toBe('');
+      }
+    }
+    expect(CATALOGUE['hi-IN']['reason.viewOnly']).not.toBe(CATALOGUE['en-US']['reason.viewOnly']);
   });
 
   test('SET-19 library phone copy says Add, not create', () => {

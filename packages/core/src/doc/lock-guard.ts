@@ -4,40 +4,57 @@
  *
  * A refused update is still applied: a client's later updates build on its earlier ones, so
  * dropping one would leave every one after it waiting for it for good. Its effect on the locked
- * tables is undone instead — each is put back as it was, in a write the room broadcasts, so the
+ * tables is undone instead. Each is put back as it was, in a write the room broadcasts, so the
  * client that sent it converges on the locked content.
  *
- * An update is applied to a copy of the document and the tables it changes are read off the
+ * The update is applied to a copy of the document and the tables it changes are read off the
  * copy's events. A change counts when the table was locked before the update (an edit that
  * unlocks and edits at once is refused whole), or locked where the update leaves it (a table
  * moved into a locked lane, a new table in one).
- * What counts as an edit: a table added or removed, its own keys (title, place, look…), its
- * columns, its cell formats and spans, a row added or removed that a person owns, and the
- * text of a cell on such a row. Left alone because machines write them in a locked table too
- * — a computed table follows its formula, a pulled or split row follows its source — and no
- * replica can tell, from the update, whose hand wrote them: the reconcilers' bookkeeping keys
- * and rows whose meta, as it was before the update, marks them as machine-written. A row the
- * update adds is read by its own meta only in a machine-driven table (a computed formula or a
- * non-entered column, judged as the table was before the update; a formula in a cell does not
- * make one), and only when the tag is backed: a computed key needs the table's formula and its
- * computedIds entry, a pulled row needs a source table and row that exist once the update lands and a pull spec on
- * the receiving table. Anything else is a person's row. A tag is backed only by what the
- * reconciler would derive, never by a voucher the update writes itself: a computed row has the id
- * its key gives it, a pulled row its source row's id, and the only cell a reconciler writes is the
- * pull column bound to the source cell, so a pulled row's other text and a computed row's text are
- * edits. A row that stays keeps its tag: a pulled row its source, a computed row the key its id
- * gives it; computedIds entries must match too. shortcut: the key of a computed row (shown until the next reconcile drops it), and a
- * split, followed or band tag with its cells, are trusted in a machine-driven table; the sync
- * service has no formula engine, so when rows carry a signed provenance, close them.
- * Row order alone is not an edit. A locked sheet is put back if deleted, with all its tables;
- * a locked section's name and columns are put back.
+ *
+ * What counts as an edit: a table added or removed, its own keys (title, place, look...), its
+ * columns, its cell formats and spans, a row added or removed that a person owns, and the text
+ * of a cell on such a row, a person's row id listed twice, and the order of the person's rows that stay (a machine row may be reordered among its own, not moved past a person's row). Machines write some things in a
+ * locked table too (a computed table follows its formula, a pulled or split row follows its
+ * source) and no replica can tell from the update whose hand wrote them. So the reconcilers'
+ * bookkeeping keys, and rows whose meta before the update marks them as machine-written, are
+ * left alone.
+ *
+ * A row the update adds is read by its own meta only in a machine-driven table (a computed
+ * formula, a non-entered column or a family of sets, judged as the table was before the update;
+ * a formula in a cell does not make one), and only when each tag is backed by what the
+ * reconciler would derive. The update never vouches for itself. A computed row has the id its
+ * key gives it, the table's formula and a computedIds entry. A pulled row has its source row's
+ * id, a source row that exists, and a pull spec on the receiving table. A split child has the
+ * id its parent and index give it, a parent row and a Split column from before the update. A
+ * followed row has the id its referencing row and source row give it, with both the row and the
+ * set from before the update. A category band is never backed: nothing writes one. A computedIds
+ * entry counts only beside its row. A row that stays keeps its tag. Anything unbacked is a
+ * person's row.
+ *
+ * The only cell a reconciler writes on a pulled row is the pull column bound to the source cell,
+ * so a pulled row's other text and a computed row's text are edits.
+ *
+ * A split child's text must be the piece its parent's source cell divides into, and a followed
+ * row's text what its set holds, both re-derived here; any other text on them is an edit.
+ *
+ * shortcut: the service has no formula engine, so it cannot check a computed row's key against
+ * the result (it shows until the next reconcile drops it); when rows carry a signed
+ * provenance, close it.
+ *
+ * A locked sheet is put back if deleted, with all its tables; a locked section's name and
+ * columns are put back.
  */
 import * as Y from 'yjs';
 
 import type { Id } from '../ids.js';
 import { computedRowId } from '../ref/computed.js';
 import { pulledCellSource, pullOf } from '../ref/pull.js';
-import { isCellKey, splitCellKey } from '../ids.js';
+import { splitChildId, splitColumnOf } from '../ref/split.js';
+import { applyMethod } from '../formula/methods.js';
+import { cellRich } from '../text/mutations.js';
+import { followedCellDerived, followedRowId } from './set-table.js';
+import { cellKey, isCellKey, splitCellKey } from '../ids.js';
 import {
   anyLock,
   listSections,
@@ -48,7 +65,10 @@ import {
 } from './sections.js';
 import {
   cellsMap,
+  cellText,
   columnsArray,
+  deriveArgValues,
+  isFormula,
   readColumnSource,
   openDocument,
   readString,
@@ -56,6 +76,7 @@ import {
   rowReadOnlyReason,
   rowsArray,
   tableMap,
+  tableRecord,
   type GedeDoc,
   type TableMap,
 } from './schema.js';
@@ -65,6 +86,29 @@ const MACHINE_TABLE_KEYS: ReadonlySet<string> = new Set(['computedRows', 'comput
 
 /** Origin of the write that puts locked tables back (never an undo step on any replica). */
 export const LOCK_RESTORE_ORIGIN = 'lock-restore';
+
+/**
+ * The pieces a split parent's source cell divides into, or null when they cannot be re-derived
+ * here (no Split column, or a formula source: the service has no engine).
+ */
+function splitPieces(
+  table: TableMap,
+  parentRow: Id,
+): readonly { kind: string; text?: string }[] | null {
+  const spec = tableRecord(table).columns.find((c) => c.derive?.method === 'Split')?.derive;
+  if (spec == null || isFormula(cellsMap(table).get(cellKey(parentRow, spec.sourceColId))))
+    return null;
+  const pieces = applyMethod(
+    'Split',
+    deriveArgValues(spec),
+    cellRich(table, parentRow, spec.sourceColId),
+  );
+  return pieces.ok && pieces.value.kind === 'list' ? pieces.value.items : null;
+}
+
+function rowsList(table: TableMap | null): Id[] {
+  return table === null ? [] : rowsArray(table).toArray();
+}
 
 function rowsOf(table: TableMap | null): Set<Id> {
   return new Set(table === null ? [] : rowsArray(table).toArray());
@@ -96,6 +140,7 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       return (
         t !== null &&
         (readString(t, 'computedFormula') !== '' ||
+          tableRecord(t).kind === 'family' ||
           columnsArray(t)
             .toArray()
             .some((c) => readColumnSource(c) !== 'entered'))
@@ -131,7 +176,34 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
         )
           return false;
       }
-      return true;
+      // A split child needs its parent row and a Split column, both from before the update.
+      const { splitOf, splitChild } = meta;
+      if (splitOf !== null || splitChild) {
+        if (
+          splitOf === null ||
+          splitColumnOf(tableRecord(before)) === null ||
+          !rowsOf(before).has(splitOf.rowId) ||
+          splitChildId(splitOf.rowId, splitOf.index) !== rowId ||
+          // No phantom child: its index must be a piece the parent's source cell makes.
+          splitOf.index >= (splitPieces(before, splitOf.rowId)?.length ?? 0)
+        )
+          return false;
+      }
+      // A followed row needs the referencing row and the set it follows, from before the update.
+      const ref = meta.setRefOf;
+      if (ref !== null) {
+        const followed = tableMap(gd, ref.tableId);
+        if (
+          followed === null ||
+          !rowsOf(before).has(ref.rowId) ||
+          !rowsArray(followed)
+            .toArray()
+            .some((s) => followedRowId(ref.rowId, s) === rowId)
+        )
+          return false;
+      }
+      // Nothing writes a stored category band, so none is backed.
+      return !meta.group;
     };
     // A row's provenance is read from the document as it was: an update cannot vouch for its
     // own writes by setting `pulledFrom` on a row a person owns. A row the update adds has no
@@ -169,7 +241,12 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       if (!(ids instanceof Y.Map)) return true;
       return (only ?? [...ids.keys()]).every((id) => {
         const key: unknown = ids.get(id);
-        return key === undefined || (typeof key === 'string' && computedRowId(tableId, key) === id);
+        return (
+          key === undefined ||
+          (typeof key === 'string' &&
+            computedRowId(tableId, key) === id &&
+            rowsOf(tableMap(after, tableId)).has(id))
+        );
       });
     };
     const machineRow = (tableId: Id, rowId: Id): boolean => machineMeta(tableId, rowId) !== null;
@@ -180,7 +257,16 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       const { rowId, colId } = splitCellKey(key);
       const meta = machineMeta(tableId, rowId);
       if (meta?.computedKey !== null) return false;
-      if (meta.pulledFrom === null) return true;
+      if (meta.pulledFrom === null) {
+        // A split child holds the piece its parent's source cell divides into; a followed
+        // row holds its set's source text. Any other text there is an edit.
+        const now = tableMap(after, tableId);
+        if (now === null || !rowsOf(now).has(rowId)) return true;
+        if (meta.splitChild || meta.splitOf !== null)
+          return splitCellDerived(now, rowId, colId, meta);
+        if (meta.setRefOf !== null) return followedCellDerived(after, tableId, rowId, colId);
+        return true;
+      }
       const before = tableMap(gd, tableId);
       const pull = before === null ? null : pullOf(before);
       const now = tableMap(after, tableId);
@@ -189,6 +275,24 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
       return value === undefined
         ? !rowsOf(now).has(rowId)
         : value === pulledCellSource(pull.spec, rowId);
+    };
+    const splitCellDerived = (
+      now: TableMap,
+      rowId: Id,
+      colId: Id,
+      meta: ReturnType<typeof rowMeta>,
+    ): boolean => {
+      const spec = tableRecord(now).columns.find((c) => c.id === colId)?.derive;
+      const parent = meta.splitOf;
+      if (spec?.method !== 'Split' || parent === null) return false;
+      // shortcut: a Split over a formula cell cannot be re-derived without the engine, so
+      // its children are refused in a locked table; when that bites, ship the engine's pieces.
+      const piece = splitPieces(now, parent.rowId)?.[parent.index];
+      return (
+        piece?.kind === 'text' &&
+        !isFormula(cellsMap(now).get(cellKey(rowId, colId))) &&
+        cellText(now, rowId, colId) === piece.text
+      );
     };
     const rowsMoved = new Set<Id>();
     after.tables.observeDeep((events) => {
@@ -229,10 +333,39 @@ export function lockedTablesEdited(gd: GedeDoc, update: Uint8Array): Id[] {
     // Row membership: a row added or removed that a person owns is an edit; one a reconciler
     // owns (pulled, split, followed, computed) is not.
     for (const tableId of rowsMoved) {
-      const was = rowsOf(tableMap(gd, tableId));
-      const now = rowsOf(tableMap(after, tableId));
+      const wasList = rowsList(tableMap(gd, tableId));
+      const nowList = rowsList(tableMap(after, tableId));
+      const was = new Set(wasList);
+      const now = new Set(nowList);
+      // A person's row listed twice puts one cell at two addresses (a machine row's transient
+      // twin, from two replicas inserting its deterministic id, is not one), and a person's rows
+      // in another order shift every address between them. A reconciler may reorder its own rows
+      // (a pulled block follows its source) but not move one past a person's row.
+      const kept = (list: readonly Id[], other: Set<Id>): string => {
+        const people: Id[] = [];
+        const machines: string[] = [];
+        for (const id of new Set(list)) {
+          if (!other.has(id)) continue;
+          if (machineRow(tableId, id)) machines.push(`${id}@${people.length}`);
+          else people.push(id);
+        }
+        return `${people.join()}|${machines.sort().join()}`;
+      };
+      const twice = nowList.some((id, i) => nowList.indexOf(id) !== i && !machineRow(tableId, id));
+      if (twice || kept(wasList, now) !== kept(nowList, was)) edit(tableId);
       for (const id of [...was, ...now]) {
         if (was.has(id) !== now.has(id) && !machineRow(tableId, id)) edit(tableId);
+        // A genuine split child stays while its piece exists: removing it shifts the rows below.
+        const gone = tableMap(gd, tableId);
+        const split =
+          was.has(id) && !now.has(id) && gone !== null ? rowMeta(gone, id).splitOf : null;
+        const left = tableMap(after, tableId);
+        if (
+          split !== null &&
+          left !== null &&
+          split.index < (splitPieces(left, split.rowId)?.length ?? 0)
+        )
+          edit(tableId);
       }
     }
     return [...offending];

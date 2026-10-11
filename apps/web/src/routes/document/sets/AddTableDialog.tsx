@@ -5,15 +5,27 @@
  * and radio group (`@gede/ui`): focus is trapped, Escape closes, focus returns to the opener.
  */
 import { Button, Dialog, RadioCards, type RadioCardOption } from '@gede/ui';
-import type { GedeDoc, Id, TableKind } from '@gede/core';
-import { useState } from 'react';
+import {
+  listSections,
+  sectionAtColumn,
+  SET_DEGREE,
+  type GedeDoc,
+  type Id,
+  type TableKind,
+} from '@gede/core';
+import { useId, useState } from 'react';
 
 import { useYVersion } from '../../../doc/use-y.js';
+import { formatNumber } from '../../../intl.js';
+import { useLocale, type Locale } from '../../../locale.js';
 import { useMessages, type MessageKey } from '../../../i18n/index.js';
+import { previewPick, type ResultPreview } from './preview.js';
 import { defaultPick, SetPicker } from './SetPicker.js';
 import {
   FORMULA_OPERATIONS,
   isComputedKind,
+  pickDisplay,
+  pickName,
   pickReady,
   setsOnSheet,
   TABLE_KINDS,
@@ -36,10 +48,47 @@ const LABEL: Readonly<Record<TableKind, readonly [MessageKey, MessageKey]>> = {
   product: ['addTable.kind.product', 'addTable.kind.product.hint'],
 };
 
+const FIRST = '+1\u00B0';
+const { meta: META, title: TITLE, header: HEADER } = SET_DEGREE;
+
+/** The rows each kind starts with: their degree (SET-07) and what the row holds. */
+const STARTS: Readonly<Record<TableKind, readonly (readonly [string, MessageKey])[]>> = {
+  plain: [
+    [HEADER, 'addTable.rows.plain.header'],
+    [FIRST, 'addTable.rows.plain.first'],
+  ],
+  simple: [
+    [META, 'addTable.rows.simple.meta'],
+    [TITLE, 'addTable.rows.simple.title'],
+    [HEADER, 'addTable.rows.simple.header'],
+    [FIRST, 'addTable.rows.simple.first'],
+  ],
+  family: [
+    [META, 'addTable.rows.family.meta'],
+    [TITLE, 'addTable.rows.family.title'],
+    [HEADER, 'addTable.rows.family.header'],
+    [FIRST, 'addTable.rows.family.first'],
+  ],
+  computed: [
+    [META, 'addTable.rows.computed.meta'],
+    [TITLE, 'addTable.rows.computed.title'],
+    [HEADER, 'addTable.rows.computed.header'],
+    [FIRST, 'addTable.rows.computed.first'],
+  ],
+  product: [
+    [META, 'addTable.rows.product.meta'],
+    [TITLE, 'addTable.rows.product.title'],
+    [HEADER, 'addTable.rows.product.header'],
+    [FIRST, 'addTable.rows.product.first'],
+  ],
+};
+
 export interface AddTableDialogProps {
   gd: GedeDoc;
   /** The sheet the table goes on; its set tables are the operands offered. */
   sheetId: Id;
+  /** The lattice column the table lands in: names its section when the sheet has sections. */
+  col: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Add the table; the shell places, reveals, selects and announces it. */
@@ -51,9 +100,11 @@ export function AddTableDialog(props: AddTableDialogProps) {
   return props.open ? <AddTableSteps {...props} /> : null;
 }
 
-function AddTableSteps({ gd, sheetId, open, onOpenChange, onAdd }: AddTableDialogProps) {
+function AddTableSteps({ gd, sheetId, col, open, onOpenChange, onAdd }: AddTableDialogProps) {
   const t = useMessages();
+  const [locale] = useLocale();
   const [kind, setKind] = useState<TableKind>('plain');
+  const startsId = useId();
   const [step, setStep] = useState<'kind' | 'sets'>('kind');
   // The sets are read from the document on every change to it: a set a peer renames or
   // deletes while the dialog is open shows as it is.
@@ -61,6 +112,7 @@ function AddTableSteps({ gd, sheetId, open, onOpenChange, onAdd }: AddTableDialo
   const sets = setsOnSheet(gd, sheetId);
   const [pick, setPick] = useState<SetPick>(() => defaultPick('Union', sets));
   const ready = pickReady(gd, pick);
+  const section = sectionAtColumn(listSections(gd, sheetId), col);
 
   const confirmKind = () => {
     if (!isComputedKind(kind)) {
@@ -96,6 +148,11 @@ function AddTableSteps({ gd, sheetId, open, onOpenChange, onAdd }: AddTableDialo
         open={open}
         onOpenChange={onOpenChange}
         title={t('addTable.title')}
+        description={
+          section === null
+            ? t('addTable.changeHint')
+            : `${t('addTable.section', { name: section.name })} ${t('addTable.changeHint')}`
+        }
         className="gd-add-table"
         actions={
           <>
@@ -113,6 +170,21 @@ function AddTableSteps({ gd, sheetId, open, onOpenChange, onAdd }: AddTableDialo
           onChange={setKind}
           onEnter={confirmKind}
         />
+        <section className="gd-add-table__starts" aria-labelledby={startsId}>
+          <h3 className="gd-add-table__starts-title gd-mono" id={startsId}>
+            {t('addTable.rows')}
+          </h3>
+          <ol className="gd-add-table__starts-list" aria-live="polite">
+            {STARTS[kind].map(([degree, key]) => (
+              <li key={key} className="gd-add-table__start">
+                <span className="gd-mono gd-add-table__degree" aria-hidden="true">
+                  {degree}
+                </span>
+                <span>{t(key)}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
       </Dialog>
     );
   }
@@ -148,6 +220,68 @@ function AddTableSteps({ gd, sheetId, open, onOpenChange, onAdd }: AddTableDialo
         onEnter={confirmSets}
         autoFocus
       />
+      {ready && <ResultPreviewPanel gd={gd} pick={pick} locale={locale} />}
     </Dialog>
+  );
+}
+
+/** The Derive design's preview: the table's tag, name and count, header and first rows. */
+function ResultPreviewPanel({ gd, pick, locale }: { gd: GedeDoc; pick: SetPick; locale: Locale }) {
+  const t = useMessages();
+  const name = pickName(gd, pick);
+  const preview: ResultPreview | null = previewPick(gd, pick, t('set.column.range'));
+  return (
+    <section className="gd-add-preview" aria-label={t('addTable.preview')}>
+      <h3 className="gd-add-preview__title">{t('addTable.preview')}</h3>
+      <p className="gd-add-preview__meta">
+        <span className="gd-mono gd-add-preview__tag">{t('set.tag.computed')}</span>
+        <span className="gd-mono">{pickDisplay(gd, pick)}</span>
+      </p>
+      {preview === null ? (
+        <p className="gd-add-preview__note">{t('addTable.preview.large')}</p>
+      ) : (
+        <>
+          <p className="gd-add-preview__name">
+            <strong>{name}</strong>
+            <span className="gd-mono">{`|${name}| = ${formatNumber(locale, preview.total)}`}</span>
+          </p>
+          {preview.total === 0 ? (
+            <p className="gd-add-preview__note">{t('addTable.preview.empty')}</p>
+          ) : (
+            <table className="gd-add-preview__table">
+              <thead>
+                <tr>
+                  <th scope="col" className="gd-mono">
+                    {HEADER}
+                  </th>
+                  {preview.heads.map((head, i) => (
+                    <th key={i} scope="col">
+                      {head}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {preview.rows.map((cells, r) => (
+                  <tr key={r}>
+                    <th scope="row" className="gd-mono">{`+${String(r + 1)}\u00B0`}</th>
+                    {cells.map((cell, c) => (
+                      <td key={c}>{cell}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {preview.total > preview.rows.length && (
+            <p className="gd-add-preview__note">
+              {t('addTable.preview.more', {
+                n: formatNumber(locale, preview.total - preview.rows.length),
+              })}
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }

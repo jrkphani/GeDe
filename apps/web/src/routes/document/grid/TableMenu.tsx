@@ -43,9 +43,9 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
   const cell: CellSelection | null =
     selection?.cell && record !== null ? { tableId: record.id, ...selection.cell } : null;
   const column = cell === null ? null : (record?.columns.find((c) => c.id === cell.colId) ?? null);
-  const viewOnly = editable ? undefined : 'you have view-only access';
-  const needsTable = viewOnly ?? (record === null ? 'select a table first' : undefined);
-  const needsCell = needsTable ?? (cell === null ? 'select a cell first' : undefined);
+  const viewOnly = editable ? undefined : t('reason.viewOnly');
+  const needsTable = viewOnly ?? (record === null ? t('reason.selectTable') : undefined);
+  const needsCell = needsTable ?? (cell === null ? t('reason.selectCell') : undefined);
   const hiddenCount = record?.columns.filter((c) => c.hidden).length ?? 0;
   const tableId = record?.id ?? '';
   const columnId = column?.id ?? '';
@@ -109,7 +109,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
           : t(hiddenCount === 1 ? 'menu.unhideCountColumn' : 'menu.unhideCountColumns', {
               count: hiddenCount,
             }),
-      disabledReason: needsTable ?? (hiddenCount === 0 ? 'no hidden columns' : undefined),
+      disabledReason: needsTable ?? (hiddenCount === 0 ? t('reason.noHiddenColumns') : undefined),
       onSelect: () => {
         commands.unhideAllColumns(tableId);
       },
@@ -128,7 +128,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
       id: 'col-narrow',
       label: t('menu.narrowColumn'),
       disabledReason:
-        needsCell ?? ((column?.width ?? 1) <= 1 ? 'already one unit wide' : undefined),
+        needsCell ?? ((column?.width ?? 1) <= 1 ? t('reason.alreadyOneUnit') : undefined),
       onSelect: () => {
         commands.setColumnWidth(tableId, columnId, (column?.width ?? 1) - 1);
       },
@@ -143,7 +143,7 @@ export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: 
       shortcut: LABELS.clear,
       danger: true,
       disabledReason:
-        needsTable ?? (onDeleteTable === undefined ? 'select a table first' : undefined),
+        needsTable ?? (onDeleteTable === undefined ? t('reason.selectTable') : undefined),
       onSelect: () => {
         onDeleteTable?.(tableId);
       },

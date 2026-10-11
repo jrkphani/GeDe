@@ -2,37 +2,33 @@
  * A sheet's structure (SET-13..18; ADR-056, SPEC §3–4; designs Main and SectionSummary):
  * its sections as named lanes on lattice columns between two guide lines, and the read-only
  * tables beneath its tables — a summary per section, the sheet summary, the universal set
- * and the super set array. None of it is a Yjs row: the lanes are the sheet's section
- * records, the tables are pure functions of the set tables (`summarySets`), redrawn when a
- * set changes. Sections only choose where a table sits, so no A1 address moves (SET-17).
+ * and the super set array. The lanes are the sheet's section records; the tables are the
+ * engine's own (`EngineHost.structure`), projections of the set tables that formulas read by
+ * A1 address and by `@`, drawn here at the lattice positions they hold, so what is drawn is
+ * what a formula reads. Sections only choose where a table sits, so no A1 address moves
+ * (SET-17).
  */
 import clsx from 'clsx';
-import { useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useRef, useSyncExternalStore, type CSSProperties } from 'react';
 import {
   LATTICE,
-  cellKey,
+  TABLE_HEADER_ROWS,
+  TABLE_TITLE_ROWS,
+  formatAddress,
   listSections,
-  sectionSummary,
   sheetBounds,
-  sheetSummary,
-  structureLayout,
-  summarySets,
-  superSetArray,
-  universalSet,
-  workbookCellId,
-  type BandBlock,
+  SUMMARY_ALGEBRA_LIMIT,
   type GedeDoc,
   type Id,
   type SectionRecord,
-  type SummaryRow,
-  type SummarySet,
-  SUMMARY_ALGEBRA_LIMIT,
+  type StructureKind,
+  type StructureTable,
 } from '@gede/core';
 import { Button, Icon, Menu, type MenuEntry } from '@gede/ui';
 
 import { engineFor, peekEngine } from '../../../doc/engine.js';
 import { useYVersion } from '../../../doc/use-y.js';
-import { useMessages, type Translate } from '../../../i18n/index.js';
+import { useMessages, type MessageKey, type Translate } from '../../../i18n/index.js';
 import { formatNumber } from '../../../intl.js';
 import { useLocale, type Locale } from '../../../locale.js';
 import { InlineNameField } from '../InlineNameField.js';
@@ -51,217 +47,203 @@ export interface SheetStructureProps {
   menuEntries: (sectionId: Id) => MenuEntry[];
 }
 
-/** Re-render on every batch of engine results while `wanted`: a formula range counts its value. */
-function useEngineTick(gd: GedeDoc, wanted: boolean): void {
+/** Re-render when the engine's results or its structure tables move. */
+function useEngineTick(gd: GedeDoc): void {
   useSyncExternalStore(
-    (onChange) => (wanted ? engineFor(gd.doc).subscribeAll(onChange) : () => undefined),
-    () => (wanted ? (peekEngine(gd.doc)?.version ?? 0) : 0),
+    (onChange) => engineFor(gd.doc).subscribeAll(onChange),
+    () => peekEngine(gd.doc)?.version ?? 0,
     () => 0,
   );
 }
 
 const px = (units: number, unit: number): string => `${String(units * unit)}px`;
 
-function blockStyle(block: BandBlock) {
-  return {
-    left: px(block.col, LATTICE.col),
-    top: px(block.row, LATTICE.row),
-    width: px(block.cols, LATTICE.col),
-    height: px(block.rows, LATTICE.row),
-  };
-}
+const KIND_TAG: Readonly<Record<StructureKind, MessageKey>> = {
+  section: 'summary.section.kind',
+  sheet: 'summary.sheet.kind',
+  universe: 'summary.universe.kind',
+  super: 'summary.super.kind',
+};
+
+const TEST_ID: Readonly<Record<StructureKind, string>> = {
+  section: 'section-summary',
+  sheet: 'sheet-summary',
+  universe: 'universal-set',
+  super: 'super-set-array',
+};
+
+/** The three pair columns of a section summary (SET-15): “—” with the reason above the limit. */
+const PAIR_COLUMNS = 9;
+const DASH = '—';
 
 /** “—” means GeDe checked and found none (SET-15): drawn as the dash, spoken as the words. */
 function None({ t, reason }: { t: Translate; reason?: string | undefined }) {
   return (
     <>
       <span aria-hidden="true" title={reason}>
-        —
+        {DASH}
       </span>
       <span className="gd-visually-hidden">{reason ?? t('summary.none')}</span>
     </>
   );
 }
 
-function Names({
-  names,
-  t,
-  reason,
-}: {
-  names: readonly string[] | null;
-  t: Translate;
-  reason: string;
-}) {
-  if (names === null) return <None t={t} reason={reason} />;
-  if (names.length === 0) return <None t={t} />;
-  return <span title={names.join(', ')}>{names.join(', ')}</span>;
+/** The title bar's second row: what the table counts, in words (SET-05's voice). */
+function countsLine(entry: StructureTable, locale: Locale, t: Translate): string {
+  const n = (count: number) => formatNumber(locale, count);
+  switch (entry.kind) {
+    case 'section':
+      return [
+        `${t('summary.setCount', { count: n(entry.sets) })} · ${t('summary.elementCount', { count: n(entry.elements) })}`,
+        entry.algebra ? null : t('summary.tooMany', { limit: SUMMARY_ALGEBRA_LIMIT }),
+      ]
+        .filter((part) => part !== null)
+        .join(' · ');
+    case 'sheet':
+      return t('summary.indexes');
+    case 'universe':
+      return `${t('summary.universe.count', { count: n(entry.elements) })} · @U`;
+    case 'super':
+      return t('summary.super.count', { elements: n(entry.elements), sets: n(entry.sets) });
+  }
 }
 
-function SectionSummaryTable({
+/**
+ * One structure table, drawn on the lattice where the engine holds it: a title bar of two
+ * rows, a header row, one row per entry, a lattice unit per column unit. Read-only and
+ * unscrolled; a cell carries its A1 address so what is drawn can be checked against what a
+ * formula reads.
+ */
+function StructureTableView({
+  entry,
   section,
-  ordinal,
-  sets,
-  block,
   locale,
   t,
 }: {
-  section: SectionRecord;
-  ordinal: number;
-  sets: readonly SummarySet[];
-  block: BandBlock;
+  entry: StructureTable;
+  section: SectionRecord | undefined;
   locale: Locale;
   t: Translate;
 }) {
-  const summary = sectionSummary(sets);
+  const { table, bounds } = entry;
+  const tag = t(KIND_TAG[entry.kind]);
+  const showTitle = entry.kind === 'section' || entry.kind === 'universe';
+  const label =
+    entry.kind === 'section' && section !== undefined
+      ? t('summary.section.label', { section: section.name })
+      : tag;
+  const style: CSSProperties = {
+    left: px(bounds.col, LATTICE.col),
+    top: px(bounds.row, LATTICE.row),
+    width: px(bounds.cols, LATTICE.col),
+    height: px(bounds.rows, LATTICE.row),
+  };
+  let offset = 0;
+  const offsets = table.columns.map((c) => {
+    const at = offset;
+    offset += c.width;
+    return at;
+  });
+  const addressOf = (rowIndex: number, colIndex: number): string =>
+    formatAddress({
+      col: table.gridCol + (offsets[colIndex] ?? 0),
+      row: table.gridRow + TABLE_TITLE_ROWS + TABLE_HEADER_ROWS + rowIndex,
+    });
   const limit = t('summary.tooMany', { limit: SUMMARY_ALGEBRA_LIMIT });
-  const label = t('summary.section.label', { section: section.name });
-  const columns = [
-    'id',
-    'name',
-    'definition',
-    'cardinality',
-    'status',
-    'equal',
-    'improper',
-    'proper',
-    'elementOf',
-    'intersection',
-    'union',
-    'difference',
-  ] as const;
-  const status = (row: SummaryRow): string | null =>
-    row.status === null ? null : t(row.status === 'null' ? 'set.meta.null' : 'set.meta.singleton');
-  const count = (n: number) => formatNumber(locale, n);
   return (
     <section
-      className="gd-sband gd-sband--summary"
-      style={blockStyle(block)}
+      className={clsx('gd-sband', `gd-sband--${entry.kind}`)}
+      style={style}
       aria-label={label}
-      data-testid="section-summary"
-      data-section-id-summary={section.id}
-      // The table is wider than a lane: it scrolls inside the lane, by keyboard too.
-      tabIndex={0}
+      data-testid={TEST_ID[entry.kind]}
+      data-table-title={table.title}
+      {...(entry.sectionId === null ? {} : { 'data-section-id-summary': entry.sectionId })}
     >
-      <table className="gd-sband__table">
+      <table className="gd-sband__table" aria-describedby={undefined}>
+        <colgroup>
+          {table.columns.map((c) => (
+            <col key={c.id} style={{ width: px(c.width, LATTICE.col) }} />
+          ))}
+        </colgroup>
         <caption className="gd-sband__caption">
           <div className="gd-sband__caption-row">
             <span className="gd-mono gd-sband__degree" aria-hidden="true">
               −2°
             </span>
-            <span className="gd-sband__kind">{t('summary.section.kind')}</span>
-            <span className="gd-sband__title">{`${String(ordinal)}° ${section.name}`}</span>
+            <span className="gd-sband__kind">{tag}</span>
+            {showTitle && (
+              <span className="gd-sband__title" title={table.title}>
+                {table.title}
+              </span>
+            )}
           </div>
           <div className="gd-sband__caption-row">
             <span className="gd-mono gd-sband__degree" aria-hidden="true">
               −1°
             </span>
-            <span className="gd-mono gd-sband__counts">
-              {`${t('summary.setCount', { count: count(summary.setCount) })} · ${t('summary.elementCount', { count: count(summary.elementCount) })}`}
-            </span>
+            <span className="gd-mono gd-sband__counts">{countsLine(entry, locale, t)}</span>
           </div>
         </caption>
         <thead>
           <tr>
-            {columns.map((c, i) => (
-              <th key={c} scope="col" className={clsx('gd-sband__th', `gd-sband__col--${c}`)}>
+            {table.columns.map((c, i) => (
+              <th key={c.id} scope="col" className="gd-sband__th" data-address={addressOf(-1, i)}>
                 {i === 0 && (
                   <span className="gd-mono gd-sband__degree" aria-hidden="true">
                     ±0°
                   </span>
                 )}
-                {t(`summary.col.${c}`)}
+                {c.label}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {summary.rows.map((row, i) => (
-            <tr key={row.id}>
-              <th scope="row" className="gd-mono gd-sband__id" title={row.id}>
-                <span
-                  className="gd-mono gd-sband__degree"
-                  aria-hidden="true"
-                >{`+${String(i + 1)}°`}</span>
-                {row.id.slice(0, 10)}
-              </th>
-              <td className="gd-sband__name" title={row.name}>
-                {row.name}
-              </td>
-              <td title={row.definition}>
-                {row.definition === '' ? <None t={t} /> : row.definition}
-              </td>
-              <td className="gd-mono">
-                {row.bag === row.cardinality
-                  ? count(row.cardinality)
-                  : `${count(row.cardinality)} · ${t('summary.bag', { count: count(row.bag) })}`}
-              </td>
-              <td>{status(row) ?? <None t={t} />}</td>
-              <td>
-                <Names names={row.equal} t={t} reason={limit} />
-              </td>
-              <td>
-                <Names names={row.improperSubsetOf} t={t} reason={limit} />
-              </td>
-              <td>
-                <Names names={row.properSubsetOf} t={t} reason={limit} />
-              </td>
-              <td>
-                <Names names={row.elementOf} t={t} reason={limit} />
-              </td>
-              <td>
-                <Names names={row.intersection} t={t} reason={limit} />
-              </td>
-              <td>
-                <Names names={row.union} t={t} reason={limit} />
-              </td>
-              <td>
-                <Names names={row.difference} t={t} reason={limit} />
-              </td>
+          {table.rows.map((rowId, r) => (
+            <tr key={rowId}>
+              {table.columns.map((c, i) => {
+                const cell = table.cells[`${rowId}:${c.id}`];
+                const text = cell?.kind === 'text' ? cell.text : '';
+                const body =
+                  text === DASH ? (
+                    <None
+                      t={t}
+                      reason={
+                        entry.kind === 'section' && !entry.algebra && i >= PAIR_COLUMNS
+                          ? limit
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    text
+                  );
+                const props = {
+                  'data-address': addressOf(r, i),
+                  title: text === DASH ? undefined : text,
+                };
+                return i === 0 ? (
+                  <th
+                    key={c.id}
+                    scope="row"
+                    className="gd-sband__cell gd-sband__cell--first"
+                    {...props}
+                  >
+                    <span
+                      className="gd-mono gd-sband__degree"
+                      aria-hidden="true"
+                    >{`+${String(r + 1)}°`}</span>
+                    {body}
+                  </th>
+                ) : (
+                  <td key={c.id} className="gd-sband__cell" {...props}>
+                    {body}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
       </table>
-      <p className="gd-sband__note">
-        {t('summary.note')}
-        {!summary.algebra && ` ${limit}.`}
-      </p>
-    </section>
-  );
-}
-
-function ListBlock({
-  block,
-  kind,
-  title,
-  counts,
-  note,
-  testId,
-  children,
-}: {
-  block: BandBlock;
-  kind: string;
-  title: string;
-  counts: string;
-  note?: string | undefined;
-  testId: string;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      className="gd-sband gd-sband--list"
-      style={blockStyle(block)}
-      aria-label={title}
-      data-testid={testId}
-    >
-      <header className="gd-sband__head">
-        <span className="gd-mono gd-sband__degree" aria-hidden="true">
-          −2°
-        </span>
-        <span className="gd-sband__kind">{kind}</span>
-        <span className="gd-mono gd-sband__counts">{counts}</span>
-      </header>
-      <ul className="gd-sband__chips">{children}</ul>
-      {note !== undefined && <p className="gd-sband__note">{note}</p>}
     </section>
   );
 }
@@ -277,32 +259,20 @@ export function SheetStructure({
 }: SheetStructureProps) {
   useYVersion(gd.sheets);
   useYVersion(gd.tables);
+  useEngineTick(gd);
   const afterClose = useRef<(() => void) | null>(null);
   const t = useMessages();
   const [locale] = useLocale();
   const sections = listSections(gd, sheetId);
-  // Read the engine only while a range holds a formula it must count (as `useSetFacts` does).
-  const plain = summarySets(gd, sheetId);
-  useEngineTick(gd, plain.length > 0);
-  const engine = peekEngine(gd.doc);
-  const sets =
-    engine === undefined
-      ? plain
-      : summarySets(
-          gd,
-          sheetId,
-          (tableId) => (rowId, colId) =>
-            engine.result(workbookCellId(tableId, cellKey(rowId, colId)))?.value,
-        );
-  const bounds = sheetBounds(gd, sheetId);
-  const top = bounds === null ? 1 : bounds.row + bounds.rows + 1;
-  const layout = structureLayout(top, sections, sets);
-  if (layout === null) return null;
-  const laneRows = layout.end + 1;
-  const universe = universalSet(sets);
-  const superSet = superSetArray(sets);
-  const rows = sheetSummary(sections, sets);
-  const count = (n: number) => formatNumber(locale, n);
+  const tables = peekEngine(gd.doc)?.structure(sheetId) ?? [];
+  if (sections.length === 0 && tables.length === 0) return null;
+  // The lanes run down past the sheet's tables and the structure tables beneath them.
+  const own = sheetBounds(gd, sheetId);
+  const last = tables.at(-1);
+  const laneRows = Math.max(
+    own === null ? 1 : own.row + own.rows + 1,
+    last === undefined ? 0 : last.bounds.row + last.bounds.rows + 1,
+  );
   return (
     <div className="gd-structure" data-testid="sheet-structure">
       {sections.map((section, i) => (
@@ -393,98 +363,15 @@ export function SheetStructure({
           </div>
         </div>
       ))}
-      {layout.sections.map(({ sectionId, block }) => {
-        const index = sections.findIndex((s) => s.id === sectionId);
-        const section = sections[index];
-        return section === undefined ? null : (
-          <SectionSummaryTable
-            key={sectionId}
-            section={section}
-            ordinal={index + 1}
-            sets={sets.filter((s) => s.sectionId === sectionId)}
-            block={block}
-            locale={locale}
-            t={t}
-          />
-        );
-      })}
-      <section
-        className="gd-sband"
-        style={blockStyle(layout.sheetSummary)}
-        aria-label={t('summary.sheet.kind')}
-        data-testid="sheet-summary"
-        tabIndex={0}
-      >
-        <table className="gd-sband__table gd-sband__table--sheet">
-          <caption className="gd-sband__caption">
-            <div className="gd-sband__caption-row">
-              <span className="gd-mono gd-sband__degree" aria-hidden="true">
-                −2°
-              </span>
-              <span className="gd-sband__kind">{t('summary.sheet.kind')}</span>
-            </div>
-            <div className="gd-sband__caption-row">
-              <span className="gd-mono gd-sband__degree" aria-hidden="true">
-                −1°
-              </span>
-              <span className="gd-mono gd-sband__counts">{t('summary.indexes')}</span>
-            </div>
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">{t('summary.sheet.section')}</th>
-              <th scope="col">{t('summary.sheet.sets')}</th>
-              <th scope="col">{t('summary.sheet.elements')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => (
-              <tr key={row.sectionId}>
-                <th scope="row">{`${String(i + 1)}° ${row.name}`}</th>
-                <td className="gd-mono">{count(row.setCount)}</td>
-                <td className="gd-mono">{count(row.elementCount)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      <ListBlock
-        block={layout.universe}
-        kind={t('summary.universe.kind')}
-        title={t('summary.universe.kind')}
-        counts={t('summary.universe.count', { count: count(universe.length) })}
-        note={t('summary.universe.hint')}
-        testId="universal-set"
-      >
-        {universe.map((element) => (
-          <li key={element} className="gd-mono gd-sband__chip" title={element}>
-            {element}
-          </li>
-        ))}
-      </ListBlock>
-      <ListBlock
-        block={layout.superSet}
-        kind={t('summary.super.kind')}
-        title={t('summary.super.kind')}
-        counts={t('summary.super.count', {
-          elements: count(superSet.elements.length),
-          sets: count(superSet.sets.length),
-        })}
-        testId="super-set-array"
-      >
-        {superSet.elements.map((element) => (
-          <li key={`e${element}`} className="gd-mono gd-sband__chip" title={element}>
-            <span className="gd-sband__chip-kind">{t('summary.super.element')}</span>
-            {element}
-          </li>
-        ))}
-        {superSet.sets.map((name) => (
-          <li key={`s${name}`} className="gd-sband__chip gd-sband__chip--set" title={name}>
-            <span className="gd-sband__chip-kind">{t('summary.super.set')}</span>
-            {name}
-          </li>
-        ))}
-      </ListBlock>
+      {tables.map((entry) => (
+        <StructureTableView
+          key={entry.table.id}
+          entry={entry}
+          section={sections.find((x) => x.id === entry.sectionId)}
+          locale={locale}
+          t={t}
+        />
+      ))}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   createSheet,
   createTable,
   hideColumn,
+  listSections,
   openDocument,
   setCellText,
   tableAddresses,
@@ -516,6 +517,21 @@ describe('INSP-07 arrange', () => {
     setTablePinned(gd, tableId, false);
     expect(tableById(gd, tableId)?.pinned).toBe(false);
     expect(tableMap(gd, tableId)?.has('pinned')).toBe(false);
+  });
+
+  it('SET-17 INSP-07 Pipeline lanes adds one section per lane, a gutter apart, and none where one is already', () => {
+    const { gd, sheetId, tableId: a } = fixture(4, 3);
+    const b = createTable(gd, { sheetId, at: { col: 2, row: 30 }, columns: 2, rows: 2 });
+    layoutSheet(gd, sheetId, 'lanes');
+    const sections = listSections(gd, sheetId);
+    expect(sections.map((s) => [s.name, s.firstColumn, s.lastColumn])).toEqual([
+      [tableById(gd, a)!.title, 1, 3],
+      [tableById(gd, b)!.title, 5, 6],
+    ]);
+    // The other layouts add none, and laying the lanes out again adds no second set.
+    layoutSheet(gd, sheetId, 'stacked');
+    layoutSheet(gd, sheetId, 'lanes');
+    expect(listSections(gd, sheetId)).toHaveLength(2);
   });
 
   it('INSP-07 RESP-01 a canvas layout places the sheet in stacking order on whole units; every address follows its table', () => {

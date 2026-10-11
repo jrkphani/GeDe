@@ -84,6 +84,12 @@ export interface TableStructure {
   readonly computedFormula?: string | undefined;
   /** SET-02: a set table's range column, so `@E` reads the set (SET-06, REF-01). */
   readonly setRange?: Id | undefined;
+  /**
+   * SET-13..16: a read-only projection of the sheet's set tables (U, the super set array, a
+   * summary), never a document table. `@U` and its siblings name it only on its own sheet,
+   * and a set table of the same title wins.
+   */
+  readonly structure?: true | undefined;
   readonly rows: readonly Id[];
   /**
    * Per row, in row order; 2 for a wrapped row (GRID-09), 0 for a row hidden

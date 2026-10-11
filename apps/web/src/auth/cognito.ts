@@ -143,7 +143,7 @@ export function describeUnsupportedStep(step: string): string {
     case 'CONFIRM_SIGN_IN_WITH_PASSWORD':
       return 'This account is set to use a password. GeDe signs in with a passkey or a code by email; contact support.';
     case 'CONFIRM_SIGN_UP':
-      return 'This email has not been verified yet. Switch to Create account to finish setting it up.';
+      return 'This email has not been verified yet. Switch to Sign up to finish setting it up.';
     default:
       return 'This account needs a sign-in method GeDe does not offer. Contact support.';
   }
@@ -163,7 +163,7 @@ export function describeUnsupportedStep(step: string): string {
  * - A simulated EMAIL_OTP challenge with a masked destination, identical to a real
  *   one. Nothing in the response, and no side-effect-free API, tells them apart
  *   (ResendConfirmationCode is obfuscated for confirmed users as well — measured,
- *   ADR-040). The code step says so and points to Create account.
+ *   ADR-040). The code step says so and points to Sign up.
  */
 function toStep(out: SignInOutput): SignInStep {
   const step = out.nextStep;

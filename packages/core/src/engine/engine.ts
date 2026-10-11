@@ -205,6 +205,8 @@ export class FormulaEngine {
   private readonly results = new Map<WorkbookCellId, CellResult>();
   private readonly parseCache = new Map<string, ParsedFormula>();
   private readonly needsResolve = new Set<WorkbookCellId>();
+  /** A computed formula was added, changed or dropped: some table's circular state may have moved. */
+  private recheckComputed = false;
   /** tableId → formulas whose bound references point into it. */
   private readonly boundInto = new Map<Id, Set<WorkbookCellId>>();
   readonly index: WorkbookIndex;
@@ -318,31 +320,21 @@ export class FormulaEngine {
     if (path.length !== 1) return undefined;
     const name = setNameKey(path[0] ?? '');
     if (name === '') return undefined;
-    const ids = [...this.tables.keys()].sort();
-    const rangeCells = (tableId: Id, leavesOnly: boolean): WorkbookCellId[] => {
-      const table = this.tables.get(tableId);
-      const range = table?.structure.setRange;
-      if (table === undefined || range === undefined) return [];
-      const { rows, rowDepths } = table.structure;
-      const out: WorkbookCellId[] = [];
-      rows.forEach((rowId, i) => {
-        // SET-13: U lists elements, not the sets a family holds (a row with rows under it).
-        if (leavesOnly && (rowDepths[i + 1] ?? 0) > (rowDepths[i] ?? 0)) return;
-        const key = cellKey(rowId, range);
-        if (table.cells.has(key)) out.push(workbookCellId(tableId, key));
-      });
-      return out;
-    };
-    for (const tableId of ids) {
-      const table = this.tables.get(tableId);
-      if (table?.structure.setRange === undefined) continue;
-      if (setNameKey(table.structure.title) === name) return rangeCells(tableId, false);
-    }
-    // SET-13: no set is titled U, so `@U` is the sheet's universal set: every set's elements.
-    if (name !== setNameKey('U') || sheetId === undefined) return undefined;
-    return ids.flatMap((id) =>
-      this.tables.get(id)?.structure.sheetId === sheetId ? rangeCells(id, true) : [],
-    );
+    // A set table of that title wins; else the sheet's own structure table (SET-13: `@U`).
+    const named = [...this.tables.values()]
+      .filter(({ structure: t }) => t.setRange !== undefined && setNameKey(t.title) === name)
+      .sort(
+        (a, b) =>
+          Number(a.structure.structure === true) - Number(b.structure.structure === true) ||
+          (a.structure.id < b.structure.id ? -1 : 1),
+      )
+      .find(({ structure: t }) => t.structure !== true || t.sheetId === sheetId);
+    const range = named?.structure.setRange;
+    if (named === undefined || range === undefined) return undefined;
+    return named.structure.rows
+      .map((rowId) => cellKey(rowId, range))
+      .filter((key) => named.cells.has(key))
+      .map((key) => workbookCellId(named.structure.id, key));
   }
 
   valueOf(cellId: WorkbookCellId, blocked: ReadonlySet<WorkbookCellId>): CellValue {
@@ -480,6 +472,7 @@ export class FormulaEngine {
       wanted.set(computedFormulaKey(driver.id), structure.computedFormula);
     }
     table.derivedColumns = derivedColumns;
+    this.recheckComputed = true;
     for (const cell of [...table.cells.values()]) {
       if (cell.synthetic && !wanted.has(cell.key)) {
         this.dropCell(cell, removed);
@@ -781,16 +774,46 @@ export class FormulaEngine {
   private evaluate(): CellResult[] {
     this.resolvePending();
     const changed: CellResult[] = [];
-    if (this.graph.dirtyNodes().size === 0) return changed;
-    const topology = this.graph.topologicalBatches();
-    const blocked = new Set(topology.blocked);
-    const cycleMembers = new Set(topology.cycle ?? []);
-    for (const batch of topology.batches) {
-      for (const id of batch) this.evaluateCell(id, blocked, cycleMembers, changed);
+    // A computed formula that settled differently can move the tables that read it: look again.
+    let recheck = this.recheckComputed;
+    for (let round = 0; round <= this.tables.size; round += 1) {
+      if (recheck) this.recheckCircularFills();
+      if (this.graph.dirtyNodes().size === 0) break;
+      const from = changed.length;
+      const topology = this.graph.topologicalBatches();
+      const blocked = new Set(topology.blocked);
+      const cycleMembers = new Set(topology.cycle ?? []);
+      for (const batch of topology.batches) {
+        for (const id of batch) this.evaluateCell(id, blocked, cycleMembers, changed);
+      }
+      for (const id of topology.blocked) this.evaluateCell(id, blocked, cycleMembers, changed);
+      this.graph.clearDirty();
+      recheck = changed
+        .slice(from)
+        .some((r) => this.fillCellOf(this.cells.get(r.cellId)?.tableId ?? '') === r.cellId);
     }
-    for (const id of topology.blocked) this.evaluateCell(id, blocked, cycleMembers, changed);
-    this.graph.clearDirty();
     return changed;
+  }
+
+  /**
+   * FX-06: a computed formula that reads another table's formula (P = E ∖ Q) is circular once
+   * Q's reads P, but the graph has no edge between them while either has no rows, so P is not
+   * dirtied when Q's formula arrives or leaves. Each computed formula whose circular state
+   * disagrees with its table reads is dirtied, so both tables settle the same on every replica.
+   */
+  private recheckCircularFills(): void {
+    this.recheckComputed = false;
+    for (const tableId of this.tables.keys()) {
+      const id = this.fillCellOf(tableId);
+      const cell = id === null ? undefined : this.cells.get(id);
+      if (id === null || cell === undefined || !this.graph.hasNode(id)) continue;
+      const expected = this.readsOwnRows(cell)
+        ? { kind: 'circular' as const }
+        : this.inheritedError(cell);
+      const error = this.results.get(id)?.error ?? null;
+      // An own error (arity...) differs from `expected` too: a harmless second look.
+      if (!sameError(error, expected)) this.graph.markDirty(id);
+    }
   }
 
   private evaluateCell(
@@ -809,7 +832,12 @@ export class FormulaEngine {
         kind: 'parse',
         error: formula.parseError ?? { message: 'invalid formula', span: { start: 0, end: 0 } },
       };
-    } else if (blocked.has(id) || cycleMembers.has(id) || this.readsOwnRows(cell)) {
+    } else if (
+      blocked.has(id) ||
+      cycleMembers.has(id) ||
+      this.readsOwnRows(cell) ||
+      this.readsStructure(cell)
+    ) {
       error = { kind: 'circular' };
     } else {
       const sheetId = this.tables.get(cell.tableId)?.structure.sheetId ?? '';
@@ -820,6 +848,11 @@ export class FormulaEngine {
       );
       if (outcome.ok) value = outcome.value;
       else error = outcome.error;
+      const inherited = error === null ? this.inheritedError(cell) : null;
+      if (inherited !== null) {
+        value = null;
+        error = inherited;
+      }
     }
     const previous = this.results.get(id);
     if (
@@ -842,6 +875,108 @@ export class FormulaEngine {
   }
 
   /**
+   * The tables a formula names (an id-bound reference, or an `@Title` of a set table). A table
+   * with no rows yet has no cell to be a graph edge, so two Fills made apart (P = E ∖ Q,
+   * Q = E ∖ P) would show a cycle only once both had rows; reading the formulas themselves
+   * closes it whichever arrived first (FX-06).
+   */
+  private tablesRead(cell: CellState): Set<Id> {
+    const formula = cell.formula;
+    const tables = new Set<Id>();
+    if (formula?.ast == null) return tables;
+    for (const id of formula.boundTables) tables.add(id);
+    for (const ref of references(formula.ast)) {
+      if (ref.kind !== 'entity' || ref.path.length !== 1) continue;
+      if (this.index.entityIndex().byKey.has(entityKey(ref.path))) continue;
+      const name = setNameKey(ref.path[0] ?? '');
+      for (const [id, table] of this.tables) {
+        if (name !== '' && setNameKey(table.structure.title) === name) tables.add(id);
+      }
+    }
+    return tables;
+  }
+
+  /**
+   * FX-06: a set table's formula that names a structure table of its own sheet (`@U`) is read
+   * by that table, which counts the formula's value (SET-02): a loop with no fixed point,
+   * since the graph cannot see the edge (the tables are projected between rounds).
+   * Found by name, bound token, or an A1 address, range or column that lands on one.
+   */
+  private readsStructure(cell: CellState): boolean {
+    const own = this.tables.get(cell.tableId)?.structure;
+    if (own === undefined || own.structure === true || own.setRange === undefined) return false;
+    const isStructure = (id: Id): boolean => {
+      const read = this.tables.get(id)?.structure;
+      return read?.structure === true && read.sheetId === own.sheetId;
+    };
+    for (const id of this.tablesRead(cell)) if (isStructure(id)) return true;
+    const ast = cell.formula?.ast;
+    if (ast == null) return false;
+    // The structure tables' columns from the title down: a formula can grow one by any number of
+    // rows, so a read below it, blank or not, may land on its content on a later round.
+    // shortcut: a read of another table's cell below a structure table in its columns is circular too.
+    const boxes = [...this.tables.values()].flatMap(({ structure: t }) =>
+      t.structure === true && t.sheetId === own.sheetId
+        ? [
+            {
+              col0: t.gridCol,
+              col1: t.gridCol + t.columns.reduce((n, c) => n + c.width, 0) - 1,
+              row0: t.gridRow,
+              row1: Infinity,
+            },
+          ]
+        : [],
+    );
+    return references(ast).some((ref) => {
+      if (ref.kind === 'column') return boxes.some((b) => ref.col >= b.col0 && ref.col <= b.col1);
+      const r =
+        ref.kind === 'address'
+          ? { start: ref.ref, end: ref.ref }
+          : ref.kind === 'range'
+            ? ref.range
+            : null;
+      return (
+        r !== null &&
+        boxes.some(
+          (b) =>
+            r.start.col <= b.col1 &&
+            r.end.col >= b.col0 &&
+            r.start.row <= b.row1 &&
+            r.end.row >= b.row0,
+        )
+      );
+    });
+  }
+
+  /** The synthetic cell holding a computed table's formula, or null for any other table. */
+  private fillCellOf(tableId: Id): WorkbookCellId | null {
+    const driver = this.tables
+      .get(tableId)
+      ?.structure.columns.find((c) => c.computed !== undefined);
+    return driver === undefined ? null : workbookCellId(tableId, computedFormulaKey(driver.id));
+  }
+
+  private formulasOfTablesRead(cell: CellState): WorkbookCellId[] {
+    return [...this.tablesRead(cell)].flatMap((id) => this.fillCellOf(id) ?? []);
+  }
+
+  /**
+   * FX-06: a computed table whose operand table is itself in error shows that error, not
+   * rows held from before it failed as if they were a current result.
+   */
+  private inheritedError(cell: CellState): CellError | null {
+    if (splitCellKey(cell.key).rowId !== COMPUTED_FORMULA_ROW) return null;
+    for (const id of this.formulasOfTablesRead(cell)) {
+      const error = this.results.get(id)?.error;
+      if (error === null || error === undefined) continue;
+      return error.kind === 'parse'
+        ? { kind: 'invalid-argument', message: error.error.message }
+        : error;
+    }
+    return null;
+  }
+
+  /**
    * SET-08: a computed column's formula that reads, through any chain, a cell
    * a computed reconcile writes — its own table's or one whose formula leads
    * back to it — would rewrite its rows on every pass and never settle. The
@@ -851,13 +986,14 @@ export class FormulaEngine {
   private readsOwnRows(cell: CellState): boolean {
     if (splitCellKey(cell.key).rowId !== COMPUTED_FORMULA_ROW) return false;
     const seen = new Set<string>();
-    const stack = [...this.graph.dependenciesOf(cell.id)];
+    const stack = [...this.graph.dependenciesOf(cell.id), ...this.formulasOfTablesRead(cell)];
     for (let dep = stack.pop(); dep !== undefined; dep = stack.pop()) {
       if (dep === cell.id) return true;
       if (seen.has(dep)) continue;
       seen.add(dep);
       for (const next of this.graph.dependenciesOf(dep)) stack.push(next);
       const read = this.cells.get(dep);
+      if (read !== undefined) stack.push(...this.formulasOfTablesRead(read));
       if (read === undefined) continue;
       const { colId } = splitCellKey(read.key);
       const columns = this.tables.get(read.tableId)?.structure.columns ?? [];

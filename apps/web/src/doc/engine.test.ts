@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   cellAddress,
+  commitCellText,
   cellKey,
   createSheet,
   createTable,
@@ -65,6 +66,104 @@ function recordingTransport(): EngineTransport & { requests: EngineRequest[] } {
     },
   };
 }
+
+describe('engine host: structure tables (SET-13..16)', () => {
+  /** Waits for the host's own follow-up rounds: results answered, structure sent, results again. */
+  const quiet = async (host: ReturnType<typeof createEngineHost>) => {
+    for (let i = 0; i < 12; i += 1) {
+      await host.settled();
+      await Promise.resolve();
+    }
+  };
+
+  it('SET-13 SET-14 the host tells the engine U and the summaries, and a formula reads them by A1 address', async () => {
+    const f = fixture();
+    const host = createEngineHost(f.gd);
+    const sheetId = tableById(f.gd, f.tableId)!.sheetId;
+    const e = createTable(f.gd, {
+      sheetId,
+      at: { col: 8, row: 1 },
+      columns: 1,
+      rows: 2,
+      kind: 'simple',
+      title: 'E',
+    });
+    const range = tableById(f.gd, e)!.columns[0]!.id;
+    const [r0, r1] = tableById(f.gd, e)!.rows;
+    setCellText(f.gd, e, r0!, range, 'a');
+    setCellText(f.gd, e, r1!, range, 'b');
+    await quiet(host);
+    const [u] = host.structure(sheetId).filter((t) => t.kind === 'universe');
+    expect(u?.table.rows).toHaveLength(2);
+    // The first of U's elements sits in the table's first data row.
+    const address = `${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[u!.table.gridCol] ?? ''}${String(u!.table.gridRow + 4)}`;
+    f.set(0, 0, `=${address}`);
+    await quiet(host);
+    expect(host.result(f.id(0, 0))?.value).toEqual({ kind: 'text', text: 'a' });
+    host.dispose();
+  });
+
+  it('SET-13 a range cell that reads @U cannot keep the host rewriting U: the rounds are capped', async () => {
+    const f = fixture();
+    const host = createEngineHost(f.gd);
+    const sheetId = tableById(f.gd, f.tableId)!.sheetId;
+    const e = createTable(f.gd, {
+      sheetId,
+      at: { col: 8, row: 1 },
+      columns: 1,
+      rows: 2,
+      kind: 'simple',
+      title: 'E',
+    });
+    const range = tableById(f.gd, e)!.columns[0]!.id;
+    const [r0, r1] = tableById(f.gd, e)!.rows;
+    setCellText(f.gd, e, r0!, range, 'a');
+    commitCellText(f.gd, e, r1!, range, '=@U');
+    await quiet(host);
+    expect(host.structure(sheetId).length).toBeGreaterThan(0);
+    host.dispose();
+  });
+
+  it('FX-06 SET-13 an indirect loop through a plain cell marks only the cells that keep moving', async () => {
+    const f = fixture();
+    const host = createEngineHost(f.gd);
+    const sheetId = tableById(f.gd, f.tableId)!.sheetId;
+    const mk = (col: number, title: string) =>
+      createTable(f.gd, {
+        sheetId,
+        at: { col, row: 1 },
+        columns: 1,
+        rows: 2,
+        kind: 'simple',
+        title,
+      });
+    const e = mk(8, 'E');
+    const h = mk(12, 'H');
+    const first = (id: string) => {
+      const t = tableById(f.gd, id)!;
+      return { row: t.rows[0]!, col: t.columns[0]!.id };
+    };
+    const [ec, hc] = [first(e), first(h)];
+    commitCellText(f.gd, h, hc.row, hc.col, '=Concat("x","y")');
+    setCellText(f.gd, e, tableById(f.gd, e)!.rows[1]!, ec.col, 'b');
+    await quiet(host);
+    const [u] = host.structure(sheetId).filter((t) => t.kind === 'universe');
+    const address = `${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[u!.table.gridCol] ?? ''}${String(u!.table.gridRow + 4)}`;
+    f.set(0, 0, `=Concat("a",${address})`);
+    commitCellText(f.gd, e, ec.row, ec.col, `=${f.addr(0, 0)}`);
+    await quiet(host);
+    await quiet(host);
+    const kind = (t: string, c: { row: string; col: string }) =>
+      host.result(workbookCellId(t, cellKey(c.row, c.col)))?.error?.kind;
+    expect(kind(e, ec)).toBe('circular');
+    expect(kind(h, hc)).toBeUndefined();
+    expect(host.result(workbookCellId(h, cellKey(hc.row, hc.col)))?.value).toEqual({
+      kind: 'text',
+      text: 'xy',
+    });
+    host.dispose();
+  });
+});
 
 describe('engine host', () => {
   it('FX-06 evaluates through the inline fallback where no Worker exists, asynchronously, and notifies per cell', async () => {

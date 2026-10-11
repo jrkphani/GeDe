@@ -9,6 +9,7 @@ import {
   openDocument,
   readString,
   searchEntities,
+  setNameKey,
   setTablesMatching,
   workbookCellId,
   type EntitySearch,
@@ -17,6 +18,7 @@ import {
 } from '@gede/core';
 import { Icon, Popover } from '@gede/ui';
 
+import { peekEngine } from '../../../doc/engine.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import { useWorkbookIndexVersion, workbookIndexFor } from '../../../doc/workbook-index.js';
 import {
@@ -94,8 +96,6 @@ interface FormOption {
   readonly disabledReason?: string | undefined;
 }
 
-const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
-
 /**
  * ADR-054: every column's values are entities now, so a name that appears in
  * several rows lists once per row. Eight keep the popover inside its 60 vh at
@@ -112,7 +112,7 @@ const setForms = (t: Translate): FormOption[] => [
   {
     id: 'comp',
     label: 'Comp(a, u)',
-    hint: 'elements of the universe u not in a',
+    hint: t('forms.comp.hint'),
     insert: '=Comp(',
   },
   {
@@ -125,20 +125,20 @@ const setForms = (t: Translate): FormOption[] => [
 
 function forms(summable: boolean, t: Translate): FormOption[] {
   return [
-    { id: 'concat', label: 'Concat(a, b, …)', hint: 'joins values end to end', insert: '=Concat(' },
+    { id: 'concat', label: 'Concat(a, b, …)', hint: t('forms.concat.hint'), insert: '=Concat(' },
     {
       id: 'sum',
       label: 'Sum(B2:B14)',
-      hint: 'adds a range, list, column or @ paths',
+      hint: t('forms.sum.hint'),
       insert: '=Sum(',
-      disabledReason: summable ? undefined : SUM_DISABLED,
+      disabledReason: summable ? undefined : t('forms.sum.disabled'),
     },
     ...setForms(t),
     { id: 'power', label: 'Power(a)', hint: t('forms.power.hint'), insert: '=Power(' },
     {
       id: 'entity',
       label: '@Group.Entity',
-      hint: 'a value from anywhere in the workscape',
+      hint: t('forms.entity.hint'),
       insert: '=@',
     },
   ];
@@ -206,14 +206,26 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   );
   // SET-06, REF-01: a set table is named whole by `@E` — offered first while one segment is
   // typed; the engine reads it as the set, and a family row holding it follows E's rows.
-  const sets = useMemo(
-    () =>
-      showEntities && doc !== null
-        ? setTablesMatching(openDocument(doc), entityQuery.query, tableId)
-        : [],
-    // indexVersion: titles or tables changed.
-    [doc, showEntities, entityQuery?.query, indexVersion, tableId],
-  );
+  const structureVersion = doc === null ? 0 : (peekEngine(doc)?.version ?? 0);
+  const sets = useMemo(() => {
+    if (!showEntities || doc === null) return [];
+    const real = setTablesMatching(openDocument(doc), entityQuery.query, tableId);
+    // SET-13..16: U, the super set array and the summaries are named whole too, on this sheet.
+    const typed = entityQuery.query.trim().replace(/^"/, '');
+    const sheetId = table === null ? '' : readString(table, 'sheetId');
+    const named = new Set(real.map((set) => setNameKey(set.title)));
+    const structure = typed.includes('.')
+      ? []
+      : (peekEngine(doc)?.structure(sheetId) ?? [])
+          .map(({ table: t }) => ({ id: t.id, title: t.title }))
+          .filter(
+            (set) =>
+              setNameKey(set.title).startsWith(setNameKey(typed)) &&
+              !named.has(setNameKey(set.title)),
+          );
+    return [...real, ...structure];
+    // indexVersion: titles or tables changed; structureVersion: the structure tables moved.
+  }, [doc, table, showEntities, entityQuery?.query, indexVersion, tableId, structureVersion]);
   const entities: readonly PickerEntry[] = useMemo(() => {
     const whole: PickerEntry[] = sets.map((set) => ({
       key: `set:${set.id}`,

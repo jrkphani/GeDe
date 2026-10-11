@@ -10,7 +10,7 @@ describe('EmptyState', () => {
         label="recents"
         title="Create your first workscape"
         description="Tables, formulas and context graphs on one shared sheet."
-        action={<Button variant="primary">Create workscape</Button>}
+        action={<Button variant="primary">Add workscape</Button>}
       />,
     );
     expect(screen.getByRole('region', { name: 'Create your first workscape' })).toBeInTheDocument();
@@ -18,6 +18,6 @@ describe('EmptyState', () => {
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
       'Create your first workscape',
     );
-    expect(screen.getByRole('button', { name: 'Create workscape' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add workscape' })).toBeInTheDocument();
   });
 });

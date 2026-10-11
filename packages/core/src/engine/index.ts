@@ -28,6 +28,16 @@ export type {
   WorkbookChange,
   WorkbookSnapshot,
 } from './types.js';
+export {
+  structureSync,
+  structureTables,
+  SUMMARY_COLUMNS,
+  type StructureKind,
+  type StructureLabels,
+  type StructureSync,
+  type StructureTable,
+  type SummaryColumn,
+} from './structure.js';
 export { computedFormulaKey, splitWorkbookCellId, workbookCellId } from './types.js';
 export { derivedCellSource, FormulaEngine, type ApplyOutcome } from './engine.js';
 export { inferCellValue } from './values.js';

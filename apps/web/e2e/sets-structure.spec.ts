@@ -156,12 +156,29 @@ for (const width of [1440, 1024] as const) {
     await expect(sheetSummary).toContainText('1° Foundation');
     // SET-13 / SET-14: U once, in first-seen order; the super set array labels in words.
     const universe = page.getByTestId('universal-set');
-    await expect(universe.getByRole('listitem')).toHaveText(['a', 'b', 'c', 'x', 'y']);
+    await expect(universe.getByRole('row')).toHaveCount(1 + 5);
+    await expect(universe.getByRole('rowheader')).toHaveText([
+      '+1°a',
+      '+2°b',
+      '+3°c',
+      '+4°x',
+      '+5°y',
+    ]);
     await expect(universe).toContainText('|U| = 5');
     const array = page.getByTestId('super-set-array');
-    await expect(array.getByRole('listitem')).toHaveCount(8);
-    await expect(array).toContainText('setE');
-    await expect(array).toContainText('elementa');
+    await expect(array.getByRole('row')).toHaveCount(1 + 8);
+    await expect(array).toContainText('E');
+    await expect(array.getByRole('cell', { name: 'set', exact: true }).first()).toBeVisible();
+    // SET-13..16: the tables sit on the pinned row, side by side: U, the super set array, the
+    // sheet summary, then the section summaries, each clear of the one before.
+    const boxes = [universe, array, sheetSummary, summary];
+    let before = (await boxes[0]!.boundingBox())!;
+    for (const next of boxes.slice(1)) {
+      const box = (await next.boundingBox())!;
+      expect(box.y).toBeCloseTo(before.y, 0);
+      expect(box.x).toBeGreaterThanOrEqual(before.x + before.width);
+      before = box;
+    }
     await checkA11y(`sheet structure ${String(width)}`);
     await snapshot(`sheet-structure-${String(width)}`);
   });
@@ -198,6 +215,68 @@ test('SET-13 @U in a formula is the sheet’s universal set, and follows the set
   const c = tableRecord(cTable);
   setCellText(seeded, c.id, c.rows[0]!, c.columns[0]!.id, 'z');
   await expect(cell).toContainText('z');
+});
+
+test('SET-13 SET-14 SET-15 SET-16 FX-04 a formula reads a structure table by A1 address, and the @ picker offers @U', async ({
+  page,
+  checkA11y,
+}) => {
+  const room = await installFakes(page);
+  const seeded = openDocument(room.doc);
+  const sheetId = createSheet(seeded);
+  addSection(seeded, sheetId, { name: 'Foundation', firstColumn: 0, lastColumn: 4 });
+  seedSet(seeded, sheetId, 'E', 1, ['a', 'b']);
+  seedSet(seeded, sheetId, 'C', 3, ['b', 'x']);
+  createTable(seeded, { sheetId, at: { col: 8, row: 1 }, columns: 1, rows: 2, title: 'P' });
+  await asDesktop(page, 1440, 900);
+  await signInTo(page, `/d/${DOC_ID}`);
+  const grid = page.getByRole('grid', { name: 'P' });
+  await expect(grid).toBeVisible();
+  // The address U's third element is drawn at.
+  const third = page.getByTestId('universal-set').getByRole('rowheader').nth(2);
+  const address = await third.getAttribute('data-address');
+  expect(address).toMatch(/^[A-Z]+\d+$/);
+  const first = grid.getByRole('row').nth(1).getByRole('gridcell').first();
+  await first.dblclick();
+  await page.getByLabel(/^Edit /).fill(`=${address ?? ''}`);
+  await page.keyboard.press('Enter');
+  await expect(first).toContainText('x');
+  // The picker offers @U whole.
+  const second = grid.getByRole('row').nth(2).getByRole('gridcell').first();
+  await second.dblclick();
+  await page.getByLabel(/^Edit /).fill('=@U');
+  await expect(page.getByRole('listbox', { name: 'Entities' })).toContainText('@U');
+  // The popover fades in; axe reads the settled colours.
+  await page.evaluate(() =>
+    Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))),
+  );
+  await checkA11y('picker offers @U');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await expect(second).toContainText('a, b, x');
+});
+
+test('SET-17 Add section on the canvas menu adds a lane at the pointer', async ({ page }) => {
+  const room = await installFakes(page);
+  const seeded = openDocument(room.doc);
+  const sheetId = createSheet(seeded);
+  addSection(seeded, sheetId, { name: 'Foundation', firstColumn: 0, lastColumn: 3 });
+  seedSet(seeded, sheetId, 'E', 1, ['a']);
+  await asDesktop(page, 1440, 900);
+  await signInTo(page, `/d/${DOC_ID}`);
+  await expect(page.getByRole('grid', { name: 'E' })).toBeVisible();
+  const plane = page.getByTestId('plane');
+  const box = (await plane.boundingBox())!;
+  // Column 6 of the lattice, wherever the viewport sits and at whatever zoom: the first lane
+  // is four columns wide from column 0, so a column is a quarter of it.
+  const lane = (await page.getByTestId('section-lane').boundingBox())!;
+  const x = lane.x + (lane.width / 4) * 6 + 10;
+  expect(x).toBeLessThan(box.x + box.width);
+  await page.mouse.click(x, box.y + box.height - 60, { button: 'right' });
+  await page.getByRole('menuitem', { name: 'Add section' }).click();
+  await expect(page.getByTestId('section-lane')).toHaveCount(2);
+  const added = listSections(openDocument(room.doc), sheetId)[1]!;
+  expect(added.firstColumn).toBe(6);
 });
 
 test('SET-17 SET-18 Rename section… and Lock section from the lane’s menu; a locked section refuses edits and says why; Unlock section gives them back', async ({
