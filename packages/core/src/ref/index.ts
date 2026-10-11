@@ -54,6 +54,7 @@ export {
 export {
   COMPUTED_ORIGIN,
   computedItemsOf,
+  computedFormulaLabel,
   computedOperandsLabel,
   computedRowId,
   fillColumns,

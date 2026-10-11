@@ -191,6 +191,15 @@ p.gd-set-picker__legend {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.gd-set-title__formula {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  font-size: var(--text-mono-cell);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .gd-set-title__kind {
   flex: 0 1 auto;
   min-width: 1.5rem;
@@ -444,4 +453,95 @@ p.gd-set-picker__legend {
 }
 .gd-sband--section .gd-sband__cell:nth-child(2) {
   font-weight: 600;
+}
+
+/* SET-01: the rows a kind starts with, under the kind cards. */
+.gd-add-table__starts {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+.gd-add-table__starts-title {
+  margin: 0 0 var(--space-2);
+  color: var(--ink-muted);
+  font-size: var(--text-mono-cell);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+.gd-add-table__starts-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  font-size: 0.75rem;
+  list-style: none;
+}
+.gd-add-table__start {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: var(--space-2);
+}
+.gd-add-table__degree {
+  color: var(--ink-muted);
+  text-align: right;
+}
+
+/* SET-01: the computed step's preview of the result. */
+.gd-add-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+.gd-add-preview__title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.gd-add-preview__meta,
+.gd-add-preview__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 0.75rem;
+}
+.gd-add-preview__tag {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-mono-cell);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.gd-add-preview__note {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+.gd-add-preview__table {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.gd-add-preview__table th,
+.gd-add-preview__table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+}
+.gd-add-preview__table thead th {
+  border-bottom-color: var(--border-strong);
+  font-weight: 700;
+}
+.gd-add-preview__table tbody th {
+  width: 3rem;
+  color: var(--ink-muted);
+  font-weight: 400;
+  text-align: end;
 }

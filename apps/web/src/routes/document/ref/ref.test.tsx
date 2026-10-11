@@ -40,6 +40,7 @@ import { resetLocaleForTests, setLocale } from '../../../locale.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
 import { TableView } from '../TableView.js';
+import { addTableOfKind } from '../sets/set-tables.js';
 import { DerivedColumnPanel } from './DerivedColumnPanel.js';
 import { auditPipeline } from './pipeline-audit.js';
 
@@ -632,6 +633,76 @@ describe('SET-08 computed columns', () => {
     });
     await waitFor(() => {
       expect(within(row() as HTMLElement).getByText('no longer in F.a ∪ K6')).toBeInTheDocument();
+    });
+  });
+
+  /** A computed table over two picked set tables E and C; E's b leaves, the row holding a note. */
+  async function pickedLost() {
+    const set = (title: string, col: number, elements: string[]) => {
+      const id = createTable(gd, {
+        sheetId: sheet,
+        at: { col, row: 1 },
+        columns: 2,
+        rows: elements.length,
+        kind: 'simple',
+        title,
+      });
+      fill(
+        id,
+        elements.map((e) => [e]),
+      );
+      return id;
+    };
+    const e = set('E', 10, ['a', 'b']);
+    const c = set('C', 14, ['c']);
+    const sets = addTableOfKind(gd, {
+      sheetId: sheet,
+      at: { col: 1, row: 12 },
+      kind: 'computed',
+      pick: { op: 'Union', sets: [e, c], shape: 'column' },
+    })!;
+    render(<Mount gd={gd} tableId={sets} />);
+    await settled();
+    await waitFor(() => {
+      expect(tableById(gd, sets)!.rows).toHaveLength(3);
+    });
+    const [, b] = tableById(gd, sets)!.rows;
+    const note = tableById(gd, sets)!.columns[1]!.id;
+    const source = tableById(gd, e)!;
+    act(() => {
+      setCellText(gd, sets, b!, note, 'keep me');
+      setCellText(gd, e, source.rows[1]!, source.columns[0]!.id, '');
+    });
+    await settled();
+    return {
+      c,
+      row: () =>
+        gridOf(tableById(gd, sets)!.title).querySelector(`[data-row-id="${b!}"][role="row"]`)!,
+    };
+  }
+
+  it('SET-12 the lost label names the picked sets by table title and follows a rename', async () => {
+    const { c, row } = await pickedLost();
+    await waitFor(() => {
+      expect(within(row() as HTMLElement).getByText('no longer in E ∪ C')).toBeInTheDocument();
+    });
+    act(() => {
+      setTableTitle(gd, c, 'F');
+    });
+    await waitFor(() => {
+      expect(within(row() as HTMLElement).getByText('no longer in E ∪ F')).toBeInTheDocument();
+    });
+  });
+
+  it('SET-08 the title row tags a computed table "computed" beside its formula in set names', async () => {
+    const { c } = await pickedLost();
+    expect(screen.getByTestId('set-formula')).toHaveTextContent('= Union(E, C)');
+    expect(screen.getByTestId('set-kind-badge')).toHaveTextContent('computed');
+    act(() => {
+      setTableTitle(gd, c, 'F');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('set-formula')).toHaveTextContent('= Union(E, F)');
     });
   });
 

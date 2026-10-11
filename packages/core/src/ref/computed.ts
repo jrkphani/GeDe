@@ -786,21 +786,59 @@ const OPERATORS: Readonly<Record<string, string>> = {
  * The operands of a computed column's formula, as SET-12's label reads them
  * ("no longer in E × C"): `=Cross(@E, @C)` → `E × C`. Takes the formula as
  * displayed (projected), so operands read as a person typed them; an `@`
- * path drops its sigil. Anything else reads as the formula without its `=`.
+ * path drops its sigil; with `stored` and `titleOf`, a bound column reads as its table's title. Anything else reads as the formula without its `=`.
  */
-export function computedOperandsLabel(displayFormula: string): string {
-  const plain = displayFormula.replace(/^=/, '');
-  const parsed = parse(displayFormula);
-  if (!parsed.ok || parsed.value.kind !== 'call') return plain;
-  const { name, args } = parsed.value;
-  const text = args.map((arg) =>
-    arg.kind === 'entity' ? arg.path.join('.') : displayFormula.slice(arg.span.start, arg.span.end),
-  );
+export function computedOperandsLabel(
+  displayFormula: string,
+  stored?: string,
+  titleOf?: (tableId: Id) => string | null,
+): string {
+  const call = operandTexts(displayFormula, stored, titleOf);
+  if (call === null) return displayFormula.replace(/^=/, '');
+  const { name, text } = call;
   const op = OPERATORS[name];
   if (op !== undefined) return text.join(op);
   if (name === 'Comp' && text.length === 2) return `${text[1] ?? ''} ∖ ${text[0] ?? ''}`;
   if (name === 'Power' && text.length === 1) return `𝒫(${text[0] ?? ''})`;
-  return plain;
+  return displayFormula.replace(/^=/, '');
+}
+
+/** SET-08: the formula in set names, `= Cross(E, C, B)`; anything unreadable as displayed. */
+export function computedFormulaLabel(
+  displayFormula: string,
+  stored?: string,
+  titleOf?: (tableId: Id) => string | null,
+): string {
+  const call = operandTexts(displayFormula, stored, titleOf);
+  return call === null ? displayFormula : `= ${call.name}(${call.text.join(', ')})`;
+}
+
+/**
+ * The formula's call and its operands as text. The stored formula holds the same operands
+ * bound to ids: a bound column is a set by its table's title (SET-12), which a rename of the
+ * table re-projects.
+ */
+function operandTexts(
+  displayFormula: string,
+  stored?: string,
+  titleOf?: (tableId: Id) => string | null,
+): { name: string; text: string[] } | null {
+  const parsed = parse(displayFormula);
+  if (!parsed.ok || parsed.value.kind !== 'call') return null;
+  const { name, args } = parsed.value;
+  const bound = stored === undefined ? null : parse(stored);
+  const boundArgs = bound?.ok && bound.value.kind === 'call' ? bound.value.args : [];
+  const text = args.map((arg, i) => {
+    const at = boundArgs[i];
+    if (at?.kind === 'bound' && at.ref.kind === 'column') {
+      const title = titleOf?.(at.ref.columns[0]?.tableId ?? '');
+      if (title !== null && title !== undefined) return title;
+    }
+    return arg.kind === 'entity'
+      ? arg.path.join('.')
+      : displayFormula.slice(arg.span.start, arg.span.end);
+  });
+  return { name, text };
 }
 
 /**

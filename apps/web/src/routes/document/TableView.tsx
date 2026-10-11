@@ -14,6 +14,7 @@ import {
 import {
   appearanceEqual,
   CAPTION_ROWS,
+  computedFormulaLabel,
   computedOperandsLabel,
   cellFormatFor,
   cellFragment,
@@ -35,7 +36,9 @@ import {
   TABLE_TITLE_ROWS,
   tableAddresses,
   tableOutline,
+  tableById,
   tableRecord,
+  openDocument,
   EMPTY_DOC,
   plainText,
   richFromText,
@@ -274,13 +277,16 @@ export const TableView = memo(function TableView({
   // SET-12: the words a lost row shows, from the table's one computed formula as displayed.
   // The stored formula holds bound ids, so a move or rename of an operand re-projects it.
   const indexVersion = useWorkbookIndexVersion(record.computedFormula === null ? null : table.doc);
-  const lostSets = useMemo(
-    () =>
-      record.computedFormula === null || table.doc === null
-        ? null
-        : computedOperandsLabel(projectSource(table.doc, record.computedFormula)),
-    [table.doc, record.computedFormula, indexVersion],
-  );
+  const [lostSets, formulaLabel] = useMemo(() => {
+    if (record.computedFormula === null || table.doc === null) return [null, null] as const;
+    const doc = table.doc;
+    const shown = projectSource(doc, record.computedFormula);
+    const titleOf = (id: Id) => tableById(openDocument(doc), id)?.title ?? null;
+    return [
+      computedOperandsLabel(shown, record.computedFormula, titleOf),
+      computedFormulaLabel(shown, record.computedFormula, titleOf),
+    ] as const;
+  }, [table.doc, record.computedFormula, indexVersion]);
   // The column a lost row's words are drawn in: the first computed column on screen, so a
   // hidden first computed column does not hide them.
   const lostColumn = record.columns.find((c) => c.computed !== null && !c.hidden)?.id ?? null;
@@ -752,7 +758,7 @@ export const TableView = memo(function TableView({
           <>
             {/* SET-03 / SET-04: the meta row and the title row fill the bar's two lattice rows. */}
             <SetMetaRow record={record} facts={setFacts} />
-            <SetTitleRow caption={record.look.caption} kind={record.kind}>
+            <SetTitleRow caption={record.look.caption} kind={record.kind} formula={formulaLabel}>
               {titleContent}
             </SetTitleRow>
           </>

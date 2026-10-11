@@ -153,6 +153,7 @@ export const messages = {
 
   // SET-12: beside a computed row whose element left the result; `{sets}` is the formula's
   // operands as `computedOperandsLabel` reads them ("E × C").
+  'set.tag.computed': 'computed',
   'set.lost': 'no longer in {sets}',
   // SET-08: the read-only reason of a computed column's cells.
   'set.readOnly.computed': 'the column is computed',
@@ -194,6 +195,36 @@ export const messages = {
   'addTable.cancel': 'Cancel',
   'addTable.back': 'Back',
   'addTable.added': 'Added {table}',
+  'addTable.first': 'Add first table',
+  'addTable.section': 'Adding to section {name}.',
+  'addTable.changeHint': 'You can change the kind while the table has no typed values.',
+  'addTable.rows': 'rows it starts with',
+  'addTable.rows.plain.header': 'Header row',
+  'addTable.rows.plain.first': 'First row',
+  'addTable.rows.simple.meta':
+    'Meta: id, finite / infinite, bound / free, quantifier, null / singleton',
+  'addTable.rows.simple.title': 'Title: set name and definition { x | P(x) }',
+  'addTable.rows.simple.header': 'Header: range · description',
+  'addTable.rows.simple.first': 'First element',
+  'addTable.rows.family.meta': 'Meta row, as for a simple set',
+  'addTable.rows.family.title': 'Title: name and definition',
+  'addTable.rows.family.header': 'Header: range · description',
+  'addTable.rows.family.first': 'Element, simple set or family',
+  'addTable.rows.family.member': 'Its first member, indented',
+  'addTable.rows.computed.meta': 'Meta row, marked computed, names its operands',
+  'addTable.rows.computed.title': 'Title: name and the expression, for example A ∩ B',
+  'addTable.rows.computed.header': 'Header: range · from',
+  'addTable.rows.computed.first': 'Elements, computed, not typed',
+  'addTable.rows.product.meta': 'Meta row, marked computed, lists the sets in order',
+  'addTable.rows.product.title':
+    'Title: A × B × C and { (x₁, x₂, x₃) | x₁ ∈ A and x₂ ∈ B and x₃ ∈ C }',
+  'addTable.rows.product.header': 'Header: range · description',
+  'addTable.rows.product.first': 'First tuple (x₁, x₂, x₃)',
+  'addTable.preview': 'Preview',
+  'addTable.preview.empty':
+    'The result is the empty set ∅. The table keeps its title and meta rows and marks it null.',
+  'addTable.preview.more': 'and {n} more',
+  'addTable.preview.large': 'Too many rows to preview.',
   // SET-08, SET-09: the operand picker, the second step of a computed kind and Fill column's body.
   'pick.title': 'Add a computed table',
   'pick.description': 'From sets already on this sheet. The result recomputes when they change.',

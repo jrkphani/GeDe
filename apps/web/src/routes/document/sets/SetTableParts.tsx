@@ -131,16 +131,19 @@ export function SetMetaRow({
 /**
  * SET-04: the title row — the set's name (the table title, renamed where ADR-051 renames
  * it) and its definition (the caption, edited in the Table tab), rendered as typed, then the
- * table's kind. `children` is the title bar's own content: the name or its rename field, the
+ * table's kind, or for a computed table the tag "computed" beside its formula (SET-08). `children` is the title bar's own content: the name or its rename field, the
  * formula's error, the origin address.
  */
 export function SetTitleRow({
   caption,
   kind,
+  formula = null,
   children,
 }: {
   readonly caption: string;
   readonly kind: TableKind;
+  /** SET-08: a computed table's formula in set names, `= Cross(E, C, B)`; null for any other. */
+  readonly formula?: string | null;
   readonly children: ReactNode;
 }) {
   const t = useMessages();
@@ -154,8 +157,13 @@ export function SetTitleRow({
           {caption}
         </span>
       )}
+      {formula !== null && (
+        <span className="gd-mono gd-set-title__formula" title={formula} data-testid="set-formula">
+          {formula}
+        </span>
+      )}
       <span className="gd-mono gd-set-title__kind" data-testid="set-kind-badge">
-        {t(KIND_LABEL[kind])}
+        {formula === null ? t(KIND_LABEL[kind]) : t('set.tag.computed')}
       </span>
     </div>
   );

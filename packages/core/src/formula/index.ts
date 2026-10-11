@@ -39,6 +39,7 @@ export {
   normaliseElement,
   MAX_CROSS_TUPLES,
   crossCardinality,
+  crossTuples,
   power,
   powerCardinality,
   splitSetElements,

@@ -448,12 +448,37 @@ describe('DocumentShell', () => {
     // Double-clicking empty canvas places a table snapped to the lattice.
     const plane = screen.getByTestId('plane');
     fireEvent.doubleClick(plane, { clientX: 330, clientY: 500 });
+    await screen.findByRole('dialog', { name: 'What kind of table is this?' });
+    await userEvent.keyboard('{Enter}');
     await waitFor(() => {
       expect(screen.getAllByRole('grid')).toHaveLength(2);
     });
     const second = screen.getAllByRole('grid')[1]!.closest<HTMLElement>('.gd-table')!;
     expect(Number.parseFloat(second.style.left) % LATTICE.col).toBe(0);
     expect(Number.parseFloat(second.style.top) % LATTICE.row).toBe(0);
+  });
+
+  it('SET-01 placing a table on the canvas asks the kind first and nothing is added until it is answered', async () => {
+    await openShell();
+    fireEvent.doubleClick(screen.getByTestId('plane'), { clientX: 330, clientY: 500 });
+    const dialog = await screen.findByRole('dialog', { name: 'What kind of table is this?' });
+    expect(screen.queryAllByRole('grid')).toHaveLength(0);
+    await userEvent.click(within(dialog).getByRole('radio', { name: /^Simple set/ }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add table' }));
+    const grid = await screen.findByRole('grid', { name: 'Table 1' });
+    // The set table lands where the pointer was, not below the sheet.
+    const table = grid.closest<HTMLElement>('.gd-table')!;
+    expect(Number.parseFloat(table.style.top)).toBeGreaterThan(LATTICE.row * 3);
+    expect(within(table).getByTestId('set-kind-badge')).toHaveTextContent('Simple set');
+  });
+
+  it('SET-01 the empty sheet’s Add first table button asks the kind first', async () => {
+    await openShell();
+    await userEvent.click(screen.getByRole('button', { name: 'Add first table' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What kind of table is this?' });
+    expect(screen.queryAllByRole('grid')).toHaveLength(0);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryAllByRole('grid')).toHaveLength(0);
   });
 
   it('GRID-02 (partial) GRID-03 INSP-03 single click arms a cell with the selection ring, the inspector head states the object and its A1 address, Escape clears', async () => {

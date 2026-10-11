@@ -20,9 +20,10 @@ import { FormulaEngine } from '../engine/engine.js';
 import { observeWorkbook } from '../engine/snapshot.js';
 import { computedFormulaKey, workbookCellId, type CellResult } from '../engine/types.js';
 import { cross } from '../formula/sets.js';
-import { isId, type Id } from '../ids.js';
+import { isId, newId, type Id } from '../ids.js';
 import {
   computedItemsOf,
+  computedFormulaLabel,
   computedOperandsLabel,
   computedRowId,
   fillColumns,
@@ -267,6 +268,20 @@ describe('SET-12 lost label', () => {
     expect(computedOperandsLabel('=Comp(@E, @U)')).toBe('U ∖ E');
     expect(computedOperandsLabel('=Power(@E)')).toBe('𝒫(E)');
     expect(computedOperandsLabel('=Sum(A1')).toBe('Sum(A1');
+  });
+
+  test('SET-12 a column operand reads as the title of its table, not its lattice column', () => {
+    const [t1, c1, t2, c2] = [newId(), newId(), newId(), newId()];
+    const titles: Record<string, string> = { [t1]: 'E', [t2]: 'C' };
+    const stored = `=Cross({k:${t1}:${c1}}, {k:${t2}:${c2}})`;
+    const titleOf = (id: string) => titles[id] ?? null;
+    // The display projection spells a column by its lattice letter.
+    expect(computedOperandsLabel('=Cross(B:B, D:D)', stored, titleOf)).toBe('E × C');
+    titles[t1] = 'F';
+    expect(computedOperandsLabel('=Cross(B:B, D:D)', stored, titleOf)).toBe('F × C');
+    expect(computedFormulaLabel('=Cross(B:B, D:D)', stored, titleOf)).toBe('= Cross(F, C)');
+    // A table that is gone keeps the projected spelling.
+    expect(computedOperandsLabel('=Cross(B:B, D:D)', stored, () => null)).toBe('B:B × D:D');
   });
 });
 

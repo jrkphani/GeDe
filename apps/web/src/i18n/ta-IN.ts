@@ -123,6 +123,7 @@ export const messages: Messages = {
 
   'forms.power.hint': 'a-இன் ஒவ்வொரு உட்கணமும்',
 
+  'set.tag.computed': 'கணக்கிடப்பட்டது',
   'set.lost': '{sets}-இல் இனி இல்லை',
   'set.readOnly.computed': 'இந்த நெடுவரிசை கணக்கிடப்படுகிறது',
   'set.rowComputed': 'இந்த வரிசை கணக்கிடப்படுகிறது',
@@ -160,6 +161,38 @@ export const messages: Messages = {
   'addTable.cancel': 'ரத்துசெய்',
   'addTable.back': 'பின்செல்',
   'addTable.added': '{table} சேர்க்கப்பட்டது',
+  'addTable.first': 'முதல் அட்டவணையைச் சேர்',
+  'addTable.section': '{name} பிரிவில் சேர்க்கப்படுகிறது.',
+  'addTable.changeHint': 'அட்டவணையில் தட்டச்சு செய்த மதிப்புகள் இல்லாதவரை வகையை மாற்றலாம்.',
+  'addTable.rows': 'தொடக்கத்தில் உள்ள வரிசைகள்',
+  'addTable.rows.plain.header': 'தலைப்பு வரிசை',
+  'addTable.rows.plain.first': 'முதல் வரிசை',
+  'addTable.rows.simple.meta':
+    'மெட்டா: அடையாளம், முடிவுறு / முடிவிலி, கட்டுண்ட / கட்டற்ற, அளவீடு, வெற்று / ஒற்றை',
+  'addTable.rows.simple.title': 'தலைப்பு: கணத்தின் பெயரும் வரையறையும் { x | P(x) }',
+  'addTable.rows.simple.header': 'தலைப்பு: வீச்சு · விளக்கம்',
+  'addTable.rows.simple.first': 'முதல் உறுப்பு',
+  'addTable.rows.family.meta': 'மெட்டா வரிசை, எளிய கணத்தைப் போல',
+  'addTable.rows.family.title': 'தலைப்பு: பெயரும் வரையறையும்',
+  'addTable.rows.family.header': 'தலைப்பு: வீச்சு · விளக்கம்',
+  'addTable.rows.family.first': 'உறுப்பு, எளிய கணம் அல்லது குடும்பம்',
+  'addTable.rows.family.member': 'அதன் முதல் உறுப்பினர், உள்தள்ளப்பட்டது',
+  'addTable.rows.computed.meta':
+    'மெட்டா வரிசை, கணக்கிடப்பட்டது எனக் குறிக்கப்பட்டு, அதன் செயலுறுப்புகளைக் கூறும்',
+  'addTable.rows.computed.title': 'தலைப்பு: பெயரும் கோவையும், எ.கா. A ∩ B',
+  'addTable.rows.computed.header': 'தலைப்பு: வீச்சு · மூலம்',
+  'addTable.rows.computed.first': 'உறுப்புகள், கணக்கிடப்பட்டவை, தட்டச்சு செய்தவை அல்ல',
+  'addTable.rows.product.meta':
+    'மெட்டா வரிசை, கணக்கிடப்பட்டது எனக் குறிக்கப்பட்டு, கணங்களை வரிசையாகப் பட்டியலிடும்',
+  'addTable.rows.product.title':
+    'தலைப்பு: A × B × C மற்றும் { (x₁, x₂, x₃) | x₁ ∈ A மற்றும் x₂ ∈ B மற்றும் x₃ ∈ C }',
+  'addTable.rows.product.header': 'தலைப்பு: வீச்சு · விளக்கம்',
+  'addTable.rows.product.first': 'முதல் வரிசைப்படுத்திய தொகுப்பு (x₁, x₂, x₃)',
+  'addTable.preview': 'முன்னோட்டம்',
+  'addTable.preview.empty':
+    'முடிவு வெற்றுக் கணம் ∅. அட்டவணை தன் தலைப்பு, மெட்டா வரிசைகளை வைத்துக்கொண்டு அதை வெற்று எனக் குறிக்கும்.',
+  'addTable.preview.more': 'மேலும் {n}',
+  'addTable.preview.large': 'முன்னோட்டத்துக்கு வரிசைகள் மிக அதிகம்.',
   'pick.title': 'கணக்கிடப்பட்ட அட்டவணையைச் சேர்',
   'pick.description':
     'இந்தத் தாளில் ஏற்கெனவே உள்ள கணங்களிலிருந்து. அவை மாறும்போது முடிவு மீண்டும் கணக்கிடப்படும்.',

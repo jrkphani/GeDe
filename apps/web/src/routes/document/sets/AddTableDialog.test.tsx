@@ -7,9 +7,13 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addSection,
   createSheet,
+  addRow,
   createTable,
   openDocument,
+  setCellText,
+  tableById,
   setTableTitle,
   type GedeDoc,
   type Id,
@@ -36,7 +40,16 @@ beforeEach(() => {
 describe('SET-01 Add table asks the kind', () => {
   it('SET-01 DOC-02 Plain table is preselected and focused, so Enter adds today’s table', async () => {
     const onAdd = vi.fn();
-    render(<AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={onAdd} />);
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={onAdd}
+      />,
+    );
     const dialog = await screen.findByRole('dialog', { name: 'What kind of table is this?' });
     const group = within(dialog).getByRole('radiogroup', { name: 'Table kind' });
     expect(
@@ -65,14 +78,30 @@ describe('SET-01 Add table asks the kind', () => {
     const c = set('C', 4);
     const onAdd = vi.fn();
     const { unmount } = render(
-      <AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={onAdd} />,
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={onAdd}
+      />,
     );
     await userEvent.click(await screen.findByRole('radio', { name: /^Simple set/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
     expect(onAdd).toHaveBeenLastCalledWith('simple');
     unmount();
 
-    render(<AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={onAdd} />);
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={onAdd}
+      />,
+    );
     await userEvent.click(await screen.findByRole('radio', { name: /^Computed by formula/ }));
     expect(screen.queryByRole('button', { name: 'Add table' })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Pick sets' }));
@@ -103,7 +132,16 @@ describe('SET-01 Add table asks the kind', () => {
     const e = set('E', 1);
     const c = set('C', 4);
     const onAdd = vi.fn();
-    render(<AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={onAdd} />);
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={onAdd}
+      />,
+    );
     await userEvent.click(await screen.findByRole('radio', { name: /^Cartesian product/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Pick sets' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add a computed table' });
@@ -129,7 +167,14 @@ describe('SET-01 Add table asks the kind', () => {
   it('SET-01 with no set on the sheet the computed step says so and cannot add', async () => {
     createTable(gd, { sheetId, at: { col: 1, row: 1 } });
     render(
-      <AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={vi.fn()} />,
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={vi.fn()}
+      />,
     );
     await userEvent.click(await screen.findByRole('radio', { name: /^Cartesian product/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Pick sets' }));
@@ -139,6 +184,115 @@ describe('SET-01 Add table asks the kind', () => {
     expect(screen.getByRole('button', { name: 'Add table' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(screen.getByRole('radio', { name: /^Cartesian product/ })).toBeChecked();
+  });
+
+  it('SET-01 the kind picker shows the rows the table starts with, and follows the kind', async () => {
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={vi.fn()}
+      />,
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'What kind of table is this?' });
+    const starts = within(dialog).getByRole('region', { name: 'rows it starts with' });
+    expect(
+      within(starts)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['±0°Header row', '+1°First row']);
+    await userEvent.click(within(dialog).getByRole('radio', { name: /^Family of sets/ }));
+    const items = within(starts).getAllByRole('listitem');
+    expect(items).toHaveLength(5);
+    expect(items[4]).toHaveTextContent('+1.1°Its first member, indented');
+  });
+
+  it('SET-01 the dialog names the section the table lands in, only when sections exist', async () => {
+    const { unmount } = render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={vi.fn()}
+      />,
+    );
+    const plain = await screen.findByRole('dialog', { name: 'What kind of table is this?' });
+    expect(plain).not.toHaveTextContent('Adding to section');
+    unmount();
+    addSection(gd, sheetId, { name: 'Foundation', firstColumn: 0, lastColumn: 5 });
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={3}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Adding to section Foundation.');
+  });
+
+  it('SET-01 the computed step previews the result rows, capped, with the count, before Add table', async () => {
+    const e = set('E', 1);
+    const c = set('C', 4);
+    for (const [id, elements] of [
+      [e, ['a', 'b', 'c', 'd', 'e']],
+      [c, ['c', 'd', 'e', 'f', 'g']],
+    ] as const) {
+      const rec = tableById(gd, id)!;
+      elements.forEach((text, i) => {
+        const rowId = i === 0 ? rec.rows[0]! : addRow(gd, id);
+        setCellText(gd, id, rowId, rec.columns[0]!.id, text);
+      });
+    }
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={vi.fn()}
+      />,
+    );
+    await userEvent.click(await screen.findByRole('radio', { name: /^Computed by formula/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Pick sets' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a computed table' });
+    const preview = within(dialog).getByRole('region', { name: 'Preview' });
+    expect(preview).toHaveTextContent('= Union(E, C)');
+    expect(preview).toHaveTextContent('|E ∪ C| = 7');
+    expect(within(preview).getAllByRole('row')).toHaveLength(1 + 6);
+    expect(preview).toHaveTextContent('and 1 more');
+    await userEvent.click(within(dialog).getByRole('radio', { name: /^Inter/ }));
+    expect(preview).toHaveTextContent('|E ∩ C| = 3');
+    await userEvent.click(within(dialog).getByRole('radio', { name: /^Diff/ }));
+    // E \ C = a, b: two rows, nothing more.
+    expect(within(preview).getAllByRole('row')).toHaveLength(1 + 2);
+    expect(preview).not.toHaveTextContent('more');
+  });
+
+  it('SET-01 an empty result previews as the empty set', async () => {
+    set('E', 1);
+    set('C', 4);
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={vi.fn()}
+      />,
+    );
+    await userEvent.click(await screen.findByRole('radio', { name: /^Computed by formula/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Pick sets' }));
+    expect(await screen.findByText(/The result is the empty set ∅/u)).toBeInTheDocument();
   });
 });
 
@@ -171,7 +325,16 @@ describe('SET-10 Fill column with formula…', () => {
 describe('Phase 3 red-team regressions', () => {
   it('SET-01 I18N-01 Enter with keyCode 229 (an IME commit) adds nothing', async () => {
     const onAdd = vi.fn();
-    render(<AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={onAdd} />);
+    render(
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={onAdd}
+      />,
+    );
     const plain = await screen.findByRole('radio', { name: /^Plain table/ });
     fireEvent.keyDown(plain, { code: 'Enter', key: 'Enter', keyCode: 229 });
     expect(onAdd).not.toHaveBeenCalled();
@@ -183,7 +346,14 @@ describe('Phase 3 red-team regressions', () => {
     set('E', 1);
     set('C', 4);
     render(
-      <AddTableDialog gd={gd} sheetId={sheetId} open onOpenChange={vi.fn()} onAdd={vi.fn()} />,
+      <AddTableDialog
+        gd={gd}
+        sheetId={sheetId}
+        col={1}
+        open
+        onOpenChange={vi.fn()}
+        onAdd={vi.fn()}
+      />,
     );
     await userEvent.click(await screen.findByRole('radio', { name: /^Computed by formula/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Pick sets' }));

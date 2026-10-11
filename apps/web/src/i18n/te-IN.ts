@@ -119,6 +119,7 @@ export const messages: Messages = {
 
   'forms.power.hint': 'a యొక్క ప్రతి ఉపసమితి',
 
+  'set.tag.computed': 'గణించినది',
   'set.lost': 'ఇక {sets}లో లేదు',
   'set.readOnly.computed': 'ఈ నిలువు వరుస లెక్కించబడుతుంది',
   'set.rowComputed': 'ఈ వరుస లెక్కించబడుతుంది',
@@ -154,6 +155,37 @@ export const messages: Messages = {
   'addTable.cancel': 'రద్దు చేయి',
   'addTable.back': 'వెనుకకు',
   'addTable.added': '{table} జోడించబడింది',
+  'addTable.first': 'మొదటి పట్టికను జోడించండి',
+  'addTable.section': '{name} విభాగంలో జోడిస్తోంది.',
+  'addTable.changeHint': 'పట్టికలో టైప్ చేసిన విలువలు లేనంత వరకు రకాన్ని మార్చవచ్చు.',
+  'addTable.rows': 'మొదట ఉండే వరుసలు',
+  'addTable.rows.plain.header': 'శీర్షిక వరుస',
+  'addTable.rows.plain.first': 'మొదటి వరుస',
+  'addTable.rows.simple.meta':
+    'మెటా: ఐడి, పరిమిత / అపరిమిత, బద్ధ / స్వేచ్ఛ, క్వాంటిఫయర్, శూన్య / ఏకైక',
+  'addTable.rows.simple.title': 'శీర్షిక: సమితి పేరు మరియు నిర్వచనం { x | P(x) }',
+  'addTable.rows.simple.header': 'శీర్షిక: పరిధి · వివరణ',
+  'addTable.rows.simple.first': 'మొదటి మూలకం',
+  'addTable.rows.family.meta': 'మెటా వరుస, సరళ సమితిలో వలె',
+  'addTable.rows.family.title': 'శీర్షిక: పేరు మరియు నిర్వచనం',
+  'addTable.rows.family.header': 'శీర్షిక: పరిధి · వివరణ',
+  'addTable.rows.family.first': 'మూలకం, సరళ సమితి లేదా కుటుంబం',
+  'addTable.rows.family.member': 'దాని మొదటి సభ్యుడు, లోపలికి జరిపి',
+  'addTable.rows.computed.meta': 'మెటా వరుస, గణించినదిగా గుర్తించి, దాని ఆపరెండ్లను చెబుతుంది',
+  'addTable.rows.computed.title': 'శీర్షిక: పేరు మరియు సూత్రం, ఉదా. A ∩ B',
+  'addTable.rows.computed.header': 'శీర్షిక: పరిధి · మూలం',
+  'addTable.rows.computed.first': 'మూలకాలు, గణించినవి, టైప్ చేసినవి కావు',
+  'addTable.rows.product.meta':
+    'మెటా వరుస, గణించినదిగా గుర్తించి, సమితులను క్రమంగా జాబితా చేస్తుంది',
+  'addTable.rows.product.title':
+    'శీర్షిక: A × B × C మరియు { (x₁, x₂, x₃) | x₁ ∈ A మరియు x₂ ∈ B మరియు x₃ ∈ C }',
+  'addTable.rows.product.header': 'శీర్షిక: పరిధి · వివరణ',
+  'addTable.rows.product.first': 'మొదటి టపుల్ (x₁, x₂, x₃)',
+  'addTable.preview': 'ప్రివ్యూ',
+  'addTable.preview.empty':
+    'ఫలితం ఖాళీ సమితి ∅. పట్టిక తన శీర్షిక, మెటా వరుసలను ఉంచి దానిని శూన్యంగా గుర్తిస్తుంది.',
+  'addTable.preview.more': 'ఇంకా {n}',
+  'addTable.preview.large': 'ప్రివ్యూకు వరుసలు చాలా ఎక్కువ.',
   'pick.title': 'లెక్కించిన పట్టికను జోడించు',
   'pick.description':
     'ఈ షీట్‌లో ఇప్పటికే ఉన్న సమితుల నుండి. అవి మారినప్పుడు ఫలితం మళ్లీ లెక్కించబడుతుంది.',
