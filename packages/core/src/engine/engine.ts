@@ -42,7 +42,7 @@ import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { cellMayRelabel } from './entities.js';
 import {
   cellsInColumnOn,
-  cellsInRangeOn,
+  dataOriginRow,
   entityKey,
   positionKey,
   type SheetIndex,
@@ -918,17 +918,38 @@ export class FormulaEngine {
     for (const id of this.tablesRead(cell)) if (isStructure(id)) return true;
     const ast = cell.formula?.ast;
     if (ast == null) return false;
-    const sheet = this.index.sheetIndex(own.sheetId);
+    // The structure tables' rectangles (title to the growth row past the last entry), so a read
+    // of a blank cell inside or just past one counts as a read of the table.
+    const boxes = [...this.tables.values()].flatMap(({ structure: t }) =>
+      t.structure === true && t.sheetId === own.sheetId
+        ? [
+            {
+              col0: t.gridCol,
+              col1: t.gridCol + t.columns.reduce((n, c) => n + c.width, 0) - 1,
+              row0: t.gridRow,
+              row1: dataOriginRow(t) + t.rows.length,
+            },
+          ]
+        : [],
+    );
     return references(ast).some((ref) => {
-      const hit =
+      if (ref.kind === 'column') return boxes.some((b) => ref.col >= b.col0 && ref.col <= b.col1);
+      const r =
         ref.kind === 'address'
-          ? [sheet.byPosition.get(positionKey(ref.ref))]
+          ? { start: ref.ref, end: ref.ref }
           : ref.kind === 'range'
-            ? cellsInRangeOn(sheet, ref.range)
-            : ref.kind === 'column'
-              ? cellsInColumnOn(sheet, ref.col)
-              : [];
-      return hit.some((c) => c !== undefined && isStructure(c.tableId));
+            ? ref.range
+            : null;
+      return (
+        r !== null &&
+        boxes.some(
+          (b) =>
+            r.start.col <= b.col1 &&
+            r.end.col >= b.col0 &&
+            r.start.row <= b.row1 &&
+            r.end.row >= b.row0,
+        )
+      );
     });
   }
 

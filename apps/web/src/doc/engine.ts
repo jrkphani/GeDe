@@ -319,9 +319,29 @@ export function createEngineHost(
   // many rounds without a document change, when the structure has not settled.
   const MAX_STRUCTURE_ROUNDS = 8;
   let structureRounds = 0;
+  // FX-06: the cut is never silent. The formula cells of the set tables that did not settle read
+  // ⚠ circular (until the document changes and they are evaluated again).
+  let structureCut = false;
+  const markCircular = () => {
+    structureCut = true;
+    const touched: WorkbookCellId[] = [];
+    for (const [id, r] of results) {
+      if (r.source === '' || r.error !== null || !isSetTable(splitWorkbookCellId(id).tableId))
+        continue;
+      version += 1;
+      results.set(id, { ...r, version, value: null, error: { kind: 'circular' } });
+      touched.push(id);
+    }
+    for (const id of touched) notify(id);
+    for (const cb of allListeners) cb(touched);
+  };
   const refreshStructure = () => {
     structureQueued = false;
-    if (status.failed || structureRounds >= MAX_STRUCTURE_ROUNDS) return;
+    if (status.failed) return;
+    if (structureRounds >= MAX_STRUCTURE_ROUNDS) {
+      if (!structureCut) markCircular();
+      return;
+    }
     const changes = structureState.next(
       (tableId) => (rowId, colId) =>
         results.get(workbookCellId(tableId, cellKey(rowId, colId)))?.value,
@@ -345,6 +365,7 @@ export function createEngineHost(
   };
   const documentChanged = () => {
     structureRounds = 0;
+    structureCut = false;
     scheduleStructure();
   };
   const watchTables = (events: Y.YEvent<Y.AbstractType<unknown>>[]) => {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 
 import { commitCellText } from '../engine/commit.js';
-import { formatAddress } from '../address.js';
+import { formatAddress, formatColumn } from '../address.js';
 import { liveEngine } from '../engine/__fixtures__/structure.js';
 import type { StructureTable } from '../engine/structure.js';
 import { workbookCellId, type CellSnapshot } from '../engine/types.js';
@@ -481,7 +481,28 @@ describe('universal set, super set and summaries (SET-13..16)', () => {
     ]);
   });
 
-  test('SET-15 SET-16 the structure tables stack under the sheet’s tables, a row apart, from the first lane', () => {
+  test('SET-13 SET-14 SET-15 SET-16 adding sections and sets leaves U, the super set array, the sheet summary and an existing section summary where they were (row and column)', () => {
+    const { sync } = liveEngine(gd);
+    const first = section('First', 0, 8);
+    setTable('E', ['a', 'b'], 0);
+    const at = () =>
+      Object.fromEntries(
+        sync
+          .tables(sheetId)
+          .map((t) => [t.sectionId ?? t.kind, [t.bounds.col, t.bounds.row] as const]),
+      );
+    const before = at();
+    section('Second', 10, 14);
+    setTable('C', ['b', 'c', 'd', 'e'], 11);
+    section('Third', 16, 20);
+    setTable('D', ['q'], 2);
+    const after = at();
+    for (const key of ['universe', 'super', 'sheet', first]) {
+      expect(after[key]).toEqual(before[key]);
+    }
+  });
+
+  test('SET-15 SET-16 the structure tables sit side by side on the pinned row, one block each', () => {
     const { sync } = liveEngine(gd);
     expect(sync.tables(sheetId)).toEqual([]);
     const first = section('First', 0, 8);
@@ -497,17 +518,18 @@ describe('universal set, super set and summaries (SET-13..16)', () => {
       ['universe', null],
       ['super', null],
     ]);
-    // The sets sit in rows 2..4 (title 2, header 1, no rows beyond the table's own two); the
-    // tables start a row under them and are each title + header + one row per entry tall.
     const top = tables[0]?.bounds.row ?? 0;
     expect(top).toBeGreaterThan(4);
-    let row = top;
     for (const t of tables) {
-      expect(t.bounds.col).toBe(0);
-      expect(t.bounds.row).toBe(row);
+      expect(t.bounds.row).toBe(top);
       expect(t.bounds.rows).toBe(TABLE_TITLE_ROWS + TABLE_HEADER_ROWS + t.table.rows.length);
-      row += t.bounds.rows + 1;
     }
+    // No two blocks overlap.
+    const boxes = [...tables].sort((x, y) => x.bounds.col - y.bounds.col);
+    boxes.slice(1).forEach((t, i) => {
+      const prev = boxes[i]?.bounds;
+      expect((prev?.col ?? 0) + (prev?.cols ?? 0)).toBeLessThan(t.bounds.col);
+    });
     expect(tables.map((t) => t.table.rows.length)).toEqual([2, 1, 2, 4, 7]);
   });
 });
@@ -739,6 +761,30 @@ describe('lock guard holes (SET-17, SET-18)', () => {
       });
     });
     expect(lockedTablesEdited(gd, removed)).toEqual([id]);
+  });
+
+  test("SET-18 a duplicated row id, or a person's rows swapped, in a locked table is put back", () => {
+    const lane = section('Lane', 0, 5);
+    const id = setTable('E', ['a', 'b'], 1);
+    setSectionLocked(gd, sheetId, lane, true);
+    const rows = () => (tableMap(gd, id)?.get('rows') as Y.Array<string>).toArray();
+    const order = rows();
+    const dup = sentBy((r) => {
+      r.doc.transact(() => {
+        (tableMap(r, id)?.get('rows') as Y.Array<string>).push([order[0] ?? '']);
+      });
+    });
+    expect(applyGuardedUpdate(gd, dup, 'client')).toEqual([id]);
+    expect(rows()).toEqual(order);
+    const swap = sentBy((r) => {
+      r.doc.transact(() => {
+        const arr = tableMap(r, id)?.get('rows') as Y.Array<string>;
+        arr.delete(0, 1);
+        arr.push([order[0] ?? '']);
+      });
+    });
+    expect(applyGuardedUpdate(gd, swap, 'client')).toEqual([id]);
+    expect(rows()).toEqual(order);
   });
 
   const forgedRow = (r: GedeDoc, id: Id): Id => {
@@ -1273,6 +1319,53 @@ describe('structure tables hold still (SET-13, FX-06)', () => {
     settle();
     const cell = results.get(workbookCellId(e, cellKey(row, rangeOf(e))));
     expect(cell?.error).toEqual({ kind: 'circular' });
+  });
+});
+
+describe('structure reads by rectangle (FX-06, SET-13)', () => {
+  /** A set table reads `formula`; the cell's error once the structure has settled. */
+  function readOf(
+    formula: (u: StructureTable) => string,
+    kind: StructureTable['kind'] = 'universe',
+  ) {
+    const { results, sync, settle } = liveEngine(gd);
+    const e = setTable('E', ['b']);
+    const row = addRow(gd, e);
+    settle();
+    const u = sync.tables(sheetId).find((t) => t.kind === kind);
+    if (u === undefined) throw new Error('no U');
+    commitCellText(gd, e, row, rangeOf(e), formula(u));
+    settle();
+    return results.get(workbookCellId(e, cellKey(row, rangeOf(e))))?.error;
+  }
+
+  test('FX-06 SET-13 a read of a blank address inside U, or the growth row past it, is circular', () => {
+    const circular = { kind: 'circular' };
+    expect(
+      readOf(
+        (u) => `=Diff("a", ${formatAddress({ col: u.bounds.col + 1, row: u.bounds.row + 2 })})`,
+      ),
+    ).toEqual(circular);
+    expect(
+      readOf(
+        (u) =>
+          `=Diff("a", ${formatAddress({ col: u.bounds.col, row: u.bounds.row + u.bounds.rows })})`,
+      ),
+    ).toEqual(circular);
+  });
+
+  test('FX-06 SET-13 a range over only blank structure cells, or a whole column of one, is circular', () => {
+    const circular = { kind: 'circular' };
+    expect(
+      readOf((u) => {
+        const c = u.bounds.col + 1;
+        return `=Diff("a", ${formatAddress({ col: c, row: u.bounds.row + 2 })}:${formatAddress({ col: c, row: u.bounds.row + 3 })})`;
+      }),
+    ).toEqual(circular);
+    // A column no document table occupies stays an A1 column, so it reads the structure.
+    expect(
+      readOf((u) => `=Diff("a", ${formatColumn({ col: u.bounds.col + 2 })})`, 'sheet'),
+    ).toEqual(circular);
   });
 });
 

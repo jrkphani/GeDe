@@ -169,14 +169,15 @@ for (const width of [1440, 1024] as const) {
     await expect(array.getByRole('row')).toHaveCount(1 + 8);
     await expect(array).toContainText('E');
     await expect(array.getByRole('cell', { name: 'set', exact: true }).first()).toBeVisible();
-    // SET-13..16: the tables sit on the lattice, a row apart, one under the other, left-aligned.
-    const boxes = [summary, sheetSummary, universe, array];
-    let above = await boxes[0]!.boundingBox();
+    // SET-13..16: the tables sit on the pinned row, side by side: U, the super set array, the
+    // sheet summary, then the section summaries, each clear of the one before.
+    const boxes = [universe, array, sheetSummary, summary];
+    let before = (await boxes[0]!.boundingBox())!;
     for (const next of boxes.slice(1)) {
       const box = (await next.boundingBox())!;
-      expect(box.x).toBeCloseTo(above!.x, 0);
-      expect(box.y).toBeGreaterThanOrEqual(above!.y + above!.height);
-      above = box;
+      expect(box.y).toBeCloseTo(before.y, 0);
+      expect(box.x).toBeGreaterThanOrEqual(before.x + before.width);
+      before = box;
     }
     await checkA11y(`sheet structure ${String(width)}`);
     await snapshot(`sheet-structure-${String(width)}`);

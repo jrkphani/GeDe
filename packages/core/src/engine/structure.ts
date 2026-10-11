@@ -108,8 +108,18 @@ export interface StructureTable {
  */
 const PIN_HEADROOM_ROWS = 24;
 
-/** Rows a table is separated from the next by. */
-const GAP_ROWS = 1;
+/**
+ * SET-13..16, ADR-056: every structure table starts on the pinned row, each in its own fixed
+ * block of lattice columns, so a top-left address never depends on content. U, the super set
+ * array and the sheet summary come first (a column apart); section summaries follow to the right,
+ * one block each, in the order their ids (ULIDs) were made.
+ */
+const GAP_COLS = 1;
+const UNIVERSE_COL = 0;
+const SUPER_COL = UNIVERSE_COL + 2 + GAP_COLS;
+const SHEET_COL = SUPER_COL + 3 + GAP_COLS;
+const SECTIONS_COL = SHEET_COL + 4 + GAP_COLS;
+const SECTION_BLOCK = Object.values(SUMMARY_WIDTHS).reduce((a, b) => a + b, 0) + GAP_COLS;
 
 interface Spec {
   readonly kind: StructureKind;
@@ -195,8 +205,8 @@ function summaryCells(row: SummaryRow, labels: StructureLabels): string[] {
 }
 
 /**
- * Every structure table of one sheet, stacked from the sheet's pinned structure row (a clear band
- * under its own tables until `structureSync` pins it), at column 0: a summary per section, the
+ * Every structure table of one sheet, side by side from the sheet's pinned structure row (a clear
+ * band under its own tables until `structureSync` pins it), each in a fixed block of columns: a summary per section, the
  * sheet summary, U and the super set array. Empty for a sheet with neither a set nor a
  * section. `valueOf` answers a formula range cell with the value the engine evaluated
  * (SET-02), as `summarySets` takes it.
@@ -211,14 +221,13 @@ export function structureTables(
   const sets: readonly SummarySet[] = summarySets(gd, sheetId, valueOf);
   if (sections.length === 0 && sets.length === 0) return [];
   const bounds = sheetBounds(gd, sheetId);
-  // Column 0, like the pinned row: a section added or reordered never moves an address (SET-13).
-  const col = 0;
-  let row =
+  const row =
     structureRowOf(gd, sheetId) ??
     (bounds === null ? 1 : bounds.row + bounds.rows + 1) + PIN_HEADROOM_ROWS;
   const universe = universalSet(sets);
   const out: StructureTable[] = [];
   const add = (
+    col: number,
     spec: Spec,
     extra: Pick<StructureTable, 'sectionId' | 'ordinal' | 'sets' | 'elements' | 'sections'> & {
       algebra?: boolean;
@@ -226,12 +235,13 @@ export function structureTables(
   ): void => {
     const { table, bounds: box } = snapshot(sheetId, spec, { col, row });
     out.push({ kind: spec.kind, algebra: true, ...extra, bounds: box, table });
-    row += box.rows + GAP_ROWS;
   };
+  const slots = sections.map((s) => s.id).sort();
   sections.forEach((section, i) => {
     const inSection = sets.filter((s) => s.sectionId === section.id);
     const summary = sectionSummary(inSection);
     add(
+      SECTIONS_COL + slots.indexOf(section.id) * SECTION_BLOCK,
       {
         kind: 'section',
         id: `structure.${sheetId}.section.${section.id}`,
@@ -251,6 +261,7 @@ export function structureTables(
     );
   });
   add(
+    SHEET_COL,
     {
       kind: 'sheet',
       id: `structure.${sheetId}.sheet`,
@@ -272,6 +283,7 @@ export function structureTables(
     },
   );
   add(
+    UNIVERSE_COL,
     {
       kind: 'universe',
       id: `structure.${sheetId}.universe`,
@@ -290,6 +302,7 @@ export function structureTables(
   );
   const superSet = superSetArray(sets);
   add(
+    SUPER_COL,
     {
       kind: 'super',
       id: `structure.${sheetId}.super`,
