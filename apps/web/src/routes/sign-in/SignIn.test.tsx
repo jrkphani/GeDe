@@ -143,12 +143,12 @@ describe('SignIn (option 1c)', () => {
     expect(screen.queryByRole('button', { name: 'Passkey' })).not.toBeInTheDocument();
   });
 
-  it('AUTH-02 switching to Create account keeps the email, resets to the email step and asks for a name', async () => {
+  it('AUTH-02 switching to Sign up keeps the email, resets to the email step and asks for a name', async () => {
     const u = userEvent.setup();
     renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     await screen.findByRole('button', { name: 'Passkey' });
-    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    await u.click(screen.getByRole('radio', { name: 'Sign up' }));
     expect(screen.getByLabelText('Email')).toHaveValue('meena@1cloudhub.com');
     expect(screen.getByLabelText('Display name')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
@@ -388,7 +388,7 @@ describe('SignIn (option 1c)', () => {
     expect(screen.getByRole('button', { name: 'Email me a one-time code' })).toBeEnabled();
   });
 
-  it('AUTH-04 an unknown email (SELECT_CHALLENGE under preventUserExistenceErrors) says no account uses it and points at Create account', async () => {
+  it('AUTH-04 an unknown email (SELECT_CHALLENGE under preventUserExistenceErrors) says no account uses it and points at Sign up', async () => {
     const u = userEvent.setup();
     // What `startCodeSignIn` / `startPasskeySignIn` throw for that pool answer (cognito.test.ts).
     const unknown = () => Promise.reject(new cognito.AuthFailureError({ kind: 'unknown-email' }));
@@ -398,15 +398,13 @@ describe('SignIn (option 1c)', () => {
     await u.type(await screen.findByLabelText('Email'), 'audit-nobody@example.invalid{Enter}');
     await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(
-      'No account uses this email. Switch to Create account to start one.',
-    );
+    expect(alert).toHaveTextContent('No account uses this email. Switch to Sign up to start one.');
     expect(alert).not.toHaveTextContent(/passkey/i);
     // Same answer for the passkey button: the cause is the account, not the method.
     await u.click(screen.getByRole('button', { name: 'Passkey' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('No account uses this email.');
     // The remedy is one click away and keeps the address.
-    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    await u.click(screen.getByRole('radio', { name: 'Sign up' }));
     expect(screen.getByLabelText('Email')).toHaveValue('audit-nobody@example.invalid');
   });
 
@@ -424,7 +422,7 @@ describe('SignIn (option 1c)', () => {
     expect(
       screen.getByText(/If no code arrives, this email may not have an account yet/),
     ).toBeInTheDocument();
-    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    await u.click(screen.getByRole('radio', { name: 'Sign up' }));
     expect(screen.getByLabelText('Email')).toHaveValue('nobody@example.invalid');
     expect(screen.queryByText(/If no code arrives/)).not.toBeInTheDocument();
   });
@@ -434,9 +432,9 @@ describe('SignIn (option 1c)', () => {
     renderRoutes(routes, ['/sign-in']);
     const email = await screen.findByLabelText('Email');
     expect(email).toHaveFocus(); // arriving at the screen lands in the field
-    await u.click(screen.getByRole('radio', { name: 'Create account' }));
-    expect(screen.getByRole('radio', { name: 'Create account' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Create account' })).toHaveFocus();
+    await u.click(screen.getByRole('radio', { name: 'Sign up' }));
+    expect(screen.getByRole('radio', { name: 'Sign up' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Sign up' })).toHaveFocus();
     expect(screen.getByLabelText('Email')).not.toHaveFocus();
     await u.click(screen.getByRole('radio', { name: 'Sign in' }));
     expect(screen.getByRole('radio', { name: 'Sign in' })).toHaveFocus();
@@ -513,7 +511,7 @@ describe('SignIn (option 1c)', () => {
       return Promise.resolve({ kind: 'done' });
     });
     renderRoutes(routes, ['/sign-in']);
-    await u.click(await screen.findByRole('radio', { name: 'Create account' }));
+    await u.click(await screen.findByRole('radio', { name: 'Sign up' }));
     await u.type(screen.getByLabelText('Email'), 'meena@1cloudhub.com');
     await u.type(screen.getByLabelText('Display name'), 'Meena{Enter}');
     // I18N-05: the device's locale rides along as the pool's `locale` attribute, so the
@@ -523,7 +521,7 @@ describe('SignIn (option 1c)', () => {
     const code = await screen.findByLabelText('Six-digit code');
     expect(code).toHaveAttribute('data-length', '6');
     expect(screen.getByText('Codes expire in 24 hours')).toBeInTheDocument();
-    const verify = screen.getByRole('button', { name: 'Verify and create account' });
+    const verify = screen.getByRole('button', { name: 'Verify and sign up' });
     await u.type(code, '65432');
     expect(verify).toBeDisabled();
     await u.type(code, '1');
@@ -551,11 +549,11 @@ describe('SignIn (option 1c)', () => {
       return Promise.resolve({ kind: 'done' });
     });
     renderRoutes(routes, ['/sign-in']);
-    await u.click(await screen.findByRole('radio', { name: 'Create account' }));
+    await u.click(await screen.findByRole('radio', { name: 'Sign up' }));
     await u.type(screen.getByLabelText('Email'), 'meena@1cloudhub.com');
     await u.type(screen.getByLabelText('Display name'), 'Meena{Enter}');
     await u.type(await screen.findByLabelText('Six-digit code'), '654321');
-    await u.click(screen.getByRole('button', { name: 'Verify and create account' }));
+    await u.click(screen.getByRole('button', { name: 'Verify and sign up' }));
     const code = await screen.findByLabelText('Eight-digit code');
     expect(screen.getByText('Codes expire in 10 minutes')).toBeInTheDocument();
     // The account was just created: the "may not have an account yet" note (ADR-040) is
@@ -584,7 +582,7 @@ describe('SignIn (option 1c)', () => {
     const appleSignIn = screen.getByRole('button', { name: 'Sign in with Apple' });
     expect(appleSignIn).toHaveClass('gd-apple');
     // Sign-up step keeps it, with Apple's own alternative wording.
-    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    await u.click(screen.getByRole('radio', { name: 'Sign up' }));
     const appleSignUp = screen.getByRole('button', { name: 'Continue with Apple' });
     expect(appleSignUp).toHaveClass('gd-apple');
     // Method step, option 1c verbatim: passkey above Apple above email code.

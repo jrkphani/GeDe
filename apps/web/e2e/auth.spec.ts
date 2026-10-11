@@ -39,9 +39,9 @@ const KNOWN: FakeSession = {
 
 const signInScreen = (page: Page) => ({
   heading: page.getByRole('heading', { level: 1 }),
-  modes: page.getByRole('radiogroup', { name: 'Sign in or create account' }),
+  modes: page.getByRole('radiogroup', { name: 'Sign in or sign up' }),
   signInMode: page.getByRole('radio', { name: 'Sign in' }),
-  signUpMode: page.getByRole('radio', { name: 'Create account' }),
+  signUpMode: page.getByRole('radio', { name: 'Sign up' }),
   email: page.getByLabel('Email'),
   name: page.getByLabel('Display name'),
   continueButton: page.getByRole('button', { name: 'Continue' }),
@@ -95,7 +95,7 @@ test.describe('email step', () => {
     await expect(s.email).toHaveValue(VALID_EMAIL);
   });
 
-  test('AUTH-02 the segmented Sign in / Create account control preserves the typed email', async ({
+  test('AUTH-02 the segmented Sign in / Sign up control preserves the typed email', async ({
     page,
     checkA11y,
   }) => {
@@ -106,7 +106,7 @@ test.describe('email step', () => {
     await s.email.fill(VALID_EMAIL);
 
     await s.signUpMode.click();
-    await expect(s.heading).toHaveText('Create account');
+    await expect(s.heading).toHaveText('Sign up');
     await expect(s.signUpMode).toHaveAttribute('aria-checked', 'true');
     await expect(s.email).toHaveValue(VALID_EMAIL);
     // Sign-up additionally collects a display name (AUTH-03) and stays disabled without it.
@@ -175,7 +175,7 @@ test.describe('method step', () => {
     await expect(s.password).toHaveCount(0);
   });
 
-  test('AUTH-04 an email with no account: the pool answers SELECT_CHALLENGE, the screen says no account uses it and points at Create account', async ({
+  test('AUTH-04 an email with no account: the pool answers SELECT_CHALLENGE, the screen says no account uses it and points at Sign up', async ({
     page,
     checkA11y,
   }) => {
@@ -199,21 +199,17 @@ test.describe('method step', () => {
     await s.email.press('Enter');
     await s.emailCode.click();
     const alert = page.getByRole('alert');
-    await expect(alert).toHaveText(
-      'No account uses this email. Switch to Create account to start one.',
-    );
+    await expect(alert).toHaveText('No account uses this email. Switch to Sign up to start one.');
     // Not the self-contradicting "has no passkey" copy the audit found (#46).
     await expect(alert).not.toContainText('passkey');
     await expect(s.emailCode).toBeEnabled();
     // The passkey button reaches the same answer: the cause is the account, not the method.
     await s.passkey.click();
-    await expect(alert).toHaveText(
-      'No account uses this email. Switch to Create account to start one.',
-    );
+    await expect(alert).toHaveText('No account uses this email. Switch to Sign up to start one.');
     await checkA11y('sign-in method step unknown email 1440');
     // The remedy is one click away and keeps the address (AUTH-02).
     await s.signUpMode.click();
-    await expect(s.heading).toHaveText('Create account');
+    await expect(s.heading).toHaveText('Sign up');
     await expect(s.email).toHaveValue('audit-nobody@example.invalid');
 
     // The pool's second shape for an unknown address, PasswordResetRequiredException, reads
@@ -222,9 +218,7 @@ test.describe('method step', () => {
     await s.email.fill(UNKNOWN.passwordReset);
     await s.email.press('Enter');
     await s.emailCode.click();
-    await expect(alert).toHaveText(
-      'No account uses this email. Switch to Create account to start one.',
-    );
+    await expect(alert).toHaveText('No account uses this email. Switch to Sign up to start one.');
     await expect(alert).not.toContainText('password');
 
     // The third shape, a simulated code challenge, cannot be told from a real one (ADR-040):
@@ -482,7 +476,7 @@ test.describe('sign-up code step', () => {
     await expect(code).toHaveAttribute('data-length', '6');
     await expect(page.getByText('Codes expire in 24 hours')).toBeVisible();
     await expect(page.getByText('n***@example.com')).toBeVisible();
-    const verify = page.getByRole('button', { name: 'Verify and create account' });
+    const verify = page.getByRole('button', { name: 'Verify and sign up' });
     await expect(verify).toBeDisabled();
     await code.fill('12345');
     await expect(verify).toBeDisabled();
@@ -566,7 +560,7 @@ test.describe('keyboard', () => {
     await expect(s.signInMode).toBeFocused();
     await arrow('ArrowRight', s.signUpMode);
     await expect(s.signUpMode).toBeFocused();
-    await expect(s.heading).toHaveText('Create account');
+    await expect(s.heading).toHaveText('Sign up');
     await expect(s.email).toHaveValue(VALID_EMAIL);
     await expect(s.email).not.toBeFocused();
     await arrow('ArrowLeft', s.signInMode);

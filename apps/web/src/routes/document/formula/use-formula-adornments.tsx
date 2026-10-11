@@ -96,8 +96,6 @@ interface FormOption {
   readonly disabledReason?: string | undefined;
 }
 
-const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
-
 /**
  * ADR-054: every column's values are entities now, so a name that appears in
  * several rows lists once per row. Eight keep the popover inside its 60 vh at
@@ -114,7 +112,7 @@ const setForms = (t: Translate): FormOption[] => [
   {
     id: 'comp',
     label: 'Comp(a, u)',
-    hint: 'elements of the universe u not in a',
+    hint: t('forms.comp.hint'),
     insert: '=Comp(',
   },
   {
@@ -127,20 +125,20 @@ const setForms = (t: Translate): FormOption[] => [
 
 function forms(summable: boolean, t: Translate): FormOption[] {
   return [
-    { id: 'concat', label: 'Concat(a, b, …)', hint: 'joins values end to end', insert: '=Concat(' },
+    { id: 'concat', label: 'Concat(a, b, …)', hint: t('forms.concat.hint'), insert: '=Concat(' },
     {
       id: 'sum',
       label: 'Sum(B2:B14)',
-      hint: 'adds a range, list, column or @ paths',
+      hint: t('forms.sum.hint'),
       insert: '=Sum(',
-      disabledReason: summable ? undefined : SUM_DISABLED,
+      disabledReason: summable ? undefined : t('forms.sum.disabled'),
     },
     ...setForms(t),
     { id: 'power', label: 'Power(a)', hint: t('forms.power.hint'), insert: '=Power(' },
     {
       id: 'entity',
       label: '@Group.Entity',
-      hint: 'a value from anywhere in the workscape',
+      hint: t('forms.entity.hint'),
       insert: '=@',
     },
   ];

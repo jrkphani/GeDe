@@ -50,11 +50,16 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
   useYVersion(gd.sheets);
   const record = tableRecord(table);
   const locale = activeLocale();
-  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
+  const viewOnly = editable ? undefined : (readOnlyReason ?? t('reason.viewOnly'));
   const width = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);
   const move = (col: number, row: number) => {
     setTablePosition(gd, record.id, { col, row });
-    announce(`${record.title} moved to ${columnLetter(col)}${String(row + 1)}`);
+    announce(
+      t('inspector.announce.moved', {
+        table: record.title,
+        address: `${columnLetter(col)}${String(row + 1)}`,
+      }),
+    );
   };
   const stack = stackingPosition(gd, record.id);
   const edges = dagEdges(gd, record.sheetId);
@@ -62,14 +67,14 @@ export function ArrangeTab({ gd, table, editable, commands, readOnlyReason }: Ar
   const edgesShown = sheetEdgesShown(gd, record.sheetId);
   const stackReason = (m: StackingMove): string | undefined => {
     if (viewOnly !== undefined) return viewOnly;
-    if (stack === null || stack.count < 2) return 'the only table on this sheet';
-    if ((m === 'back' || m === 'backward') && stack.index === 0) return 'already at the back';
+    if (stack === null || stack.count < 2) return t('reason.onlyTable');
+    if ((m === 'back' || m === 'backward') && stack.index === 0) return t('reason.alreadyBack');
     if ((m === 'front' || m === 'forward') && stack.index === stack.count - 1)
-      return 'already at the front';
+      return t('reason.alreadyFront');
     return undefined;
   };
   const layoutReason =
-    viewOnly ?? (stack === null || stack.count < 2 ? 'the only table on this sheet' : undefined);
+    viewOnly ?? (stack === null || stack.count < 2 ? t('reason.onlyTable') : undefined);
 
   return (
     <>

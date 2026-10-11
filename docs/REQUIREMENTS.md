@@ -11,7 +11,7 @@ Source: `handover/specs/Text-Oriented Spreadsheet PRD.dc.html`, section 24. Text
 _Cognito user pool; passwordless by contract. No password is ever stored or accepted._
 
 - **AUTH-01** — Entry: Unauthenticated visit to any URL must render the sign-in screen and retain the requested path for post-authentication redirect.
-- **AUTH-02** — Mode switch: Sign in / Create account is a segmented control; switching must preserve a typed email and reset the flow to the email step.
+- **AUTH-02** — Mode switch: Sign in / Sign up is a segmented control; switching must preserve a typed email and reset the flow to the email step.
 - **AUTH-03** — Email step: Continue is disabled until the field contains a syntactically valid address. Enter submits. Sign-up additionally collects a display name.
 - **AUTH-04** — Method step: For a known email, offer passkey first, then “Email me a one-time code”. The address is shown with a Change action returning to the email step.
 - **AUTH-05** — Passkey: Invoke WebAuthn. On success, sign in. On cancel, remain on the method step with no error. On unsupported device, hide the passkey option entirely rather than failing.

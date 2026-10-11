@@ -192,9 +192,9 @@ export function Toolbar({
   onEdges,
 }: ToolbarProps) {
   const t = useMessages();
-  const viewOnly = editable ? undefined : 'you have view-only access';
-  const needsTable = viewOnly ?? (hasTable ? undefined : 'select a table first');
-  const graphSoon = 'arrives with the context graph release';
+  const viewOnly = editable ? undefined : t('reason.viewOnly');
+  const needsTable = viewOnly ?? (hasTable ? undefined : t('reason.selectTable'));
+  const graphSoon = t('reason.graphSoon');
   const zoomEntries: MenuEntry[] = [
     ...ZOOM_PRESETS.map<MenuEntry>((z) => ({
       kind: 'item',
@@ -282,7 +282,7 @@ export function Toolbar({
           onClick={() => {
             onOrganize('filter');
           }}
-          disabledReason={hasTable ? undefined : 'select a table first'}
+          disabledReason={hasTable ? undefined : t('reason.selectTable')}
         />
         <Tool
           icon="sort"
@@ -290,7 +290,7 @@ export function Toolbar({
           onClick={() => {
             onOrganize('sort');
           }}
-          disabledReason={hasTable ? undefined : 'select a table first'}
+          disabledReason={hasTable ? undefined : t('reason.selectTable')}
         />
       </Cluster>
       <span className="gd-doc__toolgap" />

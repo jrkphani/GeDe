@@ -15,7 +15,7 @@ function Harness() {
       onChange={setMode}
       options={[
         { value: 'sign-in', label: 'Sign in' },
-        { value: 'sign-up', label: 'Create account' },
+        { value: 'sign-up', label: 'Sign up' },
       ]}
     />
   );
@@ -26,7 +26,7 @@ describe('SegmentedControl', () => {
     render(<Harness />);
     expect(screen.getByRole('radiogroup', { name: 'Mode' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Sign in' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Create account' })).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Sign up' })).not.toBeChecked();
     expect(screen.getByRole('radio', { name: 'Sign in' })).toHaveAttribute('data-state', 'checked');
   });
 
@@ -40,20 +40,20 @@ describe('SegmentedControl', () => {
     // would be; user-event's instantaneous press-and-release would beat the timer.
     await u.keyboard('{ArrowRight>}');
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Create account' })).toBeChecked();
+      expect(screen.getByRole('radio', { name: 'Sign up' })).toBeChecked();
     });
     await u.keyboard('{/ArrowRight}');
-    expect(screen.getByRole('radio', { name: 'Create account' })).toHaveFocus();
+    expect(screen.getByRole('radio', { name: 'Sign up' })).toHaveFocus();
     await u.keyboard('{ArrowLeft>}');
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: 'Sign in' })).toBeChecked();
     });
     await u.keyboard('{/ArrowLeft}');
     expect(screen.getByRole('radio', { name: 'Sign in' })).toHaveFocus();
-    await u.click(screen.getByRole('radio', { name: 'Create account' }));
-    expect(screen.getByRole('radio', { name: 'Create account' })).toBeChecked();
-    await u.click(screen.getByRole('radio', { name: 'Create account' }));
-    expect(screen.getByRole('radio', { name: 'Create account' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Create account' })).toHaveFocus();
+    await u.click(screen.getByRole('radio', { name: 'Sign up' }));
+    expect(screen.getByRole('radio', { name: 'Sign up' })).toBeChecked();
+    await u.click(screen.getByRole('radio', { name: 'Sign up' }));
+    expect(screen.getByRole('radio', { name: 'Sign up' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Sign up' })).toHaveFocus();
   });
 });

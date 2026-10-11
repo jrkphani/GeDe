@@ -40,7 +40,7 @@ import { RingMotif } from './RingMotif.js';
 
 const MODES: { value: Mode; label: string }[] = [
   { value: 'sign-in', label: 'Sign in' },
-  { value: 'sign-up', label: 'Create account' },
+  { value: 'sign-up', label: 'Sign up' },
 ];
 
 /**
@@ -62,7 +62,7 @@ function failureMessage(f: AuthFailure, mode: Mode): string | null {
     case 'cancelled':
       return null; // AUTH-05: stay put, say nothing.
     case 'unknown-email':
-      return 'No account uses this email. Switch to Create account to start one.';
+      return 'No account uses this email. Switch to Sign up to start one.';
     case 'exists':
       return 'An account already uses this email. Switch to Sign in.';
     case 'wrong-code':
@@ -71,7 +71,7 @@ function failureMessage(f: AuthFailure, mode: Mode): string | null {
       return 'That code has expired. Resend to get a fresh one.';
     case 'other':
       // `message` is already plain copy (cognito.ts describeOtherFailure), never SDK text.
-      return mode === 'sign-up' ? `Could not create the account. ${f.message}` : f.message;
+      return mode === 'sign-up' ? `Could not sign you up. ${f.message}` : f.message;
   }
 }
 
@@ -259,11 +259,9 @@ export function SignIn() {
       </section>
 
       <div className="gd-signin__card">
-        <h1 className="gd-signin__title">
-          {state.mode === 'sign-up' ? 'Create account' : 'Sign in'}
-        </h1>
+        <h1 className="gd-signin__title">{state.mode === 'sign-up' ? 'Sign up' : 'Sign in'}</h1>
         <SegmentedControl<Mode>
-          label="Sign in or create account"
+          label="Sign in or sign up"
           options={MODES}
           value={state.mode}
           onChange={(mode) => {
@@ -310,7 +308,7 @@ export function SignIn() {
               size="lg"
               disabled={!canContinue(state)}
               loading={busy === 'continue'}
-              loadingLabel={state.mode === 'sign-up' ? 'Creating account…' : 'Continuing…'}
+              loadingLabel={state.mode === 'sign-up' ? 'Signing up…' : 'Continuing…'}
             >
               Continue
             </Button>
@@ -418,8 +416,8 @@ export function SignIn() {
               // Keyed on the mode, not the code's kind: the sign-in code step that follows a
               // confirmed sign-up (the auto-sign-in fallback) belongs to an account that exists.
               <p className="gd-signin__note">
-                If no code arrives, this email may not have an account yet: switch to Create account
-                to start one.
+                If no code arrives, this email may not have an account yet: switch to Sign up to
+                start one.
               </p>
             )}
             <Button
@@ -428,9 +426,9 @@ export function SignIn() {
               size="lg"
               disabled={!codeComplete || busy !== null}
               loading={busy === 'verify'}
-              loadingLabel={state.codePurpose === 'sign-up' ? 'Creating account…' : 'Verifying…'}
+              loadingLabel={state.codePurpose === 'sign-up' ? 'Signing up…' : 'Verifying…'}
             >
-              {state.codePurpose === 'sign-up' ? 'Verify and create account' : 'Verify and sign in'}
+              {state.codePurpose === 'sign-up' ? 'Verify and sign up' : 'Verify and sign in'}
             </Button>
             <div className="gd-signin__row">
               <Button

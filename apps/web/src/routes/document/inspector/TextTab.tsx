@@ -28,7 +28,7 @@ import {
 } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
-import { useMessages } from '../../../i18n/index.js';
+import { useMessages, type MessageKey } from '../../../i18n/index.js';
 import { markAriaKeys, markLabel } from '../keys/shortcut-map.js';
 import type { AxisBand, CellSelection } from '../selection.js';
 import { useAppearanceScope } from './appearance-scope.js';
@@ -67,17 +67,17 @@ const MARK_GLYPHS: Readonly<Record<ToggleMark, string>> = {
   subscript: 'x₂',
 };
 
-const H_LABELS: Readonly<Record<HAlign | 'auto', string>> = {
-  auto: 'Auto',
-  left: 'Left',
-  center: 'Centre',
-  right: 'Right',
-  justify: 'Justify',
+const H_LABELS: Readonly<Record<HAlign | 'auto', MessageKey>> = {
+  auto: 'inspector.alignAuto',
+  left: 'inspector.alignLeft',
+  center: 'inspector.alignCentre',
+  right: 'inspector.alignRight',
+  justify: 'inspector.alignJustify',
 };
-const V_LABELS: Readonly<Record<VAlign, string>> = {
-  top: 'Top',
-  middle: 'Middle',
-  bottom: 'Bottom',
+const V_LABELS: Readonly<Record<VAlign, MessageKey>> = {
+  top: 'inspector.alignTop',
+  middle: 'inspector.alignMiddle',
+  bottom: 'inspector.alignBottom',
 };
 
 /**
@@ -101,8 +101,8 @@ export function TextTab({
   const t = useMessages();
   const record = tableRecord(table);
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
-  const viewOnly = editable ? undefined : (readOnlyReason ?? 'you have view-only access');
-  const needsCell = cell === null ? 'select a cell first' : undefined;
+  const viewOnly = editable ? undefined : (readOnlyReason ?? t('reason.viewOnly'));
+  const needsCell = cell === null ? t('reason.selectCell') : undefined;
   const marksReason =
     viewOnly ?? needsCell ?? (editing ? 'finish editing to format the whole cell' : undefined);
   const marksReasonId = useId();
@@ -137,7 +137,7 @@ export function TextTab({
         ? 'Wrap text in the selected row'
         : `Wrap text in ${String(rowBand.ids.length)} selected rows`
       : look.scope === 'cell'
-        ? `Wrap text in ${look.address ?? 'the cell'}`
+        ? `Wrap text in ${look.address ?? t('reason.theCell')}`
         : `Wrap text in column ${column?.label ?? ''}`;
 
   return (
@@ -264,17 +264,17 @@ export function TextTab({
           label={t('inspector.textColour')}
           value={a.textColour ?? ''}
           placeholder={t('inspector.inherit')}
-          clearLabel="Inherit"
+          clearLabel={t('inspector.inherit')}
           disabledReason={look.disabledReason}
           onValueChange={(textColour) => {
             look.write({ textColour: textColour === '' ? null : textColour });
           }}
-          options={TEXT_COLOUR_TOKENS.map((t) => ({
-            value: t,
+          options={TEXT_COLOUR_TOKENS.map((c) => ({
+            value: c,
             label: (
-              <span className="gd-insp__ink" data-ink={t}>
+              <span className="gd-insp__ink" data-ink={c}>
                 <span className="gd-insp__ink-swatch" aria-hidden="true" />
-                {TEXT_COLOUR_LABELS[t]}
+                {t(TEXT_COLOUR_LABELS[c])}
               </span>
             ),
           }))}
@@ -291,7 +291,7 @@ export function TextTab({
             }}
             options={(['auto', ...H_ALIGNS] as const).map((h) => ({
               value: h,
-              label: H_LABELS[h],
+              label: t(H_LABELS[h]),
             }))}
           />
           <SegmentedControl
@@ -301,7 +301,7 @@ export function TextTab({
             onChange={(vAlign) => {
               look.write({ vAlign });
             }}
-            options={V_ALIGNS.map((v) => ({ value: v, label: V_LABELS[v] }))}
+            options={V_ALIGNS.map((v) => ({ value: v, label: t(V_LABELS[v]) }))}
           />
         </div>
       </Section>

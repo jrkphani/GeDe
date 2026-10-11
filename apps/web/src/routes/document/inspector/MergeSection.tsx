@@ -28,10 +28,9 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
   const room = cell === null ? null : mergeRoom(record, cell.rowId, cell.colId);
   const rows = anchor?.rows ?? 1;
   const cols = anchor?.cols ?? 1;
-  const reason =
-    disabledReason ?? (covering !== null ? 'this cell is inside a merged cell' : undefined);
+  const reason = disabledReason ?? (covering !== null ? t('reason.insideMerged') : undefined);
   const merged = anchor !== null || covering !== null;
-  const unmergeReason = disabledReason ?? (merged ? undefined : 'the cell is not merged');
+  const unmergeReason = disabledReason ?? (merged ? undefined : t('reason.notMerged'));
   return (
     <Section
       label={t('inspector.merge')}

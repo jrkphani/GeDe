@@ -34,7 +34,7 @@ import {
 } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
-import { useMessages } from '../../../i18n/index.js';
+import { useMessages, type MessageKey, type Translate } from '../../../i18n/index.js';
 import { ReasonedButton, Section } from './controls.js';
 
 export interface RulesSectionProps {
@@ -44,28 +44,28 @@ export interface RulesSectionProps {
   commands: GridCommands;
 }
 
-const FILL_LABELS: Readonly<Record<HighlightToken, string>> = {
-  amber: 'Amber',
-  forest: 'Forest',
-  slate: 'Slate',
+const FILL_LABELS: Readonly<Record<HighlightToken, MessageKey>> = {
+  amber: 'inspector.amber',
+  forest: 'inspector.forest',
+  slate: 'inspector.slate',
 };
-export const TEXT_COLOUR_LABELS: Readonly<Record<TextColourToken, string>> = {
-  ink: 'Ink',
-  'ink-muted': 'Muted',
-  brand: 'Brand',
-  live: 'Live',
-  success: 'Success',
-  warning: 'Warning',
-  danger: 'Danger',
-  info: 'Info',
+export const TEXT_COLOUR_LABELS: Readonly<Record<TextColourToken, MessageKey>> = {
+  ink: 'inspector.colour.ink',
+  'ink-muted': 'inspector.colour.muted',
+  brand: 'inspector.colour.brand',
+  live: 'inspector.colour.live',
+  success: 'inspector.colour.success',
+  warning: 'inspector.colour.warning',
+  danger: 'inspector.colour.danger',
+  info: 'inspector.colour.info',
 };
-const MARK_LABELS: Readonly<Record<ToggleMark, string>> = {
-  bold: 'Bold',
-  italic: 'Italic',
-  underline: 'Underline',
-  strikethrough: 'Strikethrough',
-  superscript: 'Superscript',
-  subscript: 'Subscript',
+export const MARK_LABELS: Readonly<Record<ToggleMark, MessageKey>> = {
+  bold: 'inspector.markBold',
+  italic: 'inspector.markItalic',
+  underline: 'inspector.markUnderline',
+  strikethrough: 'inspector.markStrikethrough',
+  superscript: 'inspector.markSuperscript',
+  subscript: 'inspector.markSubscript',
 };
 
 type RuleBorderEdges = Exclude<BorderEdges, 'none'>;
@@ -96,10 +96,10 @@ const EMPTY_DRAFT: Draft = {
 
 const RULE_BORDER_EDGES = BORDER_EDGES.filter((e): e is RuleBorderEdges => e !== 'none');
 
-const WEIGHT_LABELS: Readonly<Record<BorderWeight, string>> = {
-  hairline: 'Hairline',
-  strong: 'Strong',
-  accent: 'Accent',
+const WEIGHT_LABELS: Readonly<Record<BorderWeight, MessageKey>> = {
+  hairline: 'inspector.hairline',
+  strong: 'inspector.strong',
+  accent: 'inspector.accent',
 };
 
 function conditionOf(d: Draft): RuleCondition | null {
@@ -120,17 +120,17 @@ function conditionOf(d: Draft): RuleCondition | null {
   }
 }
 
-function styleWords(rule: ConditionalRule): string {
+function styleWords(rule: ConditionalRule, t: Translate): string {
   const parts: string[] = [];
-  if (rule.style.fill !== undefined) parts.push(`${FILL_LABELS[rule.style.fill]} fill`);
+  if (rule.style.fill !== undefined) parts.push(`${t(FILL_LABELS[rule.style.fill])} fill`);
   if (rule.style.textColour !== undefined)
-    parts.push(`${TEXT_COLOUR_LABELS[rule.style.textColour]} text`);
-  if (rule.style.mark !== undefined) parts.push(MARK_LABELS[rule.style.mark].toLowerCase());
+    parts.push(`${t(TEXT_COLOUR_LABELS[rule.style.textColour])} text`);
+  if (rule.style.mark !== undefined) parts.push(t(MARK_LABELS[rule.style.mark]).toLowerCase());
   if (rule.style.border !== undefined)
     parts.push(
-      `${WEIGHT_LABELS[rule.style.border.weight].toLowerCase()} border, ${BORDER_EDGE_LABELS[rule.style.border.edges].toLowerCase()}`,
+      `${t(WEIGHT_LABELS[rule.style.border.weight]).toLowerCase()} border, ${BORDER_EDGE_LABELS[rule.style.border.edges].toLowerCase()}`,
     );
-  return parts.length === 0 ? 'glyph only' : parts.join(', ');
+  return parts.length === 0 ? t('inspector.glyphOnly') : parts.join(', ');
 }
 
 export function RulesSection({ tableId, column, disabledReason, commands }: RulesSectionProps) {
@@ -142,10 +142,10 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
   const addReason =
     disabledReason ??
     (condition === null
-      ? 'the rule needs its text or count'
+      ? t('reason.ruleNeedsText')
       : hasOutput
         ? undefined
-        : 'pick a fill, text colour, mark or border');
+        : t('reason.ruleNeedsOutput'));
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
   };
@@ -174,13 +174,13 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
                 <span className="gd-mono gd-insp__rule-index">{i + 1}</span>
                 <span className="gd-insp__rule-text">
                   {describeRule(rule)}{' '}
-                  <span className="gd-insp__rule-style">{styleWords(rule)}</span>
+                  <span className="gd-insp__rule-style">{styleWords(rule, t)}</span>
                 </span>
                 {/* Priority is list order: up and down move a rule one place (INSP-05). */}
                 <span className="gd-insp__rule-keys">
                   <MoveRule
                     label={`Move rule ${String(i + 1)} up`}
-                    reason={disabledReason ?? (i === 0 ? 'already first' : undefined)}
+                    reason={disabledReason ?? (i === 0 ? t('reason.alreadyFirst') : undefined)}
                     onClick={() => {
                       if (column !== null) commands.moveRule(tableId, column.id, rule.id, 'up');
                     }}
@@ -189,7 +189,10 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
                   </MoveRule>
                   <MoveRule
                     label={`Move rule ${String(i + 1)} down`}
-                    reason={disabledReason ?? (i === rules.length - 1 ? 'already last' : undefined)}
+                    reason={
+                      disabledReason ??
+                      (i === rules.length - 1 ? t('reason.alreadyLast') : undefined)
+                    }
                     onClick={() => {
                       if (column !== null) commands.moveRule(tableId, column.id, rule.id, 'down');
                     }}
@@ -259,40 +262,40 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
           label={t('inspector.fill')}
           value={draft.fill}
           placeholder={t('inspector.none')}
-          clearLabel="None"
+          clearLabel={t('inspector.none')}
           disabledReason={disabledReason}
           onValueChange={(fill) => {
             set('fill', fill);
           }}
-          options={HIGHLIGHT_TOKENS.map((t) => ({ value: t, label: FILL_LABELS[t] }))}
+          options={HIGHLIGHT_TOKENS.map((h) => ({ value: h, label: t(FILL_LABELS[h]) }))}
         />
         <Select
           label={t('inspector.textColour')}
           value={draft.textColour}
           placeholder={t('inspector.inherit')}
-          clearLabel="Inherit"
+          clearLabel={t('inspector.inherit')}
           disabledReason={disabledReason}
           onValueChange={(textColour) => {
             set('textColour', textColour);
           }}
-          options={TEXT_COLOUR_TOKENS.map((t) => ({ value: t, label: TEXT_COLOUR_LABELS[t] }))}
+          options={TEXT_COLOUR_TOKENS.map((c) => ({ value: c, label: t(TEXT_COLOUR_LABELS[c]) }))}
         />
         <Select
           label={t('inspector.mark')}
           value={draft.mark}
           placeholder={t('inspector.none')}
-          clearLabel="None"
+          clearLabel={t('inspector.none')}
           disabledReason={disabledReason}
           onValueChange={(mark) => {
             set('mark', mark);
           }}
-          options={TOGGLE_MARKS.map((m) => ({ value: m, label: MARK_LABELS[m] }))}
+          options={TOGGLE_MARKS.map((m) => ({ value: m, label: t(MARK_LABELS[m]) }))}
         />
         <Select
           label={t('inspector.border')}
           value={draft.border}
           placeholder={t('inspector.none')}
-          clearLabel="None"
+          clearLabel={t('inspector.none')}
           disabledReason={disabledReason}
           onValueChange={(border) => {
             set('border', border);

@@ -4,6 +4,7 @@
  * one way an unimplemented control is shown — disabled, with its reason,
  * never styled as operable (INSP-11).
  */
+import { useMessages } from '../../../i18n/index.js';
 import { Button, Icon, TextField, Tooltip, type ButtonProps } from '@gede/ui';
 import { useId, useState, type ReactNode } from 'react';
 
@@ -60,9 +61,10 @@ export function Stepper({
   disabledReason,
   decrementReason,
 }: StepperProps) {
+  const t = useMessages();
   const downReason =
-    disabledReason ?? (value <= min ? (decrementReason ?? 'at the minimum') : undefined);
-  const upReason = disabledReason ?? (value >= max ? 'at the maximum' : undefined);
+    disabledReason ?? (value <= min ? (decrementReason ?? t('reason.atMinimum')) : undefined);
+  const upReason = disabledReason ?? (value >= max ? t('reason.atMaximum') : undefined);
   const reasonId = useId();
   return (
     <div className="gd-insp__stepper" role="group" aria-label={label}>
@@ -182,16 +184,6 @@ export function ReasonedButton({
 }
 
 /**
- * The issues that own the controls the PRD names but no release has built yet.
- * Every disabled control carries one of these as its reason (INSP-11), so a
- * reader can find the plan; a control with no owner here is removed, not stubbed.
- */
-export const TRACKED = {
-  /** INSP-08 / GRAPH-*: graphs, "Graph this table", the Graph tab. */
-  graph: 'arrives with #86 (context graphs)',
-} as const;
-
-/**
  * A control whose effect is not implemented: rendered as a disabled button
  * carrying its reason (tooltip and `aria-disabled`), so it reads as a real
  * command that is unavailable, not as a placeholder.
@@ -202,7 +194,7 @@ export function Unavailable({
   icon,
 }: {
   label: string;
-  /** One of `TRACKED`, or a reason of its own. */
+  /** Why the control is unavailable (INSP-11). */
   reason: string;
   icon?: ReactNode | undefined;
 }) {
